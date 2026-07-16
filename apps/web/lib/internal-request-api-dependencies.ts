@@ -98,6 +98,21 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
             "DATABASE_URL is required for internal request APIs.",
           );
         },
+        createIdentityVerificationToken() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        recordIdentityVerificationSent() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        verifyIdentityToken() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
       },
       storageProvider: createVercelBlobPrivateStorageProvider(),
       emailProvider: createResendEmailProvider(),

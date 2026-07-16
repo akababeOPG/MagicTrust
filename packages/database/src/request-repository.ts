@@ -8,6 +8,7 @@ import type {
   RequestComment,
   RequestCommunication,
   RequestEventType,
+  RequestIdentityVerificationToken,
   RequestStatus,
   RequestType,
 } from "@magictrust/domain";
@@ -22,6 +23,7 @@ import {
   requestComments,
   requestCommunications,
   requestEvents,
+  requestIdentityVerificationTokens,
   requesters,
 } from "./schema";
 
@@ -126,6 +128,18 @@ export type RequestRepository = {
     requestId: string,
     input: RecordConsumerAttachmentDownloadedInput,
   ): Promise<void>;
+  createIdentityVerificationToken(
+    requestId: string,
+    input: CreateIdentityVerificationTokenInput,
+  ): Promise<RequestIdentityVerificationToken | null>;
+  recordIdentityVerificationSent(
+    requestId: string,
+    input: RecordIdentityVerificationSentInput,
+  ): Promise<void>;
+  verifyIdentityToken(
+    publicId: string,
+    input: VerifyIdentityTokenInput,
+  ): Promise<RequestSummary | null>;
 };
 
 export type UpdateRequestStatusInput = {
@@ -227,6 +241,23 @@ export type RecordConsumerAttachmentDownloadedInput = {
   fileName: string;
   mimeType: string;
   sizeBytes: number;
+};
+
+export type CreateIdentityVerificationTokenInput = {
+  tokenHash: string;
+  expiresAt: Date;
+};
+
+export type RecordIdentityVerificationSentInput = {
+  verificationTokenId: string;
+  communicationId: string;
+  provider: string;
+  providerMessageId: string;
+};
+
+export type VerifyIdentityTokenInput = {
+  tokenHash: string;
+  now: Date;
 };
 
 const uuidPattern =
@@ -897,6 +928,106 @@ export function createRequestRepository(db: Database): RequestRepository {
         },
       });
     },
+    async createIdentityVerificationToken(requestId, input) {
+      const [request] = await db
+        .select({
+          id: privacyRequests.id,
+        })
+        .from(privacyRequests)
+        .where(eq(privacyRequests.id, requestId))
+        .limit(1);
+
+      if (!request) {
+        return null;
+      }
+
+      const [verificationToken] = await db
+        .insert(requestIdentityVerificationTokens)
+        .values({
+          requestId,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+        })
+        .returning(identityVerificationTokenSelection);
+
+      return verificationToken;
+    },
+    async recordIdentityVerificationSent(requestId, input) {
+      await db.insert(requestEvents).values({
+        privacyRequestId: requestId,
+        type: "IDENTITY_VERIFICATION_SENT",
+        actorType: "SYSTEM",
+        actorId: "public-intake",
+        data: {
+          verificationTokenId: input.verificationTokenId,
+          communicationId: input.communicationId,
+          provider: input.provider,
+          providerMessageId: input.providerMessageId,
+        },
+      });
+    },
+    async verifyIdentityToken(publicId, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(eq(privacyRequests.publicId, publicId))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [verificationToken] = await tx
+          .update(requestIdentityVerificationTokens)
+          .set({
+            usedAt: input.now,
+          })
+          .where(
+            and(
+              eq(requestIdentityVerificationTokens.requestId, request.id),
+              eq(requestIdentityVerificationTokens.tokenHash, input.tokenHash),
+              isNull(requestIdentityVerificationTokens.usedAt),
+              gt(requestIdentityVerificationTokens.expiresAt, input.now),
+            ),
+          )
+          .returning(identityVerificationTokenSelection);
+
+        if (!verificationToken) {
+          return null;
+        }
+
+        const [updatedRequest] = await tx
+          .update(privacyRequests)
+          .set({
+            status: "VERIFIED",
+            updatedAt: input.now,
+          })
+          .where(
+            and(
+              eq(privacyRequests.id, request.id),
+              eq(privacyRequests.status, "PENDING_VERIFICATION"),
+            ),
+          )
+          .returning(requestSummarySelection);
+
+        if (!updatedRequest) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type: "IDENTITY_VERIFIED",
+          actorType: "CONSUMER",
+          actorId: null,
+          data: {
+            verificationTokenId: verificationToken.id,
+          },
+        });
+
+        return updatedRequest;
+      });
+    },
   };
 }
 
@@ -943,6 +1074,15 @@ const attachmentSelection = {
   actorType: requestAttachments.actorType,
   actorId: requestAttachments.actorId,
   createdAt: requestAttachments.createdAt,
+};
+
+const identityVerificationTokenSelection = {
+  id: requestIdentityVerificationTokens.id,
+  requestId: requestIdentityVerificationTokens.requestId,
+  tokenHash: requestIdentityVerificationTokens.tokenHash,
+  expiresAt: requestIdentityVerificationTokens.expiresAt,
+  usedAt: requestIdentityVerificationTokens.usedAt,
+  createdAt: requestIdentityVerificationTokens.createdAt,
 };
 
 const communicationSelection = {

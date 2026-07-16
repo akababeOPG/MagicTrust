@@ -10,6 +10,7 @@ import type {
   RequestCommunication,
   RequestCreationStore,
   RequestEvent,
+  RequestIdentityVerificationToken,
   Requester,
 } from "@magictrust/domain";
 import type {
@@ -19,7 +20,11 @@ import type {
   RequestSummary,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { hashAccessSession, hashAccessToken } from "@magictrust/privacy";
+import {
+  hashAccessSession,
+  hashAccessToken,
+  hashIdentityVerificationToken,
+} from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -34,6 +39,7 @@ import {
   downloadPublicAttachmentForConsumer,
   exchangeConsumerAccessTokenForSession,
   getPublicSecureAccessData,
+  verifyPublicRequestIdentity,
 } from "../../lib/public-request-api";
 import { PublicSecureAccessView } from "../../lib/public-secure-access-view";
 import { PublicRequestTrackingView } from "../../lib/public-request-tracking-view";
@@ -71,10 +77,46 @@ describe("public request API", () => {
     expect(body.request).toMatchObject({
       publicId: expect.stringMatching(/^req_/),
       type: "DATA_ACCESS",
-      status: "SUBMITTED",
+      status: "PENDING_VERIFICATION",
       createdAt: expect.any(String),
     });
   });
+
+  test("DATA_ACCESS starts PENDING_VERIFICATION", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const response = await api.create(publicRequest({ type: "DATA_ACCESS" }));
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.request.status).toBe("PENDING_VERIFICATION");
+  });
+
+  test("DATA_DELETION starts PENDING_VERIFICATION", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const response = await api.create(publicRequest({ type: "DATA_DELETION" }));
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.request.status).toBe("PENDING_VERIFICATION");
+  });
+
+  test.each(["DO_NOT_CONTACT", "UNSUBSCRIBE", "GENERAL_INQUIRY"] as const)(
+    "%s remains SUBMITTED",
+    async (type) => {
+      const dependencies = createInMemoryDependencies();
+      const api = createPublicRequestApi(dependencies);
+
+      const response = await api.create(publicRequest({ type }));
+      const body = await response.json();
+
+      expect(response.status).toBe(201);
+      expect(body.request.status).toBe("SUBMITTED");
+    },
+  );
 
   test("does not expose internal fields", async () => {
     const dependencies = createInMemoryDependencies();
@@ -169,7 +211,7 @@ describe("public request API", () => {
       request: {
         publicId: expect.stringMatching(/^req_/),
         type: "DATA_ACCESS",
-        status: "SUBMITTED",
+        status: "PENDING_VERIFICATION",
         createdAt: expect.any(String),
       },
     });
@@ -187,7 +229,7 @@ describe("public request API", () => {
     expect(response.status).toBe(201);
     expect(body.request).toMatchObject({
       publicId: expect.stringMatching(/^req_/),
-      status: "SUBMITTED",
+      status: "PENDING_VERIFICATION",
     });
     expect(dependencies.state.requests).toHaveLength(1);
   });
@@ -222,6 +264,113 @@ describe("public request API", () => {
         }),
       ]),
     );
+  });
+
+  test("identity verification token is stored hashed, not raw", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    await api.create(publicRequest({ type: "DATA_ACCESS" }));
+    const token = extractVerificationTokenFromEmail(
+      dependencies.state.sentEmails.at(-1),
+    );
+
+    expect(dependencies.state.identityVerificationTokens).toHaveLength(1);
+    expect(
+      dependencies.state.identityVerificationTokens[0]?.tokenHash,
+    ).not.toBe(token);
+    expect(dependencies.state.identityVerificationTokens[0]?.tokenHash).toBe(
+      hashIdentityVerificationToken(token),
+    );
+  });
+
+  test("verification email contains the verification link", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const response = await api.create(publicRequest({ type: "DATA_DELETION" }));
+    const body = await response.json();
+
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      `https://magictrust.test/requests/${body.request.publicId}/verify?token=`,
+    );
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          privacyRequestId: dependencies.state.requests[0].id,
+          type: "IDENTITY_VERIFICATION_SENT",
+          actorType: "SYSTEM",
+          actorId: "public-intake",
+        }),
+      ]),
+    );
+  });
+
+  test("valid identity token changes status to VERIFIED", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+    const response = await api.create(publicRequest({ type: "DATA_ACCESS" }));
+    const body = await response.json();
+    const token = extractVerificationTokenFromEmail(
+      dependencies.state.sentEmails.at(-1),
+    );
+
+    const verified = await verifyPublicRequestIdentity(
+      dependencies,
+      body.request.publicId,
+      token,
+    );
+
+    expect(verified).toBe(true);
+    expect(dependencies.state.requests[0].status).toBe("VERIFIED");
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          privacyRequestId: dependencies.state.requests[0].id,
+          type: "IDENTITY_VERIFIED",
+          actorType: "CONSUMER",
+          actorId: null,
+        }),
+      ]),
+    );
+  });
+
+  test("expired identity token is rejected", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+    const response = await api.create(publicRequest({ type: "DATA_ACCESS" }));
+    const body = await response.json();
+    const token = extractVerificationTokenFromEmail(
+      dependencies.state.sentEmails.at(-1),
+    );
+    dependencies.state.identityVerificationTokens[0]!.expiresAt = new Date(
+      Date.UTC(2025, 0, 1),
+    );
+
+    await expect(
+      verifyPublicRequestIdentity(dependencies, body.request.publicId, token),
+    ).resolves.toBe(false);
+    expect(dependencies.state.requests[0].status).toBe("PENDING_VERIFICATION");
+  });
+
+  test("used identity token is rejected", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+    const response = await api.create(publicRequest({ type: "DATA_ACCESS" }));
+    const body = await response.json();
+    const token = extractVerificationTokenFromEmail(
+      dependencies.state.sentEmails.at(-1),
+    );
+
+    await verifyPublicRequestIdentity(
+      dependencies,
+      body.request.publicId,
+      token,
+    );
+
+    await expect(
+      verifyPublicRequestIdentity(dependencies, body.request.publicId, token),
+    ).resolves.toBe(false);
   });
 
   test("tracks a public request with public-safe data only", async () => {
@@ -274,7 +423,7 @@ describe("public request API", () => {
     expect(body.request).toEqual({
       publicId: createBody.request.publicId,
       type: "DATA_ACCESS",
-      status: "SUBMITTED",
+      status: "PENDING_VERIFICATION",
       createdAt: "2026-01-01T00:00:00.000Z",
       completedAt: null,
       publicComments: [
@@ -996,6 +1145,18 @@ function extractTokenFromEmail(email: { body: string } | undefined): string {
   return token;
 }
 
+function extractVerificationTokenFromEmail(
+  email: { body: string } | undefined,
+): string {
+  const token = email?.body.match(/\/verify\?token=([A-Za-z0-9_-]+)/)?.[1];
+
+  if (!token) {
+    throw new Error("Expected identity verification token in email body.");
+  }
+
+  return token;
+}
+
 function addAttachment(
   dependencies: ReturnType<typeof createInMemoryDependencies>,
   requestId: string,
@@ -1035,6 +1196,7 @@ type InMemoryState = {
   communications: RequestCommunication[];
   accessTokens: RequestAccessToken[];
   accessSessions: RequestAccessSession[];
+  identityVerificationTokens: RequestIdentityVerificationToken[];
   sentEmails: Array<{ to: string; subject: string; body: string }>;
 };
 
@@ -1053,6 +1215,7 @@ function createInMemoryDependencies(
     communications: [],
     accessTokens: [],
     accessSessions: [],
+    identityVerificationTokens: [],
     sentEmails: [],
   };
 
@@ -1444,6 +1607,77 @@ function createInMemoryDependencies(
         },
         createdAt: new Date(Date.UTC(2026, 0, 1)),
       });
+    },
+    async createIdentityVerificationToken(requestId, input) {
+      const request = state.requests.find((item) => item.id === requestId);
+
+      if (!request) {
+        return null;
+      }
+
+      const verificationToken: RequestIdentityVerificationToken = {
+        id: `identity-token-${state.nextId++}`,
+        requestId,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+        usedAt: null,
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+      };
+      state.identityVerificationTokens.push(verificationToken);
+
+      return verificationToken;
+    },
+    async recordIdentityVerificationSent(requestId, input) {
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "IDENTITY_VERIFICATION_SENT",
+        actorType: "SYSTEM",
+        actorId: "public-intake",
+        data: {
+          verificationTokenId: input.verificationTokenId,
+          communicationId: input.communicationId,
+          provider: input.provider,
+          providerMessageId: input.providerMessageId,
+        },
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+      });
+    },
+    async verifyIdentityToken(publicId, input) {
+      const request = state.requests.find((item) => item.publicId === publicId);
+
+      if (!request) {
+        return null;
+      }
+
+      const verificationToken = state.identityVerificationTokens.find(
+        (item) =>
+          item.requestId === request.id &&
+          item.tokenHash === input.tokenHash &&
+          !item.usedAt &&
+          item.expiresAt > input.now,
+      );
+
+      if (!verificationToken || request.status !== "PENDING_VERIFICATION") {
+        return null;
+      }
+
+      verificationToken.usedAt = input.now;
+      request.status = "VERIFIED";
+      request.updatedAt = input.now;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type: "IDENTITY_VERIFIED",
+        actorType: "CONSUMER",
+        actorId: null,
+        data: {
+          verificationTokenId: verificationToken.id,
+        },
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+      });
+
+      return summaryFromRequest(request);
     },
   };
 

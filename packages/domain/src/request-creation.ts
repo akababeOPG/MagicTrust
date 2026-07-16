@@ -8,6 +8,7 @@ import type {
   PrivacyRequest,
   RequestEvent,
   Requester,
+  RequestStatus,
   RequestType,
 } from "./types";
 
@@ -23,6 +24,7 @@ export type CreateRequestInput = {
     type: ActorType;
     id?: string | null;
   };
+  initialStatus?: Extract<RequestStatus, "SUBMITTED" | "PENDING_VERIFICATION">;
 };
 
 export type CreateRequesterRecord = {
@@ -38,7 +40,7 @@ export type CreatePrivacyRequestRecord = {
   requesterId: string;
   publicId: string;
   type: RequestType;
-  status: "SUBMITTED";
+  status: Extract<RequestStatus, "SUBMITTED" | "PENDING_VERIFICATION">;
   submittedData: JsonObject;
   mutableData: JsonObject;
 };
@@ -101,7 +103,7 @@ export async function createPrivacyRequest(
       requesterId: requester.id,
       publicId,
       type: input.type,
-      status: "SUBMITTED",
+      status: input.initialStatus ?? "SUBMITTED",
       submittedData,
       mutableData: {},
     });

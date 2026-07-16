@@ -13,6 +13,7 @@ import {
   decryptPii,
   hashAccessSession,
   hashAccessToken,
+  hashIdentityVerificationToken,
 } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
@@ -20,6 +21,7 @@ import { z } from "zod";
 export const consumerAccessSessionCookieName =
   "magictrust_consumer_access_session";
 export const consumerAccessSessionTtlSeconds = 30 * 60;
+const identityVerificationTtlMs = 24 * 60 * 60 * 1000;
 
 export type PublicRequestApiDependencies = {
   requestCreationStore: RequestCreationStore;
@@ -88,6 +90,9 @@ export function createPublicRequestApi(
             actor: {
               type: "CONSUMER",
             },
+            initialStatus: requiresEmailIdentityVerification(parsed.data.type)
+              ? "PENDING_VERIFICATION"
+              : "SUBMITTED",
           },
           dependencies.requestCreationStore,
         );
@@ -101,6 +106,16 @@ export function createPublicRequestApi(
           type: result.request.type,
           status: result.request.status,
           appBaseUrl: dependencies.appBaseUrl,
+          verification:
+            result.request.status === "PENDING_VERIFICATION"
+              ? await createIdentityVerificationLink({
+                  requestRepository: dependencies.requestRepository,
+                  requestId: result.request.id,
+                  publicId: result.request.publicId,
+                  appBaseUrl: dependencies.appBaseUrl,
+                  now: dependencies.now,
+                })
+              : null,
         });
 
         return Response.json(
@@ -317,6 +332,26 @@ export async function downloadPublicAttachmentForConsumer(
   }
 }
 
+export async function verifyPublicRequestIdentity(
+  dependencies: Pick<PublicRequestApiDependencies, "requestRepository" | "now">,
+  publicId: string,
+  token: string | null | undefined,
+): Promise<boolean> {
+  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId) || !token) {
+    return false;
+  }
+
+  const result = await dependencies.requestRepository.verifyIdentityToken(
+    publicId,
+    {
+      tokenHash: hashIdentityVerificationToken(token),
+      now: dependencies.now(),
+    },
+  );
+
+  return Boolean(result);
+}
+
 export async function exchangeConsumerAccessTokenForSession(
   dependencies: Pick<PublicRequestApiDependencies, "requestRepository" | "now">,
   publicId: string,
@@ -451,6 +486,7 @@ async function sendReceiptEmail(input: {
   type: RequestType;
   status: RequestStatus;
   appBaseUrl: string;
+  verification: { tokenId: string; url: string } | null;
 }): Promise<void> {
   const subject = `MagicTrust request received: ${input.publicId}`;
   const trackingUrl = `${input.appBaseUrl.replace(/\/$/, "")}/requests/${input.publicId}`;
@@ -461,6 +497,13 @@ async function sendReceiptEmail(input: {
     `Request type: ${input.type}`,
     `Status: ${input.status}`,
     `Track your request: ${trackingUrl}`,
+    ...(input.verification
+      ? [
+          "",
+          "Please verify your email address for this request:",
+          input.verification.url,
+        ]
+      : []),
     "",
     "Please save this reference number for your records.",
   ].join("\n");
@@ -498,6 +541,18 @@ async function sendReceiptEmail(input: {
           actorId: "public-intake",
         },
       );
+
+      if (input.verification) {
+        await input.requestRepository.recordIdentityVerificationSent(
+          input.requestId,
+          {
+            verificationTokenId: input.verification.tokenId,
+            communicationId: communication.id,
+            provider: sent.provider,
+            providerMessageId: sent.providerMessageId,
+          },
+        );
+      }
     } catch {
       await input.requestRepository.markCommunicationFailed(
         input.requestId,
@@ -512,6 +567,37 @@ async function sendReceiptEmail(input: {
   } catch {
     // Receipt email failures must not prevent public request creation.
   }
+}
+
+async function createIdentityVerificationLink(input: {
+  requestRepository: RequestRepository;
+  requestId: string;
+  publicId: string;
+  appBaseUrl: string;
+  now: () => Date;
+}): Promise<{ tokenId: string; url: string } | null> {
+  const token = generateSecureToken();
+  const verificationToken =
+    await input.requestRepository.createIdentityVerificationToken(
+      input.requestId,
+      {
+        tokenHash: hashIdentityVerificationToken(token),
+        expiresAt: new Date(input.now().getTime() + identityVerificationTtlMs),
+      },
+    );
+
+  if (!verificationToken) {
+    return null;
+  }
+
+  return {
+    tokenId: verificationToken.id,
+    url: `${input.appBaseUrl.replace(/\/$/, "")}/requests/${input.publicId}/verify?token=${encodeURIComponent(token)}`,
+  };
+}
+
+function requiresEmailIdentityVerification(type: RequestType): boolean {
+  return type === "DATA_ACCESS" || type === "DATA_DELETION";
 }
 
 async function readJson(request: Request): Promise<unknown> {

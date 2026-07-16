@@ -65,6 +65,15 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         recordConsumerAttachmentDownloaded() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        createIdentityVerificationToken() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        recordIdentityVerificationSent() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        verifyIdentityToken() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
       },
       emailProvider: createResendEmailProvider(),
       storageProvider: createVercelBlobPrivateStorageProvider(),

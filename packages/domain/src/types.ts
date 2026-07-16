@@ -60,7 +60,9 @@ export type RequestEventType =
   | "CONSUMER_ACCESS_TOKEN_USED"
   | "CONSUMER_ACCESS_SESSION_CREATED"
   | "CONSUMER_ACCESS_SESSION_USED"
-  | "CONSUMER_ATTACHMENT_DOWNLOADED";
+  | "CONSUMER_ATTACHMENT_DOWNLOADED"
+  | "IDENTITY_VERIFICATION_SENT"
+  | "IDENTITY_VERIFIED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -154,4 +156,13 @@ export type RequestAccessSession = {
   revokedAt: Date | null;
   createdAt: Date;
   lastSeenAt: Date | null;
+};
+
+export type RequestIdentityVerificationToken = {
+  id: string;
+  requestId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 };

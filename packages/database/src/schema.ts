@@ -53,6 +53,8 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "CONSUMER_ACCESS_SESSION_CREATED",
   "CONSUMER_ACCESS_SESSION_USED",
   "CONSUMER_ATTACHMENT_DOWNLOADED",
+  "IDENTITY_VERIFICATION_SENT",
+  "IDENTITY_VERIFIED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
@@ -262,6 +264,30 @@ export const requestAccessSessions = pgTable(
   }),
 );
 
+export const requestIdentityVerificationTokens = pgTable(
+  "request_identity_verification_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => privacyRequests.id, { onDelete: "restrict" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    requestIdIdx: index(
+      "request_identity_verification_tokens_request_id_idx",
+    ).on(table.requestId),
+    tokenHashIdx: uniqueIndex(
+      "request_identity_verification_tokens_token_hash_idx",
+    ).on(table.tokenHash),
+  }),
+);
+
 export const requestEvents = pgTable(
   "request_events",
   {
@@ -301,6 +327,7 @@ export const privacyRequestsRelations = relations(
     communications: many(requestCommunications),
     accessTokens: many(requestAccessTokens),
     accessSessions: many(requestAccessSessions),
+    identityVerificationTokens: many(requestIdentityVerificationTokens),
   }),
 );
 
@@ -349,6 +376,16 @@ export const requestAccessSessionsRelations = relations(
   ({ one }) => ({
     privacyRequest: one(privacyRequests, {
       fields: [requestAccessSessions.requestId],
+      references: [privacyRequests.id],
+    }),
+  }),
+);
+
+export const requestIdentityVerificationTokensRelations = relations(
+  requestIdentityVerificationTokens,
+  ({ one }) => ({
+    privacyRequest: one(privacyRequests, {
+      fields: [requestIdentityVerificationTokens.requestId],
       references: [privacyRequests.id],
     }),
   }),

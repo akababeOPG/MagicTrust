@@ -66,6 +66,12 @@ export function hashAccessSession(value: string): string {
     .digest("hex");
 }
 
+export function hashIdentityVerificationToken(value: string): string {
+  return createHmac("sha256", deriveKey("identity-verification"))
+    .update(value)
+    .digest("hex");
+}
+
 export function normalizeEmailForHash(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -81,7 +87,12 @@ function normalizePiiForHash(value: string): string {
 }
 
 function deriveKey(
-  purpose: "encrypt" | "hash" | "access-token" | "access-session",
+  purpose:
+    | "encrypt"
+    | "hash"
+    | "access-token"
+    | "access-session"
+    | "identity-verification",
 ): Buffer {
   const encryptionKey = getEncryptionKey();
 
