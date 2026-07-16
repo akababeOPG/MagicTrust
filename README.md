@@ -97,7 +97,7 @@ The hosted public privacy request form runs at:
 http://localhost:3000/forms/privacy-request
 ```
 
-The form submits to `POST /api/public/requests`. This public endpoint does not require `x-api-key` and only returns the public request reference.
+The form submits to `POST /api/public/requests`. This public endpoint does not require `x-api-key`, sends a plain-text receipt email, and only returns the public request reference.
 
 ## Verification
 

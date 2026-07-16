@@ -5,10 +5,14 @@ import type {
   RequestStatus,
   RequestType,
 } from "@magictrust/domain";
+import type { RequestRepository } from "@magictrust/database";
+import type { EmailProvider } from "@magictrust/email";
 import { z } from "zod";
 
 export type PublicRequestApiDependencies = {
   requestCreationStore: RequestCreationStore;
+  requestRepository: RequestRepository;
+  emailProvider: EmailProvider;
 };
 
 const publicRequestSchema = z.object({
@@ -73,6 +77,16 @@ export function createPublicRequestApi(
           dependencies.requestCreationStore,
         );
 
+        await sendReceiptEmail({
+          requestRepository: dependencies.requestRepository,
+          emailProvider: dependencies.emailProvider,
+          requestId: result.request.id,
+          recipient: parsed.data.email,
+          publicId: result.request.publicId,
+          type: result.request.type,
+          status: result.request.status,
+        });
+
         return Response.json(
           {
             request: normalizePublicRequest(result.request),
@@ -86,6 +100,75 @@ export function createPublicRequestApi(
       }
     },
   };
+}
+
+async function sendReceiptEmail(input: {
+  requestRepository: RequestRepository;
+  emailProvider: EmailProvider;
+  requestId: string;
+  recipient: string;
+  publicId: string;
+  type: RequestType;
+  status: RequestStatus;
+}): Promise<void> {
+  const subject = `MagicTrust request received: ${input.publicId}`;
+  const body = [
+    "We received your request.",
+    "",
+    `Reference number: ${input.publicId}`,
+    `Request type: ${input.type}`,
+    `Status: ${input.status}`,
+    "",
+    "Please save this reference number for your records.",
+  ].join("\n");
+
+  try {
+    const communication = await input.requestRepository.createCommunication(
+      input.requestId,
+      {
+        recipient: input.recipient,
+        subject,
+        body,
+        provider: input.emailProvider.provider,
+        actorType: "SYSTEM",
+        actorId: "public-intake",
+      },
+    );
+
+    if (!communication) {
+      return;
+    }
+
+    try {
+      const sent = await input.emailProvider.sendEmail({
+        to: input.recipient,
+        subject,
+        body,
+      });
+
+      await input.requestRepository.markCommunicationSent(
+        input.requestId,
+        communication.id,
+        {
+          providerMessageId: sent.providerMessageId,
+          actorType: "SYSTEM",
+          actorId: "public-intake",
+        },
+      );
+    } catch {
+      await input.requestRepository.markCommunicationFailed(
+        input.requestId,
+        communication.id,
+        {
+          errorMessage: "Email provider failed to send the message.",
+          actorType: "SYSTEM",
+          actorId: "public-intake",
+        },
+      );
+    }
+  } catch {
+    // Receipt email failures must not prevent public request creation.
+  }
 }
 
 async function readJson(request: Request): Promise<unknown> {

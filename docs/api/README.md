@@ -46,6 +46,7 @@ It submits to `POST /api/public/requests` and does not require `x-api-key`.
 ## `POST /api/public/requests`
 
 Creates a public privacy request from hosted form intake.
+Successful public intake sends a plain-text receipt email to the requester with the public reference number. The public response does not include communication metadata.
 
 ```sh
 curl -X POST "http://localhost:3000/api/public/requests" \
