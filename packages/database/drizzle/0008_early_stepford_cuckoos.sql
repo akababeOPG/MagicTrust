@@ -1,0 +1,1 @@
+ALTER TYPE "public"."request_event_type" ADD VALUE 'CONSUMER_ATTACHMENT_DOWNLOADED';

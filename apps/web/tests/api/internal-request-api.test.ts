@@ -1580,6 +1580,9 @@ function createInMemoryDependencies(
     async validateConsumerAccessSession() {
       throw new Error("Not implemented in internal request API tests.");
     },
+    async recordConsumerAttachmentDownloaded() {
+      throw new Error("Not implemented in internal request API tests.");
+    },
   };
 
   const storageProvider: PrivateFileStorageProvider = {

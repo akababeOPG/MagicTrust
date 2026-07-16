@@ -5,6 +5,7 @@ import {
   createRequestRepository,
 } from "@magictrust/database";
 import { createResendEmailProvider } from "@magictrust/email";
+import { createVercelBlobPrivateStorageProvider } from "@magictrust/storage";
 
 import type { PublicRequestApiDependencies } from "./public-request-api";
 
@@ -61,8 +62,12 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         validateConsumerAccessSession() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        recordConsumerAttachmentDownloaded() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
       },
       emailProvider: createResendEmailProvider(),
+      storageProvider: createVercelBlobPrivateStorageProvider(),
       appBaseUrl: getAppBaseUrl(),
       now: () => new Date(),
     };
@@ -74,6 +79,7 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
     requestCreationStore: createRequestCreationStore(db),
     requestRepository: createRequestRepository(db),
     emailProvider: createResendEmailProvider(),
+    storageProvider: createVercelBlobPrivateStorageProvider(),
     appBaseUrl: getAppBaseUrl(),
     now: () => new Date(),
   };

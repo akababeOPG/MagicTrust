@@ -141,7 +141,20 @@ Opening the link exchanges the single-use access token for a temporary secure se
 http://localhost:3000/requests/req_example/secure
 ```
 
-Access tokens and session tokens are stored only as hashes. Tokens are single-use, sessions expire after 30 minutes, and the secure page currently shows verified request status and public comments only. It does not expose attachments or download links yet; it is the foundation for future secure consumer file downloads.
+Access tokens and session tokens are stored only as hashes. Tokens are single-use and sessions expire after 30 minutes.
+
+The secure page shows verified request status, public comments, and PUBLIC attachment metadata with download links. INTERNAL attachments are never exposed to consumers.
+
+## `GET /requests/:publicId/secure/attachments/:attachmentId/download`
+
+Downloads a PUBLIC attachment for a request after the consumer secure session cookie has been validated. The file remains private in storage; MagicTrust streams it through this route and never exposes Blob URLs, storage keys, checksums, storage provider internals, actor fields, or requester details.
+
+```sh
+curl -L "http://localhost:3000/requests/req_example/secure/attachments/attachment_example/download" \
+  -b "magictrust_consumer_access_session=..."
+```
+
+Downloads require a valid consumer secure session and are audited with `CONSUMER_ATTACHMENT_DOWNLOADED`.
 
 ## `POST /api/v1/requests/:id/attachments/upload`
 

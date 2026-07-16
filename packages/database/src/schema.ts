@@ -52,6 +52,7 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "CONSUMER_ACCESS_TOKEN_USED",
   "CONSUMER_ACCESS_SESSION_CREATED",
   "CONSUMER_ACCESS_SESSION_USED",
+  "CONSUMER_ATTACHMENT_DOWNLOADED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [

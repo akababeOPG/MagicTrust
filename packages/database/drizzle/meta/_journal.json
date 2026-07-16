@@ -57,6 +57,13 @@
       "when": 1784242749268,
       "tag": "0007_unique_nicolaos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784244649469,
+      "tag": "0008_early_stepford_cuckoos",
+      "breakpoints": true
     }
   ]
 }

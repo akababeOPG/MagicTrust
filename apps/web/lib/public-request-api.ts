@@ -14,6 +14,7 @@ import {
   hashAccessSession,
   hashAccessToken,
 } from "@magictrust/privacy";
+import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
 
 export const consumerAccessSessionCookieName =
@@ -24,6 +25,7 @@ export type PublicRequestApiDependencies = {
   requestCreationStore: RequestCreationStore;
   requestRepository: RequestRepository;
   emailProvider: EmailProvider;
+  storageProvider: PrivateFileStorageProvider;
   appBaseUrl: string;
   now: () => Date;
 };
@@ -155,6 +157,14 @@ export type PublicRequestTrackingData = {
 
 export type PublicSecureAccessData = PublicRequestTrackingData & {
   secureAccessVerified: true;
+  publicAttachments: Array<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    createdAt: string;
+    downloadUrl: string;
+  }>;
 };
 
 export async function getPublicRequestTrackingData(
@@ -221,8 +231,90 @@ export async function getPublicSecureAccessData(
         body: comment.body,
         createdAt: comment.createdAt.toISOString(),
       })),
+    publicAttachments: result.attachments
+      .filter((attachment) => attachment.visibility === "PUBLIC")
+      .map((attachment) => ({
+        id: attachment.id,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        createdAt: attachment.createdAt.toISOString(),
+        downloadUrl: `/requests/${result.publicId}/secure/attachments/${attachment.id}/download`,
+      })),
     secureAccessVerified: true,
   };
+}
+
+export async function downloadPublicAttachmentForConsumer(
+  dependencies: Pick<
+    PublicRequestApiDependencies,
+    "requestRepository" | "storageProvider" | "now"
+  >,
+  publicId: string,
+  attachmentId: string,
+  sessionToken: string | null | undefined,
+): Promise<Response> {
+  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId) || !sessionToken) {
+    return safeNotFound();
+  }
+
+  const access =
+    await dependencies.requestRepository.validateConsumerAccessSession(
+      publicId,
+      {
+        sessionHash: hashAccessSession(sessionToken),
+        now: dependencies.now(),
+      },
+    );
+
+  if (!access || access.publicId !== publicId) {
+    return safeNotFound();
+  }
+
+  const attachment = access.attachments.find(
+    (item) => item.id === attachmentId,
+  );
+
+  if (!attachment || attachment.visibility !== "PUBLIC") {
+    return safeNotFound();
+  }
+
+  if (attachment.storageProvider !== dependencies.storageProvider.provider) {
+    return safeNotFound();
+  }
+
+  try {
+    const downloaded = await dependencies.storageProvider.downloadPrivateFile({
+      storageKey: attachment.storageKey,
+    });
+
+    if (!downloaded) {
+      return safeNotFound();
+    }
+
+    await dependencies.requestRepository.recordConsumerAttachmentDownloaded(
+      access.id,
+      {
+        attachmentId: attachment.id,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+      },
+    );
+
+    return new Response(downloaded.body, {
+      status: 200,
+      headers: {
+        "content-type": downloaded.contentType || attachment.mimeType,
+        "content-disposition": contentDispositionAttachment(
+          attachment.fileName,
+        ),
+        "content-length": downloaded.sizeBytes.toString(),
+      },
+    });
+  } catch {
+    return serverError();
+  }
 }
 
 export async function exchangeConsumerAccessTokenForSession(
@@ -465,6 +557,20 @@ function genericAccessLinkResponse(): Response {
   });
 }
 
+function safeNotFound(): Response {
+  return Response.json(
+    {
+      error: {
+        code: "NOT_FOUND",
+        message: "Resource not found.",
+      },
+    },
+    {
+      status: 404,
+    },
+  );
+}
+
 function serverError(): Response {
   return Response.json(
     {
@@ -477,6 +583,14 @@ function serverError(): Response {
       status: 500,
     },
   );
+}
+
+function contentDispositionAttachment(fileName: string): string {
+  return `attachment; filename="${escapeHeaderValue(fileName)}"`;
+}
+
+function escapeHeaderValue(value: string): string {
+  return value.replace(/["\\\r\n]/g, "_");
 }
 
 function normalizePublicRequest(request: {

@@ -61,6 +61,7 @@ export type ConsumerAccessLinkTarget = RequestSummary & {
 
 export type ConsumerSecureRequestDetails = RequestSummary & {
   comments: RequestComment[];
+  attachments: RequestAttachment[];
 };
 
 export type RequestListFilters = {
@@ -121,6 +122,10 @@ export type RequestRepository = {
     publicId: string,
     input: ValidateConsumerAccessSessionInput,
   ): Promise<ConsumerSecureRequestDetails | null>;
+  recordConsumerAttachmentDownloaded(
+    requestId: string,
+    input: RecordConsumerAttachmentDownloadedInput,
+  ): Promise<void>;
 };
 
 export type UpdateRequestStatusInput = {
@@ -215,6 +220,13 @@ export type ConsumerAccessSessionPreparation = {
 export type ValidateConsumerAccessSessionInput = {
   sessionHash: string;
   now: Date;
+};
+
+export type RecordConsumerAttachmentDownloadedInput = {
+  attachmentId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
 };
 
 const uuidPattern =
@@ -853,10 +865,36 @@ export function createRequestRepository(db: Database): RequestRepository {
           .where(eq(requestComments.requestId, request.id))
           .orderBy(desc(requestComments.createdAt));
 
+        const attachments = await tx
+          .select(attachmentSelection)
+          .from(requestAttachments)
+          .where(
+            and(
+              eq(requestAttachments.requestId, request.id),
+              eq(requestAttachments.visibility, "PUBLIC"),
+            ),
+          )
+          .orderBy(desc(requestAttachments.createdAt));
+
         return {
           ...request,
           comments,
+          attachments,
         };
+      });
+    },
+    async recordConsumerAttachmentDownloaded(requestId, input) {
+      await db.insert(requestEvents).values({
+        privacyRequestId: requestId,
+        type: "CONSUMER_ATTACHMENT_DOWNLOADED",
+        actorType: "CONSUMER",
+        actorId: null,
+        data: {
+          attachmentId: input.attachmentId,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+        },
       });
     },
   };
@@ -890,6 +928,21 @@ const accessSessionSelection = {
   revokedAt: requestAccessSessions.revokedAt,
   createdAt: requestAccessSessions.createdAt,
   lastSeenAt: requestAccessSessions.lastSeenAt,
+};
+
+const attachmentSelection = {
+  id: requestAttachments.id,
+  requestId: requestAttachments.requestId,
+  visibility: requestAttachments.visibility,
+  fileName: requestAttachments.fileName,
+  mimeType: requestAttachments.mimeType,
+  sizeBytes: requestAttachments.sizeBytes,
+  storageProvider: requestAttachments.storageProvider,
+  storageKey: requestAttachments.storageKey,
+  checksum: requestAttachments.checksum,
+  actorType: requestAttachments.actorType,
+  actorId: requestAttachments.actorId,
+  createdAt: requestAttachments.createdAt,
 };
 
 const communicationSelection = {

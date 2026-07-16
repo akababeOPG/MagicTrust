@@ -20,6 +20,7 @@ import type {
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
 import { hashAccessSession, hashAccessToken } from "@magictrust/privacy";
+import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -30,6 +31,7 @@ import { PrivacyRequestConfirmation } from "../../lib/privacy-request-confirmati
 import { submitPrivacyRequestForm } from "../../lib/privacy-request-form-submit";
 import {
   createPublicRequestApi,
+  downloadPublicAttachmentForConsumer,
   exchangeConsumerAccessTokenForSession,
   getPublicSecureAccessData,
 } from "../../lib/public-request-api";
@@ -607,9 +609,195 @@ describe("public request API", () => {
     expect(serialized).not.toContain("phoneEncrypted");
     expect(serialized).not.toContain("phoneHash");
     expect(serialized).not.toContain("Internal reviewer note.");
-    expect(serialized).not.toContain("attachments");
     expect(serialized).not.toContain("communications");
     expect(serialized).not.toContain("storageKey");
+  });
+
+  test("secure page lists PUBLIC attachments only", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    const request = dependencies.state.requests[0];
+    addAttachment(dependencies, request.id, {
+      id: "attachment-public",
+      visibility: "PUBLIC",
+      fileName: "data-export.json",
+    });
+    addAttachment(dependencies, request.id, {
+      id: "attachment-internal",
+      visibility: "INTERNAL",
+      fileName: "internal-review.txt",
+    });
+
+    const access = await getPublicSecureAccessData(
+      dependencies,
+      createBody.request.publicId,
+      session.sessionToken,
+    );
+    const html = renderToStaticMarkup(
+      createElement(PublicSecureAccessView, {
+        publicId: createBody.request.publicId,
+        access,
+      }),
+    );
+    const serialized = JSON.stringify(access) + html;
+
+    expect(serialized).toContain("data-export.json");
+    expect(serialized).toContain(
+      `/requests/${createBody.request.publicId}/secure/attachments/attachment-public/download`,
+    );
+    expect(serialized).not.toContain("internal-review.txt");
+    expect(serialized).not.toContain("storage-key-public");
+    expect(serialized).not.toContain("vercel-blob");
+    expect(serialized).not.toContain("sha256-test");
+    expect(serialized).not.toContain("actorType");
+    expect(serialized).not.toContain("actorId");
+    expect(serialized).not.toContain("communications");
+    expect(serialized).not.toContain(request.id);
+  });
+
+  test("consumer download requires valid secure session", async () => {
+    const { createBody, dependencies } = await createSecureSessionFixture();
+    const request = dependencies.state.requests[0];
+    addAttachment(dependencies, request.id, {
+      id: "attachment-public",
+      visibility: "PUBLIC",
+    });
+
+    const response = await downloadPublicAttachmentForConsumer(
+      dependencies,
+      createBody.request.publicId,
+      "attachment-public",
+      null,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("consumer download rejects expired session", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    const request = dependencies.state.requests[0];
+    addAttachment(dependencies, request.id, {
+      id: "attachment-public",
+      visibility: "PUBLIC",
+    });
+    dependencies.state.accessSessions[0]!.expiresAt = new Date(
+      Date.UTC(2025, 0, 1),
+    );
+
+    const response = await downloadPublicAttachmentForConsumer(
+      dependencies,
+      createBody.request.publicId,
+      "attachment-public",
+      session.sessionToken,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("consumer download rejects revoked session", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    const request = dependencies.state.requests[0];
+    addAttachment(dependencies, request.id, {
+      id: "attachment-public",
+      visibility: "PUBLIC",
+    });
+    dependencies.state.accessSessions[0]!.revokedAt = new Date(
+      Date.UTC(2026, 0, 1),
+    );
+
+    const response = await downloadPublicAttachmentForConsumer(
+      dependencies,
+      createBody.request.publicId,
+      "attachment-public",
+      session.sessionToken,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("consumer download rejects INTERNAL attachment", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    const request = dependencies.state.requests[0];
+    addAttachment(dependencies, request.id, {
+      id: "attachment-internal",
+      visibility: "INTERNAL",
+    });
+
+    const response = await downloadPublicAttachmentForConsumer(
+      dependencies,
+      createBody.request.publicId,
+      "attachment-internal",
+      session.sessionToken,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("consumer download rejects attachment belonging to another request", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    const secondApi = createPublicRequestApi(dependencies);
+    await secondApi.create(publicRequest({ email: "jane@example.com" }));
+    const secondRequest = dependencies.state.requests[1];
+    addAttachment(dependencies, secondRequest.id, {
+      id: "attachment-other",
+      visibility: "PUBLIC",
+    });
+
+    const response = await downloadPublicAttachmentForConsumer(
+      dependencies,
+      createBody.request.publicId,
+      "attachment-other",
+      session.sessionToken,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("successful consumer download returns file contents and creates event", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    const request = dependencies.state.requests[0];
+    addAttachment(dependencies, request.id, {
+      id: "attachment-public",
+      visibility: "PUBLIC",
+      fileName: "data-export.json",
+      mimeType: "application/json",
+      sizeBytes: 11,
+    });
+
+    const response = await downloadPublicAttachmentForConsumer(
+      dependencies,
+      createBody.request.publicId,
+      "attachment-public",
+      session.sessionToken,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("content-disposition")).toBe(
+      'attachment; filename="data-export.json"',
+    );
+    expect(await response.text()).toBe('{"ok":true}');
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          privacyRequestId: request.id,
+          type: "CONSUMER_ATTACHMENT_DOWNLOADED",
+          actorType: "CONSUMER",
+          actorId: null,
+          data: expect.objectContaining({
+            attachmentId: "attachment-public",
+            fileName: "data-export.json",
+            mimeType: "application/json",
+            sizeBytes: 11,
+          }),
+        }),
+      ]),
+    );
   });
 });
 
@@ -806,6 +994,27 @@ function extractTokenFromEmail(email: { body: string } | undefined): string {
   }
 
   return token;
+}
+
+function addAttachment(
+  dependencies: ReturnType<typeof createInMemoryDependencies>,
+  requestId: string,
+  overrides: Partial<RequestAttachment>,
+) {
+  dependencies.state.attachments.push({
+    id: overrides.id ?? `attachment-${dependencies.state.nextId++}`,
+    requestId,
+    visibility: overrides.visibility ?? "PUBLIC",
+    fileName: overrides.fileName ?? "data-export.json",
+    mimeType: overrides.mimeType ?? "application/json",
+    sizeBytes: overrides.sizeBytes ?? 11,
+    storageProvider: overrides.storageProvider ?? "vercel-blob",
+    storageKey: overrides.storageKey ?? "storage-key-public",
+    checksum: overrides.checksum ?? "sha256-test",
+    actorType: overrides.actorType ?? "API_CLIENT",
+    actorId: overrides.actorId ?? "privacy-processor",
+    createdAt: overrides.createdAt ?? new Date(Date.UTC(2026, 0, 2)),
+  });
 }
 
 type InMemoryRequester = Requester & {
@@ -1213,6 +1422,47 @@ function createInMemoryDependencies(
         comments: state.comments.filter(
           (comment) => comment.requestId === request.id,
         ),
+        attachments: state.attachments.filter(
+          (attachment) =>
+            attachment.requestId === request.id &&
+            attachment.visibility === "PUBLIC",
+        ),
+      };
+    },
+    async recordConsumerAttachmentDownloaded(requestId, input) {
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "CONSUMER_ATTACHMENT_DOWNLOADED",
+        actorType: "CONSUMER",
+        actorId: null,
+        data: {
+          attachmentId: input.attachmentId,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+        },
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+      });
+    },
+  };
+
+  const storageProvider: PrivateFileStorageProvider = {
+    provider: "vercel-blob",
+    async uploadPrivateFile(input) {
+      return {
+        provider: "vercel-blob",
+        storageKey: input.storageKey,
+        checksum: "sha256-test",
+      };
+    },
+    async downloadPrivateFile() {
+      return {
+        body: new Blob(['{"ok":true}'], {
+          type: "application/json",
+        }).stream(),
+        contentType: "application/json",
+        sizeBytes: 11,
       };
     },
   };
@@ -1238,6 +1488,7 @@ function createInMemoryDependencies(
     requestCreationStore,
     requestRepository,
     emailProvider,
+    storageProvider,
     appBaseUrl: "https://magictrust.test",
     now: () => new Date(Date.UTC(2026, 0, 1)),
   };

@@ -216,8 +216,41 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.secure-attachments-page {
+  min-height: auto;
+  padding-top: 0;
+}
+
+.public-attachments {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.public-attachments li {
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.9rem;
+}
+
+.public-attachments a {
+  color: #172033;
+  font-weight: 700;
+}
+
 @media (max-width: 640px) {
   .field-row {
     grid-template-columns: 1fr;
+  }
+
+  .public-attachments li {
+    align-items: start;
+    flex-direction: column;
   }
 }
