@@ -74,9 +74,10 @@ export const requesters = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     externalId: varchar("external_id", { length: 128 }),
-    // TODO: populate encrypted PII fields when field encryption is introduced.
     emailEncrypted: text("email_encrypted"),
+    emailHash: text("email_hash"),
     phoneEncrypted: text("phone_encrypted"),
+    phoneHash: text("phone_hash"),
     nameEncrypted: text("name_encrypted"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -87,6 +88,8 @@ export const requesters = pgTable(
   },
   (table) => ({
     externalIdIdx: index("requesters_external_id_idx").on(table.externalId),
+    emailHashIdx: index("requesters_email_hash_idx").on(table.emailHash),
+    phoneHashIdx: index("requesters_phone_hash_idx").on(table.phoneHash),
   }),
 );
 

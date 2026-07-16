@@ -23,6 +23,7 @@ import { describe, expect, test } from "vitest";
 import { createInternalRequestApi } from "../../lib/internal-request-api";
 
 const apiKey = "test-internal-api-key";
+process.env.ENCRYPTION_KEY = "test-encryption-key-for-web-api";
 
 describe("internal request API", () => {
   test("returns 401 when API key is missing or invalid", async () => {
@@ -167,6 +168,10 @@ describe("internal request API", () => {
     expect(body.request.id).toEqual(expect.any(String));
     expect(body.request.requesterId).toEqual(expect.any(String));
     expect(body.request.createdAt).toEqual(expect.any(String));
+    expect(JSON.stringify(body)).not.toContain("emailEncrypted");
+    expect(JSON.stringify(body)).not.toContain("emailHash");
+    expect(JSON.stringify(body)).not.toContain("phoneEncrypted");
+    expect(JSON.stringify(body)).not.toContain("phoneHash");
   });
 
   test("returns normalized JSON when transactional creation fails", async () => {

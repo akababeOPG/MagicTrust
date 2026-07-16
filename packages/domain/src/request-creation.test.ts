@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { decryptPii, hashPii } from "@magictrust/privacy";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -14,6 +15,8 @@ import {
   type RequestEvent,
   type Requester,
 } from "./index";
+
+process.env.ENCRYPTION_KEY = "test-encryption-key-for-domain-package";
 
 describe("createPrivacyRequest", () => {
   test("creates a requester and privacy request transactionally", async () => {
@@ -49,6 +52,13 @@ describe("createPrivacyRequest", () => {
     expect(result.request.requesterId).toBe(result.requester.id);
     expect(result.request.publicId).toBe("req_test_public_id");
     expect(result.request.status).toBe("SUBMITTED");
+    expect(store.requesterRecord).toMatchObject({
+      emailEncrypted: null,
+      emailHash: null,
+      phoneEncrypted: null,
+      phoneHash: null,
+      nameEncrypted: null,
+    });
   });
 
   test("generates public_id values with the expected prefix", () => {
@@ -133,15 +143,56 @@ describe("createPrivacyRequest", () => {
     expect(result.request.mutableData).toEqual({});
     expect(result.request.mutableData).not.toBe(result.request.submittedData);
   });
+
+  test("stores encrypted and hashed requester email and phone", async () => {
+    const store = createInMemoryStore();
+
+    await createPrivacyRequest(
+      {
+        requester: {
+          email: "  JOHN@example.com  ",
+          phone: " (305) 555-1234 ",
+        },
+        type: "DATA_ACCESS",
+        submittedData: {
+          source: "test",
+        },
+        actor: {
+          type: "API_CLIENT",
+        },
+      },
+      store,
+      {
+        generatePublicId: () => "req_pii_test",
+      },
+    );
+
+    expect(store.requesterRecord?.emailEncrypted).toEqual(expect.any(String));
+    expect(store.requesterRecord?.emailEncrypted).not.toBe(
+      "  JOHN@example.com  ",
+    );
+    expect(decryptPii(store.requesterRecord?.emailEncrypted ?? "")).toBe(
+      "  JOHN@example.com  ",
+    );
+    expect(store.requesterRecord?.emailHash).toBe(hashPii("john@example.com"));
+    expect(store.requesterRecord?.phoneEncrypted).toEqual(expect.any(String));
+    expect(store.requesterRecord?.phoneEncrypted).not.toBe(" (305) 555-1234 ");
+    expect(decryptPii(store.requesterRecord?.phoneEncrypted ?? "")).toBe(
+      " (305) 555-1234 ",
+    );
+    expect(store.requesterRecord?.phoneHash).toBe(hashPii("3055551234"));
+  });
 });
 
 function createInMemoryStore(): RequestCreationStore & {
   transactionCalls: number;
   operations: string[];
+  requesterRecord: CreateRequesterRecord | null;
 } {
   const state = {
     transactionCalls: 0,
     operations: [] as string[],
+    requesterRecord: null as CreateRequesterRecord | null,
   };
 
   return {
@@ -151,16 +202,16 @@ function createInMemoryStore(): RequestCreationStore & {
     get operations() {
       return state.operations;
     },
+    get requesterRecord() {
+      return state.requesterRecord;
+    },
     async transaction(callback) {
       state.transactionCalls += 1;
 
       return callback({
         async createRequester(data: CreateRequesterRecord): Promise<Requester> {
           state.operations.push("createRequester");
-
-          expect(data.emailEncrypted).toBeNull();
-          expect(data.phoneEncrypted).toBeNull();
-          expect(data.nameEncrypted).toBeNull();
+          state.requesterRecord = data;
 
           return {
             id: randomUUID(),

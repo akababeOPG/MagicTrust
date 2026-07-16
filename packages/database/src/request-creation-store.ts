@@ -34,7 +34,9 @@ async function insertRequester(tx: Transaction, data: CreateRequesterRecord) {
     .values({
       externalId: data.externalId,
       emailEncrypted: data.emailEncrypted,
+      emailHash: data.emailHash,
       phoneEncrypted: data.phoneEncrypted,
+      phoneHash: data.phoneHash,
       nameEncrypted: data.nameEncrypted,
     })
     .returning({

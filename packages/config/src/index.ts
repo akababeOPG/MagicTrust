@@ -14,6 +14,7 @@ const serverEnvSchema = z.object({
   DATABASE_URL: z.string().url().optional(),
   DATABASE_URL_UNPOOLED: z.string().url().optional(),
   INTERNAL_API_KEY: z.string().min(1).optional(),
+  ENCRYPTION_KEY: z.string().min(1).optional(),
   BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(1).optional(),
@@ -42,6 +43,12 @@ export function getInternalApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   return getServerEnv(env).INTERNAL_API_KEY ?? null;
+}
+
+export function getEncryptionKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  return getServerEnv(env).ENCRYPTION_KEY ?? null;
 }
 
 export function getBlobReadWriteToken(

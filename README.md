@@ -54,6 +54,7 @@ docs/api              API notes
    DATABASE_URL             Pooled Neon Postgres URL used by the app
    DATABASE_URL_UNPOOLED    Unpooled Neon Postgres URL used by migrations
    INTERNAL_API_KEY         Shared secret for Internal API v1 curl/API calls
+   ENCRYPTION_KEY           Secret key for application-level PII encryption and hashing
    BLOB_READ_WRITE_TOKEN    Vercel Blob token for private attachment upload/download
    RESEND_API_KEY           Resend API key for internal email communications
    EMAIL_FROM               Sender address for internal email communications

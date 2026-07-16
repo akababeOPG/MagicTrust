@@ -133,6 +133,10 @@ importers:
         version: 2.1.9(@types/node@22.20.1)
 
   packages/domain:
+    dependencies:
+      '@magictrust/privacy':
+        specifier: workspace:*
+        version: link:../privacy
     devDependencies:
       typescript:
         specifier: ^5.7.2
@@ -149,6 +153,19 @@ importers:
       resend:
         specifier: ^6.1.2
         version: 6.17.2
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/privacy:
+    dependencies:
+      '@magictrust/config':
+        specifier: workspace:*
+        version: link:../config
     devDependencies:
       typescript:
         specifier: ^5.7.2

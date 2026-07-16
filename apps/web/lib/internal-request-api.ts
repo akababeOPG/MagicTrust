@@ -135,7 +135,10 @@ export function createInternalRequestApi(
       try {
         const result = await createPrivacyRequest(
           {
-            requester: {},
+            requester: {
+              email: parsed.data.requester.email,
+              phone: parsed.data.requester.phone,
+            },
             type: parsed.data.type,
             submittedData: parsed.data,
             actor: {

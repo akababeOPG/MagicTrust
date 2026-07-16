@@ -36,6 +36,13 @@
       "when": 1784233691603,
       "tag": "0004_amazing_karnak",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784235991445,
+      "tag": "0005_fat_deathstrike",
+      "breakpoints": true
     }
   ]
 }

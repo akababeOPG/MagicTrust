@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 
+import { encryptPii, hashPii } from "@magictrust/privacy";
+
 import type {
   ActorType,
   JsonObject,
@@ -12,6 +14,8 @@ import type {
 export type CreateRequestInput = {
   requester: {
     externalId?: string | null;
+    email?: string | null;
+    phone?: string | null;
   };
   type: RequestType;
   submittedData: JsonObject;
@@ -24,7 +28,9 @@ export type CreateRequestInput = {
 export type CreateRequesterRecord = {
   externalId: string | null;
   emailEncrypted: string | null;
+  emailHash: string | null;
   phoneEncrypted: string | null;
+  phoneHash: string | null;
   nameEncrypted: string | null;
 };
 
@@ -84,9 +90,10 @@ export async function createPrivacyRequest(
     const publicId = (options.generatePublicId ?? generatePublicId)();
     const requester = await tx.createRequester({
       externalId: input.requester.externalId ?? null,
-      // TODO: set encrypted requester PII fields once encryption is implemented.
-      emailEncrypted: null,
-      phoneEncrypted: null,
+      emailEncrypted: encryptOptionalPii(input.requester.email),
+      emailHash: hashOptionalPii(input.requester.email),
+      phoneEncrypted: encryptOptionalPii(input.requester.phone),
+      phoneHash: hashOptionalPii(input.requester.phone),
       nameEncrypted: null,
     });
 
@@ -117,6 +124,14 @@ export async function createPrivacyRequest(
       event,
     };
   });
+}
+
+function encryptOptionalPii(value: string | null | undefined): string | null {
+  return value ? encryptPii(value) : null;
+}
+
+function hashOptionalPii(value: string | null | undefined): string | null {
+  return value ? hashPii(value) : null;
 }
 
 function cloneJsonObject(value: JsonObject): JsonObject {
