@@ -652,6 +652,123 @@ describe("internal request API", () => {
       ]),
     );
   });
+
+  test("returns 401 for unauthorized attachment download", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.downloadAttachment(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_test/attachments/attachment-1/download",
+      ),
+      "req_test",
+      "attachment-1",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("returns 404 when downloading from a missing request", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.downloadAttachment(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_missing/attachments/attachment-1/download",
+      ),
+      "req_missing",
+      "attachment-1",
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("returns 404 when downloading a missing attachment", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.downloadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/attachment-missing/download`,
+      ),
+      created.publicId,
+      "attachment-missing",
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("returns 404 when downloading an attachment from another request", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const firstRequest = await createRequest(api);
+    const secondRequest = await createRequest(api);
+    const attachment = await createUploadedAttachment(
+      api,
+      firstRequest.publicId,
+    );
+
+    const response = await api.downloadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${secondRequest.publicId}/attachments/${attachment.id}/download`,
+      ),
+      secondRequest.publicId,
+      attachment.id,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("downloads attachment file content", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const attachment = await createUploadedAttachment(api, created.publicId);
+
+    const response = await api.downloadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/${attachment.id}/download`,
+      ),
+      created.publicId,
+      attachment.id,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("content-disposition")).toBe(
+      'attachment; filename="data-export.json"',
+    );
+    expect(await response.text()).toBe('{"ok":true}');
+  });
+
+  test("creates an ATTACHMENT_DOWNLOADED event after successful download", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const attachment = await createUploadedAttachment(api, created.publicId);
+
+    const response = await api.downloadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/${attachment.id}/download?actorId=privacy-processor`,
+      ),
+      created.publicId,
+      attachment.id,
+    );
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(200);
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "ATTACHMENT_DOWNLOADED",
+          actorType: "API_CLIENT",
+          actorId: "privacy-processor",
+          data: expect.objectContaining({
+            attachmentId: attachment.id,
+            fileName: "data-export.json",
+            storageProvider: "vercel-blob",
+          }),
+        }),
+      ]),
+    );
+  });
 });
 
 function authenticatedRequest(input: string, init: RequestInit = {}) {
@@ -771,6 +888,25 @@ async function getRequestDetail(
   const body = await response.json();
 
   return body.request;
+}
+
+async function createUploadedAttachment(
+  api: ReturnType<typeof createInternalRequestApi>,
+  requestId: string,
+) {
+  const response = await api.uploadAttachment(
+    authenticatedRequest(
+      `https://magictrust.test/api/v1/requests/${requestId}/attachments/upload`,
+      {
+        method: "POST",
+        body: validUploadFormData(),
+      },
+    ),
+    requestId,
+  );
+  const body = await response.json();
+
+  return body.attachment;
 }
 
 function createInMemoryDependencies() {
@@ -997,6 +1133,25 @@ function createInMemoryDependencies() {
 
       return attachment;
     },
+    async recordAttachmentDownloaded(requestId, input) {
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "ATTACHMENT_DOWNLOADED",
+        actorType: "API_CLIENT",
+        actorId: input.actorId,
+        data: {
+          attachmentId: input.attachmentId,
+          fileName: input.fileName,
+          storageProvider: input.storageProvider,
+          actor: {
+            type: "API_CLIENT",
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+    },
   };
 
   const storageProvider: PrivateFileStorageProvider = {
@@ -1006,6 +1161,15 @@ function createInMemoryDependencies() {
         provider: "vercel-blob",
         storageKey: input.storageKey,
         checksum: "sha256-test-checksum",
+      };
+    },
+    async downloadPrivateFile() {
+      return {
+        body: new Blob(['{"ok":true}'], {
+          type: "application/json",
+        }).stream(),
+        contentType: "application/json",
+        sizeBytes: 11,
       };
     },
   };

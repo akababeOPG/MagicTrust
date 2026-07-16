@@ -40,7 +40,8 @@ export type RequestEventType =
   | "PUBLIC_COMMENT_ADDED"
   | "INTERNAL_COMMENT_ADDED"
   | "PUBLIC_ATTACHMENT_ADDED"
-  | "INTERNAL_ATTACHMENT_ADDED";
+  | "INTERNAL_ATTACHMENT_ADDED"
+  | "ATTACHMENT_DOWNLOADED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];

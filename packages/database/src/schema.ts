@@ -45,6 +45,7 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "INTERNAL_COMMENT_ADDED",
   "PUBLIC_ATTACHMENT_ADDED",
   "INTERNAL_ATTACHMENT_ADDED",
+  "ATTACHMENT_DOWNLOADED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [

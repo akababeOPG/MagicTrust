@@ -68,6 +68,10 @@ export type RequestRepository = {
     id: string,
     input: AddRequestAttachmentInput,
   ): Promise<RequestAttachment | null>;
+  recordAttachmentDownloaded(
+    requestId: string,
+    input: RecordAttachmentDownloadedInput,
+  ): Promise<void>;
 };
 
 export type UpdateRequestStatusInput = {
@@ -94,6 +98,13 @@ export type AddRequestAttachmentInput = {
   checksum: string;
   actorType: ActorType;
   actorId: string | null;
+};
+
+export type RecordAttachmentDownloadedInput = {
+  attachmentId: string;
+  fileName: string;
+  storageProvider: string;
+  actorId: string;
 };
 
 const uuidPattern =
@@ -387,6 +398,23 @@ export function createRequestRepository(db: Database): RequestRepository {
         });
 
         return attachment;
+      });
+    },
+    async recordAttachmentDownloaded(requestId, input) {
+      await db.insert(requestEvents).values({
+        privacyRequestId: requestId,
+        type: "ATTACHMENT_DOWNLOADED",
+        actorType: "API_CLIENT",
+        actorId: input.actorId,
+        data: {
+          attachmentId: input.attachmentId,
+          fileName: input.fileName,
+          storageProvider: input.storageProvider,
+          actor: {
+            type: "API_CLIENT",
+            id: input.actorId,
+          },
+        },
       });
     },
   };

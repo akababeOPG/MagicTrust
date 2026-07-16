@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { put } from "@vercel/blob";
+import { get, put } from "@vercel/blob";
 import { getBlobReadWriteToken } from "@magictrust/config";
 
 export type UploadPrivateFileInput = {
@@ -15,11 +15,24 @@ export type UploadedPrivateFile = {
   checksum: string;
 };
 
+export type DownloadPrivateFileInput = {
+  storageKey: string;
+};
+
+export type DownloadedPrivateFile = {
+  body: ReadableStream<Uint8Array>;
+  contentType: string;
+  sizeBytes: number;
+};
+
 export type PrivateFileStorageProvider = {
   readonly provider: UploadedPrivateFile["provider"];
   uploadPrivateFile(
     input: UploadPrivateFileInput,
   ): Promise<UploadedPrivateFile>;
+  downloadPrivateFile(
+    input: DownloadPrivateFileInput,
+  ): Promise<DownloadedPrivateFile | null>;
 };
 
 export function createVercelBlobPrivateStorageProvider(): PrivateFileStorageProvider {
@@ -45,6 +58,31 @@ export function createVercelBlobPrivateStorageProvider(): PrivateFileStorageProv
         provider: "vercel-blob",
         storageKey: input.storageKey,
         checksum,
+      };
+    },
+    async downloadPrivateFile(input) {
+      const token = getBlobReadWriteToken();
+
+      if (!token) {
+        throw new Error(
+          "BLOB_READ_WRITE_TOKEN is required for file downloads.",
+        );
+      }
+
+      const result = await get(input.storageKey, {
+        access: "private",
+        token,
+        useCache: false,
+      });
+
+      if (!result || result.statusCode !== 200) {
+        return null;
+      }
+
+      return {
+        body: result.stream,
+        contentType: result.blob.contentType,
+        sizeBytes: result.blob.size,
       };
     },
   };

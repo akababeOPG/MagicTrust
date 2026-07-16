@@ -47,3 +47,13 @@ curl -X POST "http://localhost:3000/api/v1/requests/req_example/attachments/uplo
 ```
 
 The response includes attachment metadata only. It does not include a public URL or download URL.
+
+## `GET /api/v1/requests/:requestId/attachments/:attachmentId/download`
+
+Downloads a private attachment for an existing request. The request id may be the internal id or `publicId`. The response body is the file content; no Blob URL is returned.
+
+```sh
+curl -X GET "http://localhost:3000/api/v1/requests/req_example/attachments/attachment_example/download?actorId=privacy-processor" \
+  -H "x-api-key: $INTERNAL_API_KEY" \
+  -o data-export.json
+```

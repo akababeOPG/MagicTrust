@@ -97,6 +97,10 @@ const addAttachmentSchema = z.object({
   actor: actorSchema,
 });
 
+const downloadAttachmentQuerySchema = z.object({
+  actorId: z.string().min(1).max(128).default("internal-api"),
+});
+
 export function createInternalRequestApi(
   dependencies: InternalRequestApiDependencies,
 ) {
@@ -521,6 +525,91 @@ export function createInternalRequestApi(
         return serverError();
       }
     },
+
+    async downloadAttachment(
+      request: Request,
+      requestId: string,
+      attachmentId: string,
+    ): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const url = new URL(request.url);
+      const parsed = downloadAttachmentQuerySchema.safeParse({
+        actorId: emptyToUndefined(url.searchParams.get("actorId")),
+      });
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      let existingRequest;
+
+      try {
+        existingRequest =
+          await dependencies.requestRepository.findByIdOrPublicId(requestId);
+      } catch {
+        return serverError();
+      }
+
+      if (!existingRequest) {
+        return notFound();
+      }
+
+      const attachment = existingRequest.attachments.find(
+        (item) => item.id === attachmentId,
+      );
+
+      if (!attachment) {
+        return notFound();
+      }
+
+      if (
+        attachment.storageProvider !== dependencies.storageProvider.provider
+      ) {
+        return unsupportedStorageProvider();
+      }
+
+      try {
+        const downloaded =
+          await dependencies.storageProvider.downloadPrivateFile({
+            storageKey: attachment.storageKey,
+          });
+
+        if (!downloaded) {
+          return notFound();
+        }
+
+        await dependencies.requestRepository.recordAttachmentDownloaded(
+          existingRequest.id,
+          {
+            attachmentId: attachment.id,
+            fileName: attachment.fileName,
+            storageProvider: attachment.storageProvider,
+            actorId: parsed.data.actorId,
+          },
+        );
+
+        return new Response(downloaded.body, {
+          status: 200,
+          headers: {
+            "content-type": downloaded.contentType || attachment.mimeType,
+            "content-disposition": contentDispositionAttachment(
+              attachment.fileName,
+            ),
+            "content-length": downloaded.sizeBytes.toString(),
+          },
+        });
+      } catch {
+        return serverError();
+      }
+    },
   };
 }
 
@@ -574,6 +663,20 @@ function serverError(): Response {
   );
 }
 
+function unsupportedStorageProvider(): Response {
+  return Response.json(
+    {
+      error: {
+        code: "UNSUPPORTED_STORAGE_PROVIDER",
+        message: "Attachment storage provider is not supported.",
+      },
+    },
+    {
+      status: 400,
+    },
+  );
+}
+
 function normalizeRequestSummary(
   request: {
     id: string;
@@ -619,4 +722,12 @@ function sanitizeFileName(fileName: string): string {
     .slice(0, 160);
 
   return sanitized || "attachment";
+}
+
+function contentDispositionAttachment(fileName: string): string {
+  return `attachment; filename="${escapeHeaderValue(fileName)}"`;
+}
+
+function escapeHeaderValue(value: string): string {
+  return value.replace(/["\\\r\n]/g, "_");
 }
