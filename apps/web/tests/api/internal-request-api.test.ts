@@ -1306,6 +1306,9 @@ function createInMemoryDependencies(
           .map((communication) => ({ ...communication })),
       };
     },
+    async findConsumerAccessLinkTarget() {
+      throw new Error("Not implemented in internal request API tests.");
+    },
     async list(filters: RequestListFilters): Promise<RequestSummary[]> {
       return state.requests
         .filter((request) =>
@@ -1564,6 +1567,15 @@ function createInMemoryDependencies(
       });
 
       return { ...communication };
+    },
+    async createConsumerAccessToken() {
+      throw new Error("Not implemented in internal request API tests.");
+    },
+    async recordConsumerAccessLinkSent() {
+      throw new Error("Not implemented in internal request API tests.");
+    },
+    async consumeConsumerAccessToken() {
+      throw new Error("Not implemented in internal request API tests.");
     },
   };
 

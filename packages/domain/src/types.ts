@@ -55,7 +55,9 @@ export type RequestEventType =
   | "INTERNAL_ATTACHMENT_ADDED"
   | "ATTACHMENT_DOWNLOADED"
   | "EMAIL_SENT"
-  | "EMAIL_FAILED";
+  | "EMAIL_FAILED"
+  | "CONSUMER_ACCESS_LINK_SENT"
+  | "CONSUMER_ACCESS_TOKEN_USED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -130,4 +132,13 @@ export type RequestCommunication = {
   actorId: string | null;
   createdAt: Date;
   sentAt: Date | null;
+};
+
+export type RequestAccessToken = {
+  id: string;
+  requestId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 };

@@ -46,9 +46,22 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         markCommunicationFailed() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        findConsumerAccessLinkTarget() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        createConsumerAccessToken() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        recordConsumerAccessLinkSent() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        consumeConsumerAccessToken() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
       },
       emailProvider: createResendEmailProvider(),
       appBaseUrl: getAppBaseUrl(),
+      now: () => new Date(),
     };
   }
 
@@ -59,5 +72,6 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
     requestRepository: createRequestRepository(db),
     emailProvider: createResendEmailProvider(),
     appBaseUrl: getAppBaseUrl(),
+    now: () => new Date(),
   };
 }

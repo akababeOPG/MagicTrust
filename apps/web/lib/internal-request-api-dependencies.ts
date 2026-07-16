@@ -68,6 +68,26 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
             "DATABASE_URL is required for internal request APIs.",
           );
         },
+        findConsumerAccessLinkTarget() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        createConsumerAccessToken() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        recordConsumerAccessLinkSent() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        consumeConsumerAccessToken() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
       },
       storageProvider: createVercelBlobPrivateStorageProvider(),
       emailProvider: createResendEmailProvider(),

@@ -54,6 +54,12 @@ export function hashPii(value: string): string {
     .digest("hex");
 }
 
+export function hashAccessToken(value: string): string {
+  return createHmac("sha256", deriveKey("access-token"))
+    .update(value)
+    .digest("hex");
+}
+
 export function normalizeEmailForHash(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -68,7 +74,7 @@ function normalizePiiForHash(value: string): string {
     : normalizePhoneForHash(value);
 }
 
-function deriveKey(purpose: "encrypt" | "hash"): Buffer {
+function deriveKey(purpose: "encrypt" | "hash" | "access-token"): Buffer {
   const encryptionKey = getEncryptionKey();
 
   if (!encryptionKey) {

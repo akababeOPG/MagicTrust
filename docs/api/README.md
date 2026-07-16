@@ -112,6 +112,31 @@ Example response:
 
 The public tracking API and `/requests/:publicId` page expose only public-safe request status and public comments. They do not expose requester details, internal ids, internal comments, attachments, communications, storage keys, or event timelines.
 
+## `POST /api/public/requests/:publicId/access-link`
+
+Requests a single-use secure access link for a public request. This endpoint does not require `x-api-key` and always returns the same generic success response to avoid revealing whether a request exists.
+
+```sh
+curl -X POST "http://localhost:3000/api/public/requests/req_example/access-link"
+```
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "message": "If the request exists, an access link will be sent."
+}
+```
+
+When the request exists, MagicTrust sends the requester a secure link:
+
+```text
+http://localhost:3000/requests/req_example/access?token=...
+```
+
+Access tokens are stored only as hashes, expire after 30 minutes, and can be used once. The secure access page currently shows verified request status and public comments only. It does not expose attachments or download links yet; it is the foundation for future secure consumer file downloads.
+
 ## `POST /api/v1/requests/:id/attachments/upload`
 
 Uploads a private file to Vercel Blob and creates attachment metadata for an existing request. The request id may be the internal id or `publicId`.

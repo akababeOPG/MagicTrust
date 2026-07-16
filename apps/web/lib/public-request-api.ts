@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import { createPrivacyRequest, requestTypes } from "@magictrust/domain";
 import type {
   JsonObject,
@@ -7,6 +9,7 @@ import type {
 } from "@magictrust/domain";
 import type { RequestRepository } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
+import { decryptPii, hashAccessToken } from "@magictrust/privacy";
 import { z } from "zod";
 
 export type PublicRequestApiDependencies = {
@@ -14,6 +17,7 @@ export type PublicRequestApiDependencies = {
   requestRepository: RequestRepository;
   emailProvider: EmailProvider;
   appBaseUrl: string;
+  now: () => Date;
 };
 
 const publicRequestSchema = z.object({
@@ -120,6 +124,12 @@ export function createPublicRequestApi(
         return serverError();
       }
     },
+
+    async requestAccessLink(publicId: string): Promise<Response> {
+      await sendConsumerAccessLink(dependencies, publicId);
+
+      return genericAccessLinkResponse();
+    },
   };
 }
 
@@ -133,6 +143,10 @@ export type PublicRequestTrackingData = {
     body: string;
     createdAt: string;
   }>;
+};
+
+export type PublicSecureAccessData = PublicRequestTrackingData & {
+  secureAccessVerified: true;
 };
 
 export async function getPublicRequestTrackingData(
@@ -163,6 +177,134 @@ export async function getPublicRequestTrackingData(
         createdAt: comment.createdAt.toISOString(),
       })),
   };
+}
+
+export async function getPublicSecureAccessData(
+  dependencies: Pick<PublicRequestApiDependencies, "requestRepository" | "now">,
+  publicId: string,
+  token: string | null | undefined,
+): Promise<PublicSecureAccessData | null> {
+  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId) || !token) {
+    return null;
+  }
+
+  const result =
+    await dependencies.requestRepository.consumeConsumerAccessToken(publicId, {
+      tokenHash: hashAccessToken(token),
+      now: dependencies.now(),
+    });
+
+  if (!result || result.publicId !== publicId) {
+    return null;
+  }
+
+  return {
+    publicId: result.publicId,
+    type: result.type,
+    status: result.status,
+    createdAt: result.createdAt.toISOString(),
+    completedAt: result.completedAt?.toISOString() ?? null,
+    publicComments: result.comments
+      .filter((comment) => comment.visibility === "PUBLIC")
+      .map((comment) => ({
+        body: comment.body,
+        createdAt: comment.createdAt.toISOString(),
+      })),
+    secureAccessVerified: true,
+  };
+}
+
+async function sendConsumerAccessLink(
+  dependencies: PublicRequestApiDependencies,
+  publicId: string,
+): Promise<void> {
+  try {
+    if (!/^req_[A-Za-z0-9_-]+$/.test(publicId)) {
+      return;
+    }
+
+    const target =
+      await dependencies.requestRepository.findConsumerAccessLinkTarget(
+        publicId,
+      );
+
+    if (!target?.requesterEmailEncrypted) {
+      return;
+    }
+
+    const recipient = decryptPii(target.requesterEmailEncrypted);
+    const token = generateAccessToken();
+    const accessUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${target.publicId}/access?token=${encodeURIComponent(token)}`;
+    const subject = `MagicTrust secure access link: ${target.publicId}`;
+    const body = [
+      "Use this secure link to access your MagicTrust request.",
+      "",
+      `Reference number: ${target.publicId}`,
+      `Secure access link: ${accessUrl}`,
+      "",
+      "This link expires in 30 minutes and can only be used once.",
+    ].join("\n");
+    const preparation =
+      await dependencies.requestRepository.createConsumerAccessToken(
+        target.publicId,
+        {
+          tokenHash: hashAccessToken(token),
+          expiresAt: new Date(dependencies.now().getTime() + 30 * 60 * 1000),
+          recipient,
+          subject,
+          body,
+          provider: dependencies.emailProvider.provider,
+        },
+      );
+
+    if (!preparation) {
+      return;
+    }
+
+    try {
+      const sent = await dependencies.emailProvider.sendEmail({
+        to: recipient,
+        subject,
+        body,
+      });
+
+      await dependencies.requestRepository.markCommunicationSent(
+        preparation.request.id,
+        preparation.communication.id,
+        {
+          providerMessageId: sent.providerMessageId,
+          actorType: "SYSTEM",
+          actorId: "consumer-access-link",
+        },
+      );
+
+      await dependencies.requestRepository.recordConsumerAccessLinkSent(
+        preparation.request.id,
+        {
+          accessTokenId: preparation.accessToken.id,
+          communicationId: preparation.communication.id,
+          provider: sent.provider,
+          providerMessageId: sent.providerMessageId,
+        },
+      );
+    } catch {
+      await dependencies.requestRepository.markCommunicationFailed(
+        preparation.request.id,
+        preparation.communication.id,
+        {
+          errorMessage: "Email provider failed to send the message.",
+          actorType: "SYSTEM",
+          actorId: "consumer-access-link",
+        },
+      );
+    }
+  } catch {
+    // Access link requests intentionally return a generic response.
+  }
+}
+
+function generateAccessToken(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 async function sendReceiptEmail(input: {
@@ -271,6 +413,13 @@ function notFound(): Response {
       status: 404,
     },
   );
+}
+
+function genericAccessLinkResponse(): Response {
+  return Response.json({
+    ok: true,
+    message: "If the request exists, an access link will be sent.",
+  });
 }
 
 function serverError(): Response {

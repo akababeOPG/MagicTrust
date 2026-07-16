@@ -3,21 +3,24 @@ import type {
   CommentVisibility,
   JsonObject,
   RequestAttachment,
+  RequestAccessToken,
   RequestComment,
   RequestCommunication,
   RequestEventType,
   RequestStatus,
   RequestType,
 } from "@magictrust/domain";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
 import {
   privacyRequests,
+  requestAccessTokens,
   requestAttachments,
   requestComments,
   requestCommunications,
   requestEvents,
+  requesters,
 } from "./schema";
 
 type Database = ReturnType<typeof createDatabase>;
@@ -50,6 +53,14 @@ export type RequestDetails = RequestSummary & {
   communications: RequestCommunication[];
 };
 
+export type ConsumerAccessLinkTarget = RequestSummary & {
+  requesterEmailEncrypted: string | null;
+};
+
+export type ConsumerSecureRequestDetails = RequestSummary & {
+  comments: RequestComment[];
+};
+
 export type RequestListFilters = {
   status?: RequestStatus;
   type?: RequestType;
@@ -58,6 +69,9 @@ export type RequestListFilters = {
 
 export type RequestRepository = {
   findByIdOrPublicId(id: string): Promise<RequestDetails | null>;
+  findConsumerAccessLinkTarget(
+    publicId: string,
+  ): Promise<ConsumerAccessLinkTarget | null>;
   list(filters: RequestListFilters): Promise<RequestSummary[]>;
   updateStatus(
     id: string,
@@ -89,6 +103,18 @@ export type RequestRepository = {
     communicationId: string,
     input: MarkCommunicationFailedInput,
   ): Promise<RequestCommunication | null>;
+  createConsumerAccessToken(
+    publicId: string,
+    input: CreateConsumerAccessTokenInput,
+  ): Promise<ConsumerAccessTokenPreparation | null>;
+  recordConsumerAccessLinkSent(
+    requestId: string,
+    input: RecordConsumerAccessLinkSentInput,
+  ): Promise<void>;
+  consumeConsumerAccessToken(
+    publicId: string,
+    input: ConsumeConsumerAccessTokenInput,
+  ): Promise<ConsumerSecureRequestDetails | null>;
 };
 
 export type UpdateRequestStatusInput = {
@@ -143,6 +169,33 @@ export type MarkCommunicationFailedInput = {
   errorMessage: string;
   actorType: ActorType;
   actorId: string | null;
+};
+
+export type CreateConsumerAccessTokenInput = {
+  tokenHash: string;
+  expiresAt: Date;
+  recipient: string;
+  subject: string;
+  body: string;
+  provider: string;
+};
+
+export type ConsumerAccessTokenPreparation = {
+  request: RequestSummary;
+  accessToken: RequestAccessToken;
+  communication: RequestCommunication;
+};
+
+export type RecordConsumerAccessLinkSentInput = {
+  accessTokenId: string;
+  communicationId: string;
+  provider: string;
+  providerMessageId: string;
+};
+
+export type ConsumeConsumerAccessTokenInput = {
+  tokenHash: string;
+  now: Date;
 };
 
 const uuidPattern =
@@ -237,6 +290,26 @@ export function createRequestRepository(db: Database): RequestRepository {
         attachments,
         communications,
       };
+    },
+    async findConsumerAccessLinkTarget(publicId) {
+      const [request] = await db
+        .select({
+          id: privacyRequests.id,
+          publicId: privacyRequests.publicId,
+          requesterId: privacyRequests.requesterId,
+          type: privacyRequests.type,
+          status: privacyRequests.status,
+          completedAt: privacyRequests.completedAt,
+          createdAt: privacyRequests.createdAt,
+          updatedAt: privacyRequests.updatedAt,
+          requesterEmailEncrypted: requesters.emailEncrypted,
+        })
+        .from(privacyRequests)
+        .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
+        .where(eq(privacyRequests.publicId, publicId))
+        .limit(1);
+
+      return request ?? null;
     },
     async list(filters) {
       const conditions = [
@@ -579,8 +652,147 @@ export function createRequestRepository(db: Database): RequestRepository {
         return communication;
       });
     },
+    async createConsumerAccessToken(publicId, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(eq(privacyRequests.publicId, publicId))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [accessToken] = await tx
+          .insert(requestAccessTokens)
+          .values({
+            requestId: request.id,
+            tokenHash: input.tokenHash,
+            expiresAt: input.expiresAt,
+          })
+          .returning(accessTokenSelection);
+
+        const [communication] = await tx
+          .insert(requestCommunications)
+          .values({
+            requestId: request.id,
+            channel: "EMAIL",
+            direction: "OUTBOUND",
+            recipient: input.recipient,
+            subject: input.subject,
+            body: input.body,
+            provider: input.provider,
+            status: "PENDING",
+            actorType: "SYSTEM",
+            actorId: "consumer-access-link",
+          })
+          .returning(communicationSelection);
+
+        return {
+          request,
+          accessToken,
+          communication,
+        };
+      });
+    },
+    async recordConsumerAccessLinkSent(requestId, input) {
+      await db.insert(requestEvents).values({
+        privacyRequestId: requestId,
+        type: "CONSUMER_ACCESS_LINK_SENT",
+        actorType: "SYSTEM",
+        actorId: "consumer-access-link",
+        data: {
+          accessTokenId: input.accessTokenId,
+          communicationId: input.communicationId,
+          provider: input.provider,
+          providerMessageId: input.providerMessageId,
+        },
+      });
+    },
+    async consumeConsumerAccessToken(publicId, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(eq(privacyRequests.publicId, publicId))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [accessToken] = await tx
+          .update(requestAccessTokens)
+          .set({
+            usedAt: input.now,
+          })
+          .where(
+            and(
+              eq(requestAccessTokens.requestId, request.id),
+              eq(requestAccessTokens.tokenHash, input.tokenHash),
+              isNull(requestAccessTokens.usedAt),
+              gt(requestAccessTokens.expiresAt, input.now),
+            ),
+          )
+          .returning(accessTokenSelection);
+
+        if (!accessToken) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type: "CONSUMER_ACCESS_TOKEN_USED",
+          actorType: "CONSUMER",
+          actorId: null,
+          data: {
+            accessTokenId: accessToken.id,
+          },
+        });
+
+        const comments = await tx
+          .select({
+            id: requestComments.id,
+            requestId: requestComments.requestId,
+            visibility: requestComments.visibility,
+            body: requestComments.body,
+            actorType: requestComments.actorType,
+            actorId: requestComments.actorId,
+            createdAt: requestComments.createdAt,
+          })
+          .from(requestComments)
+          .where(eq(requestComments.requestId, request.id))
+          .orderBy(desc(requestComments.createdAt));
+
+        return {
+          ...request,
+          comments,
+        };
+      });
+    },
   };
 }
+
+const requestSummarySelection = {
+  id: privacyRequests.id,
+  publicId: privacyRequests.publicId,
+  requesterId: privacyRequests.requesterId,
+  type: privacyRequests.type,
+  status: privacyRequests.status,
+  completedAt: privacyRequests.completedAt,
+  createdAt: privacyRequests.createdAt,
+  updatedAt: privacyRequests.updatedAt,
+};
+
+const accessTokenSelection = {
+  id: requestAccessTokens.id,
+  requestId: requestAccessTokens.requestId,
+  tokenHash: requestAccessTokens.tokenHash,
+  expiresAt: requestAccessTokens.expiresAt,
+  usedAt: requestAccessTokens.usedAt,
+  createdAt: requestAccessTokens.createdAt,
+};
 
 const communicationSelection = {
   id: requestCommunications.id,

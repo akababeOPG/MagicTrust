@@ -1,10 +1,12 @@
 import React from "react";
 
+import { PublicAccessLinkRequestForm } from "./public-access-link-request-form";
 import type { PublicRequestTrackingData } from "./public-request-api";
 
 export function PublicRequestTrackingView(input: {
   publicId: string;
   tracking: PublicRequestTrackingData | null;
+  showAccessLinkRequest?: boolean;
 }) {
   if (!input.tracking) {
     return (
@@ -47,6 +49,10 @@ export function PublicRequestTrackingView(input: {
             </div>
           ) : null}
         </dl>
+
+        {input.showAccessLinkRequest === false ? null : (
+          <PublicAccessLinkRequestForm publicId={input.tracking.publicId} />
+        )}
 
         <section className="public-comments" aria-labelledby="comments-title">
           <h2 id="comments-title">Public Comments</h2>

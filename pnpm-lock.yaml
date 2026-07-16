@@ -59,6 +59,9 @@ importers:
       '@magictrust/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@magictrust/privacy':
+        specifier: workspace:*
+        version: link:../../packages/privacy
       '@magictrust/storage':
         specifier: workspace:*
         version: link:../../packages/storage

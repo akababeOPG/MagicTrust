@@ -109,6 +109,14 @@ http://localhost:3000/requests/req_example
 
 Public tracking only exposes public-safe status data and public comments.
 
+Consumers can request a single-use secure access link from the tracking page or by calling:
+
+```text
+POST /api/public/requests/req_example/access-link
+```
+
+MagicTrust sends the link to the encrypted requester email on file. Access tokens are stored only as hashes, expire after 30 minutes, and are the foundation for future secure consumer downloads.
+
 ## Verification
 
 ```sh

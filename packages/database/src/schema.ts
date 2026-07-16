@@ -48,6 +48,8 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "ATTACHMENT_DOWNLOADED",
   "EMAIL_SENT",
   "EMAIL_FAILED",
+  "CONSUMER_ACCESS_LINK_SENT",
+  "CONSUMER_ACCESS_TOKEN_USED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
@@ -208,6 +210,30 @@ export const requestCommunications = pgTable(
   }),
 );
 
+export const requestAccessTokens = pgTable(
+  "request_access_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => privacyRequests.id, { onDelete: "restrict" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    requestIdIdx: index("request_access_tokens_request_id_idx").on(
+      table.requestId,
+    ),
+    tokenHashIdx: uniqueIndex("request_access_tokens_token_hash_idx").on(
+      table.tokenHash,
+    ),
+  }),
+);
+
 export const requestEvents = pgTable(
   "request_events",
   {
@@ -245,6 +271,7 @@ export const privacyRequestsRelations = relations(
     comments: many(requestComments),
     attachments: many(requestAttachments),
     communications: many(requestCommunications),
+    accessTokens: many(requestAccessTokens),
   }),
 );
 
@@ -273,6 +300,16 @@ export const requestCommunicationsRelations = relations(
   ({ one }) => ({
     privacyRequest: one(privacyRequests, {
       fields: [requestCommunications.requestId],
+      references: [privacyRequests.id],
+    }),
+  }),
+);
+
+export const requestAccessTokensRelations = relations(
+  requestAccessTokens,
+  ({ one }) => ({
+    privacyRequest: one(privacyRequests, {
+      fields: [requestAccessTokens.requestId],
       references: [privacyRequests.id],
     }),
   }),

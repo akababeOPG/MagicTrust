@@ -108,6 +108,12 @@ button:disabled {
   opacity: 0.7;
 }
 
+.access-link-form {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
 .honeypot {
   position: absolute;
   left: -10000px;
@@ -136,6 +142,14 @@ button:disabled {
 
 .form-error {
   color: #b91c1c;
+}
+
+.secure-access-banner {
+  background: #dcfce7;
+  color: #14532d;
+  font-weight: 700;
+  padding: 0.75rem 1rem;
+  text-align: center;
 }
 
 .tracking-page {
