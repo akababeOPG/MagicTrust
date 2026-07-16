@@ -30,7 +30,15 @@ export const actorTypes = [
 
 export type ActorType = (typeof actorTypes)[number];
 
-export type RequestEventType = "REQUEST_CREATED";
+export const commentVisibilities = ["PUBLIC", "INTERNAL"] as const;
+
+export type CommentVisibility = (typeof commentVisibilities)[number];
+
+export type RequestEventType =
+  | "REQUEST_CREATED"
+  | "STATUS_CHANGED"
+  | "PUBLIC_COMMENT_ADDED"
+  | "INTERNAL_COMMENT_ADDED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -51,6 +59,7 @@ export type PrivacyRequest = {
   mutableData: JsonObject;
   createdAt: Date;
   updatedAt: Date;
+  completedAt: Date | null;
 };
 
 export type RequestEvent = {
@@ -60,5 +69,15 @@ export type RequestEvent = {
   actorType: ActorType;
   actorId: string | null;
   data: JsonObject;
+  createdAt: Date;
+};
+
+export type RequestComment = {
+  id: string;
+  requestId: string;
+  visibility: CommentVisibility;
+  body: string;
+  actorType: ActorType;
+  actorId: string | null;
   createdAt: Date;
 };

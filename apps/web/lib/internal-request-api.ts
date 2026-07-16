@@ -1,4 +1,6 @@
 import {
+  actorTypes,
+  commentVisibilities,
   createPrivacyRequest,
   requestStatuses,
   requestTypes,
@@ -52,6 +54,23 @@ const listRequestsQuerySchema = z.object({
   status: z.enum(requestStatuses).optional(),
   type: z.enum(requestTypes).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+const actorSchema = z.object({
+  type: z.enum(actorTypes),
+  id: z.string().min(1).nullable().optional(),
+});
+
+const updateStatusSchema = z.object({
+  status: z.enum(requestStatuses),
+  actor: actorSchema,
+  reason: z.string().min(1).nullable().optional(),
+});
+
+const addCommentSchema = z.object({
+  visibility: z.enum(commentVisibilities),
+  body: z.string().min(1),
+  actor: actorSchema,
 });
 
 export function createInternalRequestApi(
@@ -139,6 +158,15 @@ export function createInternalRequestApi(
             data: event.data,
             createdAt: event.createdAt.toISOString(),
           })),
+          comments: result.comments.map((comment) => ({
+            id: comment.id,
+            requestId: comment.requestId,
+            visibility: comment.visibility,
+            body: comment.body,
+            actorType: comment.actorType,
+            actorId: comment.actorId,
+            createdAt: comment.createdAt.toISOString(),
+          })),
         },
       });
     },
@@ -170,8 +198,94 @@ export function createInternalRequestApi(
       }
 
       return Response.json({
-        requests: requests.map(normalizeRequestSummary),
+        requests: requests.map((requestSummary) =>
+          normalizeRequestSummary(requestSummary),
+        ),
       });
+    },
+
+    async updateStatus(request: Request, id: string): Promise<Response> {
+      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      const parsed = updateStatusSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      try {
+        const updatedRequest =
+          await dependencies.requestRepository.updateStatus(id, {
+            status: parsed.data.status,
+            actorType: parsed.data.actor.type,
+            actorId: parsed.data.actor.id ?? null,
+            reason: parsed.data.reason ?? null,
+          });
+
+        if (!updatedRequest) {
+          return notFound();
+        }
+
+        return Response.json({
+          request: normalizeRequestSummary(updatedRequest, {
+            includeCompletedAt: true,
+          }),
+        });
+      } catch {
+        return serverError();
+      }
+    },
+
+    async addComment(request: Request, id: string): Promise<Response> {
+      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      const parsed = addCommentSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      try {
+        const comment = await dependencies.requestRepository.addComment(id, {
+          visibility: parsed.data.visibility,
+          body: parsed.data.body,
+          actorType: parsed.data.actor.type,
+          actorId: parsed.data.actor.id ?? null,
+        });
+
+        if (!comment) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            comment: {
+              id: comment.id,
+              requestId: comment.requestId,
+              visibility: comment.visibility,
+              body: comment.body,
+              actorType: comment.actorType,
+              actorId: comment.actorId,
+              createdAt: comment.createdAt.toISOString(),
+            },
+          },
+          {
+            status: 201,
+          },
+        );
+      } catch {
+        return serverError();
+      }
     },
   };
 }
@@ -221,6 +335,20 @@ function validationError(): Response {
   );
 }
 
+function notFound(): Response {
+  return Response.json(
+    {
+      error: {
+        code: "NOT_FOUND",
+        message: "Request not found.",
+      },
+    },
+    {
+      status: 404,
+    },
+  );
+}
+
 function serverError(): Response {
   return Response.json(
     {
@@ -235,21 +363,34 @@ function serverError(): Response {
   );
 }
 
-function normalizeRequestSummary(request: {
-  id: string;
-  publicId: string;
-  type: RequestType;
-  status: RequestStatus;
-  requesterId: string;
-  createdAt: Date;
-}) {
-  return {
+function normalizeRequestSummary(
+  request: {
+    id: string;
+    publicId: string;
+    type: RequestType;
+    status: RequestStatus;
+    requesterId: string;
+    createdAt: Date;
+    completedAt: Date | null;
+  },
+  options: { includeCompletedAt?: boolean } = {},
+) {
+  const summary = {
     id: request.id,
     publicId: request.publicId,
     type: request.type,
     status: request.status,
     requesterId: request.requesterId,
     createdAt: request.createdAt.toISOString(),
+  };
+
+  if (!options.includeCompletedAt) {
+    return summary;
+  }
+
+  return {
+    ...summary,
+    completedAt: request.completedAt?.toISOString() ?? null,
   };
 }
 

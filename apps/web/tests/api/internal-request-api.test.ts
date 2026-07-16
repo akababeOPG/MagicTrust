@@ -3,6 +3,7 @@ import type {
   CreateRequestEventRecord,
   CreateRequesterRecord,
   PrivacyRequest,
+  RequestComment,
   RequestCreationStore,
   RequestEvent,
   Requester,
@@ -150,6 +151,166 @@ describe("internal request API", () => {
     expect(body.requests).toHaveLength(1);
     expect(body.requests[0].type).toBe("GENERAL_INQUIRY");
   });
+
+  test("returns 401 for unauthorized status update", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.updateStatus(
+      new Request("https://magictrust.test/api/v1/requests/req_test/status", {
+        method: "POST",
+        body: JSON.stringify(validStatusUpdateBody()),
+      }),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("updates request status and creates a STATUS_CHANGED event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.updateStatus(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/status`,
+        {
+          method: "POST",
+          body: JSON.stringify(validStatusUpdateBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(200);
+    expect(body.request.status).toBe("PROCESSING");
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "STATUS_CHANGED",
+          data: expect.objectContaining({
+            previousStatus: "SUBMITTED",
+            newStatus: "PROCESSING",
+            reason: "Request picked up for processing",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("sets completedAt for terminal statuses", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.updateStatus(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/status`,
+        {
+          method: "POST",
+          body: JSON.stringify(validStatusUpdateBody({ status: "SUCCESS" })),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.request.completedAt).toEqual(expect.any(String));
+  });
+
+  test("creates a public comment and event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addComment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/comments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCommentBody({ visibility: "PUBLIC" })),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(body.comment).toMatchObject({
+      visibility: "PUBLIC",
+      body: "Your request is being processed.",
+      actorType: "API_CLIENT",
+    });
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "PUBLIC_COMMENT_ADDED",
+          data: expect.objectContaining({
+            commentId: body.comment.id,
+            visibility: "PUBLIC",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("creates an internal comment and event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addComment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/comments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCommentBody({ visibility: "INTERNAL" })),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(body.comment.visibility).toBe("INTERNAL");
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "INTERNAL_COMMENT_ADDED",
+        }),
+      ]),
+    );
+  });
+
+  test("GET detail includes comments with visibility", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    await api.addComment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/comments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCommentBody({ visibility: "PUBLIC" })),
+        },
+      ),
+      created.publicId,
+    );
+
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(detail.comments).toEqual([
+      expect.objectContaining({
+        visibility: "PUBLIC",
+        body: "Your request is being processed.",
+      }),
+    ]);
+  });
 });
 
 function authenticatedRequest(input: string, init: RequestInit = {}) {
@@ -184,12 +345,60 @@ function validCreateRequestBody(overrides: { type?: string } = {}) {
   };
 }
 
+function validStatusUpdateBody(overrides: { status?: string } = {}) {
+  return {
+    status: overrides.status ?? "PROCESSING",
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+    reason: "Request picked up for processing",
+  };
+}
+
+function validCommentBody(overrides: { visibility?: string } = {}) {
+  return {
+    visibility: overrides.visibility ?? "PUBLIC",
+    body: "Your request is being processed.",
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+  };
+}
+
+async function createRequest(api: ReturnType<typeof createInternalRequestApi>) {
+  const response = await api.create(
+    authenticatedRequest("https://magictrust.test/api/v1/requests", {
+      method: "POST",
+      body: JSON.stringify(validCreateRequestBody()),
+    }),
+  );
+  const body = await response.json();
+
+  return body.request;
+}
+
+async function getRequestDetail(
+  api: ReturnType<typeof createInternalRequestApi>,
+  id: string,
+) {
+  const response = await api.get(
+    authenticatedRequest(`https://magictrust.test/api/v1/requests/${id}`),
+    id,
+  );
+  const body = await response.json();
+
+  return body.request;
+}
+
 function createInMemoryDependencies() {
   const state = {
     nextId: 1,
     requesters: [] as Requester[],
     requests: [] as PrivacyRequest[],
     events: [] as RequestEvent[],
+    comments: [] as RequestComment[],
   };
 
   const creationStore: RequestCreationStore = {
@@ -212,6 +421,7 @@ function createInMemoryDependencies() {
             ...data,
             createdAt: now,
             updatedAt: now,
+            completedAt: null,
           };
 
           state.requests.push(request);
@@ -256,6 +466,9 @@ function createInMemoryDependencies() {
             data: event.data,
             createdAt: event.createdAt,
           })),
+        comments: state.comments
+          .filter((comment) => comment.requestId === request.id)
+          .map((comment) => ({ ...comment })),
       };
     },
     async list(filters: RequestListFilters): Promise<RequestSummary[]> {
@@ -271,6 +484,81 @@ function createInMemoryDependencies() {
         )
         .slice(0, filters.limit)
         .map(summaryFromRequest);
+    },
+    async updateStatus(id, input) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const previousStatus = request.status;
+      const now = new Date(Date.UTC(2026, 0, state.nextId++));
+      request.status = input.status;
+      request.updatedAt = now;
+      request.completedAt = isTerminalStatus(input.status) ? now : null;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type: "STATUS_CHANGED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          previousStatus,
+          newStatus: input.status,
+          reason: input.reason,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: now,
+      });
+
+      return summaryFromRequest(request);
+    },
+    async addComment(id, input) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const comment = {
+        id: `comment-${state.nextId++}`,
+        requestId: request.id,
+        visibility: input.visibility,
+        body: input.body,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      };
+      state.comments.push(comment);
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type:
+          input.visibility === "PUBLIC"
+            ? "PUBLIC_COMMENT_ADDED"
+            : "INTERNAL_COMMENT_ADDED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          commentId: comment.id,
+          visibility: input.visibility,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return comment;
     },
   };
 
@@ -288,7 +576,14 @@ function summaryFromRequest(request: PrivacyRequest): RequestSummary {
     requesterId: request.requesterId,
     type: request.type,
     status: request.status,
+    completedAt: request.completedAt,
     createdAt: request.createdAt,
     updatedAt: request.updatedAt,
   };
+}
+
+function isTerminalStatus(status: string): boolean {
+  return (
+    status === "SUCCESS" || status === "REJECTED" || status === "CANCELLED"
+  );
 }

@@ -176,6 +176,7 @@ function createInMemoryStore(): RequestCreationStore & {
             id: randomUUID(),
             createdAt: new Date(),
             updatedAt: new Date(),
+            completedAt: null,
             ...data,
           };
         },

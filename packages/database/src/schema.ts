@@ -39,6 +39,14 @@ export const actorTypeEnum = pgEnum("actor_type", [
 
 export const requestEventTypeEnum = pgEnum("request_event_type", [
   "REQUEST_CREATED",
+  "STATUS_CHANGED",
+  "PUBLIC_COMMENT_ADDED",
+  "INTERNAL_COMMENT_ADDED",
+]);
+
+export const commentVisibilityEnum = pgEnum("comment_visibility", [
+  "PUBLIC",
+  "INTERNAL",
 ]);
 
 export const requesters = pgTable(
@@ -80,6 +88,7 @@ export const privacyRequests = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (table) => ({
     publicIdIdx: uniqueIndex("privacy_requests_public_id_idx").on(
@@ -89,6 +98,29 @@ export const privacyRequests = pgTable(
       table.requesterId,
     ),
     statusIdx: index("privacy_requests_status_idx").on(table.status),
+  }),
+);
+
+export const requestComments = pgTable(
+  "request_comments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => privacyRequests.id, { onDelete: "restrict" }),
+    visibility: commentVisibilityEnum("visibility").notNull(),
+    body: text("body").notNull(),
+    actorType: actorTypeEnum("actor_type").notNull(),
+    actorId: varchar("actor_id", { length: 128 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    requestIdIdx: index("request_comments_request_id_idx").on(table.requestId),
+    visibilityIdx: index("request_comments_visibility_idx").on(
+      table.visibility,
+    ),
   }),
 );
 
@@ -126,6 +158,17 @@ export const privacyRequestsRelations = relations(
       references: [requesters.id],
     }),
     events: many(requestEvents),
+    comments: many(requestComments),
+  }),
+);
+
+export const requestCommentsRelations = relations(
+  requestComments,
+  ({ one }) => ({
+    privacyRequest: one(privacyRequests, {
+      fields: [requestComments.requestId],
+      references: [privacyRequests.id],
+    }),
   }),
 );
 

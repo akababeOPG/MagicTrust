@@ -31,6 +31,16 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
             "DATABASE_URL is required for internal request APIs.",
           );
         },
+        updateStatus() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        addComment() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
       },
     };
   }

@@ -69,6 +69,7 @@ async function insertPrivacyRequest(
       mutableData: privacyRequests.mutableData,
       createdAt: privacyRequests.createdAt,
       updatedAt: privacyRequests.updatedAt,
+      completedAt: privacyRequests.completedAt,
     });
 
   return {

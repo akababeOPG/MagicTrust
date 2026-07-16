@@ -8,6 +8,13 @@
       "when": 1784211381113,
       "tag": "0000_chief_wildside",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784226940060,
+      "tag": "0001_optimal_warstar",
+      "breakpoints": true
     }
   ]
 }

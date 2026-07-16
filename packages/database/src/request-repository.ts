@@ -1,6 +1,8 @@
 import type {
   ActorType,
+  CommentVisibility,
   JsonObject,
+  RequestComment,
   RequestEventType,
   RequestStatus,
   RequestType,
@@ -8,7 +10,7 @@ import type {
 import { and, desc, eq, or } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
-import { privacyRequests, requestEvents } from "./schema";
+import { privacyRequests, requestComments, requestEvents } from "./schema";
 
 type Database = ReturnType<typeof createDatabase>;
 
@@ -18,6 +20,7 @@ export type RequestSummary = {
   requesterId: string;
   type: RequestType;
   status: RequestStatus;
+  completedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -34,6 +37,7 @@ export type RequestEventSummary = {
 
 export type RequestDetails = RequestSummary & {
   events: RequestEventSummary[];
+  comments: RequestComment[];
 };
 
 export type RequestListFilters = {
@@ -45,6 +49,28 @@ export type RequestListFilters = {
 export type RequestRepository = {
   findByIdOrPublicId(id: string): Promise<RequestDetails | null>;
   list(filters: RequestListFilters): Promise<RequestSummary[]>;
+  updateStatus(
+    id: string,
+    input: UpdateRequestStatusInput,
+  ): Promise<RequestSummary | null>;
+  addComment(
+    id: string,
+    input: AddRequestCommentInput,
+  ): Promise<RequestComment | null>;
+};
+
+export type UpdateRequestStatusInput = {
+  status: RequestStatus;
+  actorType: ActorType;
+  actorId: string | null;
+  reason: string | null;
+};
+
+export type AddRequestCommentInput = {
+  visibility: CommentVisibility;
+  body: string;
+  actorType: ActorType;
+  actorId: string | null;
 };
 
 const uuidPattern =
@@ -60,6 +86,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           requesterId: privacyRequests.requesterId,
           type: privacyRequests.type,
           status: privacyRequests.status,
+          completedAt: privacyRequests.completedAt,
           createdAt: privacyRequests.createdAt,
           updatedAt: privacyRequests.updatedAt,
         })
@@ -89,12 +116,27 @@ export function createRequestRepository(db: Database): RequestRepository {
         .where(eq(requestEvents.privacyRequestId, request.id))
         .orderBy(desc(requestEvents.createdAt));
 
+      const comments = await db
+        .select({
+          id: requestComments.id,
+          requestId: requestComments.requestId,
+          visibility: requestComments.visibility,
+          body: requestComments.body,
+          actorType: requestComments.actorType,
+          actorId: requestComments.actorId,
+          createdAt: requestComments.createdAt,
+        })
+        .from(requestComments)
+        .where(eq(requestComments.requestId, request.id))
+        .orderBy(desc(requestComments.createdAt));
+
       return {
         ...request,
         events: events.map((event) => ({
           ...event,
           data: event.data as JsonObject,
         })),
+        comments,
       };
     },
     async list(filters) {
@@ -110,6 +152,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           requesterId: privacyRequests.requesterId,
           type: privacyRequests.type,
           status: privacyRequests.status,
+          completedAt: privacyRequests.completedAt,
           createdAt: privacyRequests.createdAt,
           updatedAt: privacyRequests.updatedAt,
         })
@@ -118,5 +161,132 @@ export function createRequestRepository(db: Database): RequestRepository {
         .orderBy(desc(privacyRequests.createdAt))
         .limit(filters.limit);
     },
+    async updateStatus(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            id: privacyRequests.id,
+            publicId: privacyRequests.publicId,
+            requesterId: privacyRequests.requesterId,
+            type: privacyRequests.type,
+            status: privacyRequests.status,
+            completedAt: privacyRequests.completedAt,
+            createdAt: privacyRequests.createdAt,
+            updatedAt: privacyRequests.updatedAt,
+          })
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const now = new Date();
+        const completedAt = isTerminalStatus(input.status) ? now : null;
+        const [updatedRequest] = await tx
+          .update(privacyRequests)
+          .set({
+            status: input.status,
+            completedAt,
+            updatedAt: now,
+          })
+          .where(eq(privacyRequests.id, request.id))
+          .returning({
+            id: privacyRequests.id,
+            publicId: privacyRequests.publicId,
+            requesterId: privacyRequests.requesterId,
+            type: privacyRequests.type,
+            status: privacyRequests.status,
+            completedAt: privacyRequests.completedAt,
+            createdAt: privacyRequests.createdAt,
+            updatedAt: privacyRequests.updatedAt,
+          });
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type: "STATUS_CHANGED",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            previousStatus: request.status,
+            newStatus: input.status,
+            reason: input.reason,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return updatedRequest;
+      });
+    },
+    async addComment(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            id: privacyRequests.id,
+          })
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [comment] = await tx
+          .insert(requestComments)
+          .values({
+            requestId: request.id,
+            visibility: input.visibility,
+            body: input.body,
+            actorType: input.actorType,
+            actorId: input.actorId,
+          })
+          .returning({
+            id: requestComments.id,
+            requestId: requestComments.requestId,
+            visibility: requestComments.visibility,
+            body: requestComments.body,
+            actorType: requestComments.actorType,
+            actorId: requestComments.actorId,
+            createdAt: requestComments.createdAt,
+          });
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type:
+            input.visibility === "PUBLIC"
+              ? "PUBLIC_COMMENT_ADDED"
+              : "INTERNAL_COMMENT_ADDED",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            commentId: comment.id,
+            visibility: input.visibility,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return comment;
+      });
+    },
   };
+}
+
+function requestIdentifierCondition(id: string) {
+  return uuidPattern.test(id)
+    ? or(eq(privacyRequests.id, id), eq(privacyRequests.publicId, id))
+    : eq(privacyRequests.publicId, id);
+}
+
+function isTerminalStatus(status: RequestStatus): boolean {
+  return (
+    status === "SUCCESS" || status === "REJECTED" || status === "CANCELLED"
+  );
 }
