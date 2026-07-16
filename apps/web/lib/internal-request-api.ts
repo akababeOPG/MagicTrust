@@ -14,6 +14,8 @@ import type {
 import type { RequestRepository } from "@magictrust/database";
 import { z } from "zod";
 
+import { authenticateInternalApiRequest } from "./internal-api-auth";
+
 export type InternalRequestApiDependencies = {
   apiKey: string | null;
   requestCreationStore: RequestCreationStore;
@@ -73,12 +75,26 @@ const addCommentSchema = z.object({
   actor: actorSchema,
 });
 
+const addAttachmentSchema = z.object({
+  visibility: z.enum(commentVisibilities),
+  fileName: z.string().min(1),
+  mimeType: z.string().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  storageProvider: z.string().min(1),
+  storageKey: z.string().min(1),
+  checksum: z.string().min(1),
+  actor: actorSchema,
+});
+
 export function createInternalRequestApi(
   dependencies: InternalRequestApiDependencies,
 ) {
   return {
     async create(request: Request): Promise<Response> {
-      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
 
       if (unauthorized) {
         return unauthorized;
@@ -119,7 +135,10 @@ export function createInternalRequestApi(
     },
 
     async get(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
 
       if (unauthorized) {
         return unauthorized;
@@ -167,12 +186,29 @@ export function createInternalRequestApi(
             actorId: comment.actorId,
             createdAt: comment.createdAt.toISOString(),
           })),
+          attachments: result.attachments.map((attachment) => ({
+            id: attachment.id,
+            requestId: attachment.requestId,
+            visibility: attachment.visibility,
+            fileName: attachment.fileName,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            storageProvider: attachment.storageProvider,
+            storageKey: attachment.storageKey,
+            checksum: attachment.checksum,
+            actorType: attachment.actorType,
+            actorId: attachment.actorId,
+            createdAt: attachment.createdAt.toISOString(),
+          })),
         },
       });
     },
 
     async list(request: Request): Promise<Response> {
-      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
 
       if (unauthorized) {
         return unauthorized;
@@ -205,7 +241,10 @@ export function createInternalRequestApi(
     },
 
     async updateStatus(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
 
       if (unauthorized) {
         return unauthorized;
@@ -242,7 +281,10 @@ export function createInternalRequestApi(
     },
 
     async addComment(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticate(request.headers, dependencies.apiKey);
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
 
       if (unauthorized) {
         return unauthorized;
@@ -287,30 +329,70 @@ export function createInternalRequestApi(
         return serverError();
       }
     },
+
+    async addAttachment(request: Request, id: string): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      const parsed = addAttachmentSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      try {
+        const attachment = await dependencies.requestRepository.addAttachment(
+          id,
+          {
+            visibility: parsed.data.visibility,
+            fileName: parsed.data.fileName,
+            mimeType: parsed.data.mimeType,
+            sizeBytes: parsed.data.sizeBytes,
+            storageProvider: parsed.data.storageProvider,
+            storageKey: parsed.data.storageKey,
+            checksum: parsed.data.checksum,
+            actorType: parsed.data.actor.type,
+            actorId: parsed.data.actor.id ?? null,
+          },
+        );
+
+        if (!attachment) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            attachment: {
+              id: attachment.id,
+              requestId: attachment.requestId,
+              visibility: attachment.visibility,
+              fileName: attachment.fileName,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              storageProvider: attachment.storageProvider,
+              storageKey: attachment.storageKey,
+              checksum: attachment.checksum,
+              actorType: attachment.actorType,
+              actorId: attachment.actorId,
+              createdAt: attachment.createdAt.toISOString(),
+            },
+          },
+          {
+            status: 201,
+          },
+        );
+      } catch {
+        return serverError();
+      }
+    },
   };
-}
-
-function authenticate(
-  headers: Headers,
-  apiKey: string | null,
-): Response | null {
-  const suppliedApiKey = headers.get("x-api-key");
-
-  if (!apiKey || !suppliedApiKey || suppliedApiKey !== apiKey) {
-    return Response.json(
-      {
-        error: {
-          code: "UNAUTHORIZED",
-          message: "Missing or invalid API key.",
-        },
-      },
-      {
-        status: 401,
-      },
-    );
-  }
-
-  return null;
 }
 
 async function readJson(request: Request): Promise<unknown> {

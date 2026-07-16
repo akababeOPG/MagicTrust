@@ -15,6 +15,13 @@
       "when": 1784226940060,
       "tag": "0001_optimal_warstar",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784228579377,
+      "tag": "0002_true_the_twelve",
+      "breakpoints": true
     }
   ]
 }

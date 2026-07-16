@@ -2,6 +2,7 @@ import type {
   ActorType,
   CommentVisibility,
   JsonObject,
+  RequestAttachment,
   RequestComment,
   RequestEventType,
   RequestStatus,
@@ -10,7 +11,12 @@ import type {
 import { and, desc, eq, or } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
-import { privacyRequests, requestComments, requestEvents } from "./schema";
+import {
+  privacyRequests,
+  requestAttachments,
+  requestComments,
+  requestEvents,
+} from "./schema";
 
 type Database = ReturnType<typeof createDatabase>;
 
@@ -38,6 +44,7 @@ export type RequestEventSummary = {
 export type RequestDetails = RequestSummary & {
   events: RequestEventSummary[];
   comments: RequestComment[];
+  attachments: RequestAttachment[];
 };
 
 export type RequestListFilters = {
@@ -57,6 +64,10 @@ export type RequestRepository = {
     id: string,
     input: AddRequestCommentInput,
   ): Promise<RequestComment | null>;
+  addAttachment(
+    id: string,
+    input: AddRequestAttachmentInput,
+  ): Promise<RequestAttachment | null>;
 };
 
 export type UpdateRequestStatusInput = {
@@ -69,6 +80,18 @@ export type UpdateRequestStatusInput = {
 export type AddRequestCommentInput = {
   visibility: CommentVisibility;
   body: string;
+  actorType: ActorType;
+  actorId: string | null;
+};
+
+export type AddRequestAttachmentInput = {
+  visibility: CommentVisibility;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageProvider: string;
+  storageKey: string;
+  checksum: string;
   actorType: ActorType;
   actorId: string | null;
 };
@@ -130,6 +153,25 @@ export function createRequestRepository(db: Database): RequestRepository {
         .where(eq(requestComments.requestId, request.id))
         .orderBy(desc(requestComments.createdAt));
 
+      const attachments = await db
+        .select({
+          id: requestAttachments.id,
+          requestId: requestAttachments.requestId,
+          visibility: requestAttachments.visibility,
+          fileName: requestAttachments.fileName,
+          mimeType: requestAttachments.mimeType,
+          sizeBytes: requestAttachments.sizeBytes,
+          storageProvider: requestAttachments.storageProvider,
+          storageKey: requestAttachments.storageKey,
+          checksum: requestAttachments.checksum,
+          actorType: requestAttachments.actorType,
+          actorId: requestAttachments.actorId,
+          createdAt: requestAttachments.createdAt,
+        })
+        .from(requestAttachments)
+        .where(eq(requestAttachments.requestId, request.id))
+        .orderBy(desc(requestAttachments.createdAt));
+
       return {
         ...request,
         events: events.map((event) => ({
@@ -137,6 +179,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           data: event.data as JsonObject,
         })),
         comments,
+        attachments,
       };
     },
     async list(filters) {
@@ -274,6 +317,76 @@ export function createRequestRepository(db: Database): RequestRepository {
         });
 
         return comment;
+      });
+    },
+    async addAttachment(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            id: privacyRequests.id,
+          })
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [attachment] = await tx
+          .insert(requestAttachments)
+          .values({
+            requestId: request.id,
+            visibility: input.visibility,
+            fileName: input.fileName,
+            mimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+            storageProvider: input.storageProvider,
+            storageKey: input.storageKey,
+            checksum: input.checksum,
+            actorType: input.actorType,
+            actorId: input.actorId,
+          })
+          .returning({
+            id: requestAttachments.id,
+            requestId: requestAttachments.requestId,
+            visibility: requestAttachments.visibility,
+            fileName: requestAttachments.fileName,
+            mimeType: requestAttachments.mimeType,
+            sizeBytes: requestAttachments.sizeBytes,
+            storageProvider: requestAttachments.storageProvider,
+            storageKey: requestAttachments.storageKey,
+            checksum: requestAttachments.checksum,
+            actorType: requestAttachments.actorType,
+            actorId: requestAttachments.actorId,
+            createdAt: requestAttachments.createdAt,
+          });
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type:
+            input.visibility === "PUBLIC"
+              ? "PUBLIC_ATTACHMENT_ADDED"
+              : "INTERNAL_ATTACHMENT_ADDED",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            attachmentId: attachment.id,
+            visibility: input.visibility,
+            fileName: input.fileName,
+            mimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+            storageProvider: input.storageProvider,
+            storageKey: input.storageKey,
+            checksum: input.checksum,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return attachment;
       });
     },
   };

@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import {
+  integer,
   index,
   jsonb,
   pgEnum,
@@ -42,6 +43,8 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "STATUS_CHANGED",
   "PUBLIC_COMMENT_ADDED",
   "INTERNAL_COMMENT_ADDED",
+  "PUBLIC_ATTACHMENT_ADDED",
+  "INTERNAL_ATTACHMENT_ADDED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
@@ -124,6 +127,36 @@ export const requestComments = pgTable(
   }),
 );
 
+export const requestAttachments = pgTable(
+  "request_attachments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => privacyRequests.id, { onDelete: "restrict" }),
+    visibility: commentVisibilityEnum("visibility").notNull(),
+    fileName: text("file_name").notNull(),
+    mimeType: varchar("mime_type", { length: 255 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    storageProvider: varchar("storage_provider", { length: 64 }).notNull(),
+    storageKey: text("storage_key").notNull(),
+    checksum: text("checksum").notNull(),
+    actorType: actorTypeEnum("actor_type").notNull(),
+    actorId: varchar("actor_id", { length: 128 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    requestIdIdx: index("request_attachments_request_id_idx").on(
+      table.requestId,
+    ),
+    visibilityIdx: index("request_attachments_visibility_idx").on(
+      table.visibility,
+    ),
+  }),
+);
+
 export const requestEvents = pgTable(
   "request_events",
   {
@@ -159,6 +192,7 @@ export const privacyRequestsRelations = relations(
     }),
     events: many(requestEvents),
     comments: many(requestComments),
+    attachments: many(requestAttachments),
   }),
 );
 
@@ -167,6 +201,16 @@ export const requestCommentsRelations = relations(
   ({ one }) => ({
     privacyRequest: one(privacyRequests, {
       fields: [requestComments.requestId],
+      references: [privacyRequests.id],
+    }),
+  }),
+);
+
+export const requestAttachmentsRelations = relations(
+  requestAttachments,
+  ({ one }) => ({
+    privacyRequest: one(privacyRequests, {
+      fields: [requestAttachments.requestId],
       references: [privacyRequests.id],
     }),
   }),

@@ -38,7 +38,9 @@ export type RequestEventType =
   | "REQUEST_CREATED"
   | "STATUS_CHANGED"
   | "PUBLIC_COMMENT_ADDED"
-  | "INTERNAL_COMMENT_ADDED";
+  | "INTERNAL_COMMENT_ADDED"
+  | "PUBLIC_ATTACHMENT_ADDED"
+  | "INTERNAL_ATTACHMENT_ADDED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -77,6 +79,21 @@ export type RequestComment = {
   requestId: string;
   visibility: CommentVisibility;
   body: string;
+  actorType: ActorType;
+  actorId: string | null;
+  createdAt: Date;
+};
+
+export type RequestAttachment = {
+  id: string;
+  requestId: string;
+  visibility: CommentVisibility;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageProvider: string;
+  storageKey: string;
+  checksum: string;
   actorType: ActorType;
   actorId: string | null;
   createdAt: Date;

@@ -3,6 +3,7 @@ import type {
   CreateRequestEventRecord,
   CreateRequesterRecord,
   PrivacyRequest,
+  RequestAttachment,
   RequestComment,
   RequestCreationStore,
   RequestEvent,
@@ -36,6 +37,65 @@ describe("internal request API", () => {
 
     expect(missing.status).toBe(401);
     expect(invalid.status).toBe(401);
+  });
+
+  test("accepts the same valid API key across all Internal API v1 operations", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const createResponse = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        body: JSON.stringify(validCreateRequestBody()),
+      }),
+    );
+    const created = (await createResponse.json()).request;
+
+    const listResponse = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+    const getResponse = await api.get(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}`,
+      ),
+      created.publicId,
+    );
+    const statusResponse = await api.updateStatus(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/status`,
+        {
+          method: "POST",
+          body: JSON.stringify(validStatusUpdateBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const commentResponse = await api.addComment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/comments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCommentBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const attachmentResponse = await api.addAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody()),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(createResponse.status).toBe(201);
+    expect(listResponse.status).toBe(200);
+    expect(getResponse.status).toBe(200);
+    expect(statusResponse.status).toBe(200);
+    expect(commentResponse.status).toBe(201);
+    expect(attachmentResponse.status).toBe(201);
   });
 
   test("creates a request via API", async () => {
@@ -311,6 +371,138 @@ describe("internal request API", () => {
       }),
     ]);
   });
+
+  test("returns 401 for unauthorized attachment creation", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.addAttachment(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_test/attachments",
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody()),
+        },
+      ),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("creates a public attachment and event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody({ visibility: "PUBLIC" })),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(body.attachment).toMatchObject({
+      visibility: "PUBLIC",
+      fileName: "data-export.json",
+      mimeType: "application/json",
+      sizeBytes: 12345,
+      storageProvider: "manual",
+      storageKey: "manual/data-export.json",
+      checksum: "sha256-placeholder",
+      actorType: "API_CLIENT",
+    });
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "PUBLIC_ATTACHMENT_ADDED",
+          data: expect.objectContaining({
+            attachmentId: body.attachment.id,
+            visibility: "PUBLIC",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("creates an internal attachment and event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody({ visibility: "INTERNAL" })),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(body.attachment.visibility).toBe("INTERNAL");
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "INTERNAL_ATTACHMENT_ADDED",
+        }),
+      ]),
+    );
+  });
+
+  test("GET detail includes attachments with visibility", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    await api.addAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody({ visibility: "PUBLIC" })),
+        },
+      ),
+      created.publicId,
+    );
+
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(detail.attachments).toEqual([
+      expect.objectContaining({
+        visibility: "PUBLIC",
+        fileName: "data-export.json",
+      }),
+    ]);
+  });
+
+  test("returns 404 when adding attachment to missing request", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+
+    const response = await api.addAttachment(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_missing/attachments",
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody()),
+        },
+      ),
+      "req_missing",
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error.code).toBe("NOT_FOUND");
+  });
 });
 
 function authenticatedRequest(input: string, init: RequestInit = {}) {
@@ -367,6 +559,22 @@ function validCommentBody(overrides: { visibility?: string } = {}) {
   };
 }
 
+function validAttachmentBody(overrides: { visibility?: string } = {}) {
+  return {
+    visibility: overrides.visibility ?? "PUBLIC",
+    fileName: "data-export.json",
+    mimeType: "application/json",
+    sizeBytes: 12345,
+    storageProvider: "manual",
+    storageKey: "manual/data-export.json",
+    checksum: "sha256-placeholder",
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+  };
+}
+
 async function createRequest(api: ReturnType<typeof createInternalRequestApi>) {
   const response = await api.create(
     authenticatedRequest("https://magictrust.test/api/v1/requests", {
@@ -399,6 +607,7 @@ function createInMemoryDependencies() {
     requests: [] as PrivacyRequest[],
     events: [] as RequestEvent[],
     comments: [] as RequestComment[],
+    attachments: [] as RequestAttachment[],
   };
 
   const creationStore: RequestCreationStore = {
@@ -469,6 +678,9 @@ function createInMemoryDependencies() {
         comments: state.comments
           .filter((comment) => comment.requestId === request.id)
           .map((comment) => ({ ...comment })),
+        attachments: state.attachments
+          .filter((attachment) => attachment.requestId === request.id)
+          .map((attachment) => ({ ...attachment })),
       };
     },
     async list(filters: RequestListFilters): Promise<RequestSummary[]> {
@@ -559,6 +771,58 @@ function createInMemoryDependencies() {
       });
 
       return comment;
+    },
+    async addAttachment(id, input) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const attachment = {
+        id: `attachment-${state.nextId++}`,
+        requestId: request.id,
+        visibility: input.visibility,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        storageProvider: input.storageProvider,
+        storageKey: input.storageKey,
+        checksum: input.checksum,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      };
+      state.attachments.push(attachment);
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type:
+          input.visibility === "PUBLIC"
+            ? "PUBLIC_ATTACHMENT_ADDED"
+            : "INTERNAL_ATTACHMENT_ADDED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          attachmentId: attachment.id,
+          visibility: input.visibility,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+          storageProvider: input.storageProvider,
+          storageKey: input.storageKey,
+          checksum: input.checksum,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return attachment;
     },
   };
 
