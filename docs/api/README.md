@@ -38,8 +38,10 @@ Example response when `DATABASE_URL` is missing:
 Uploads a private file to Vercel Blob and creates attachment metadata for an existing request. The request id may be the internal id or `publicId`.
 
 ```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/attachments/upload" \
-  -H "x-api-key: $INTERNAL_API_KEY" \
+  -H "x-api-key: $API_KEY" \
   -F "file=@./data-export.json;type=application/json" \
   -F "visibility=PUBLIC" \
   -F "actorType=API_CLIENT" \
@@ -53,8 +55,10 @@ The response includes attachment metadata only. It does not include a public URL
 Downloads a private attachment for an existing request. The request id may be the internal id or `publicId`. The response body is the file content; no Blob URL is returned.
 
 ```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
 curl -X GET "http://localhost:3000/api/v1/requests/req_example/attachments/attachment_example/download?actorId=privacy-processor" \
-  -H "x-api-key: $INTERNAL_API_KEY" \
+  -H "x-api-key: $API_KEY" \
   -o data-export.json
 ```
 
@@ -63,9 +67,11 @@ curl -X GET "http://localhost:3000/api/v1/requests/req_example/attachments/attac
 Sends a basic outbound email for an existing request. The request id may be the internal id or `publicId`.
 
 ```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/communications/email" \
   -H "content-type: application/json" \
-  -H "x-api-key: $INTERNAL_API_KEY" \
+  -H "x-api-key: $API_KEY" \
   -d '{
     "to": "john@example.com",
     "subject": "Your MagicTrust request was updated",

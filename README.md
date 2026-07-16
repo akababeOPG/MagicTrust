@@ -24,6 +24,8 @@ This repository is currently bootstrapped only. It does not implement request in
 apps/web              Next.js application
 packages/config       Shared environment validation
 packages/database     Drizzle schema, Neon connection, health check
+packages/email        Resend email provider
+packages/storage      Private file storage provider
 packages/domain       Placeholder for future domain logic
 docs/product          Product notes
 docs/architecture     Architecture notes
@@ -38,29 +40,53 @@ docs/api              API notes
    pnpm install
    ```
 
-2. Create a local environment file:
+2. Create the local environment file at the repository root:
 
    ```sh
    cp .env.example .env.local
    ```
 
-3. Set `DATABASE_URL` to the pooled Neon Postgres connection string used by the app.
+   Root `.env.local` is the single source of truth for local development. Do not create or rely on `apps/web/.env.local`.
 
-4. Set `DATABASE_URL_UNPOOLED` to the unpooled Neon Postgres connection string used for migrations.
+3. Fill in the required variables:
 
-5. Start the app:
+   ```text
+   DATABASE_URL             Pooled Neon Postgres URL used by the app
+   DATABASE_URL_UNPOOLED    Unpooled Neon Postgres URL used by migrations
+   INTERNAL_API_KEY         Shared secret for Internal API v1 curl/API calls
+   BLOB_READ_WRITE_TOKEN    Vercel Blob token for private attachment upload/download
+   RESEND_API_KEY           Resend API key for internal email communications
+   EMAIL_FROM               Sender address for internal email communications
+   NEXT_PUBLIC_APP_NAME     Public app name, usually MagicTrust
+   ```
+
+4. Start the app:
 
    ```sh
    pnpm dev
    ```
 
-6. Check health:
+5. Check health:
 
    ```sh
    curl http://localhost:3000/api/health
    ```
 
 Without `DATABASE_URL`, the health endpoint returns `degraded` with database status `not_configured`.
+
+## Curl API Key
+
+For local Internal API v1 curl tests, load the root API key into your shell:
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+```
+
+Then pass it on requests:
+
+```sh
+-H "x-api-key: $API_KEY"
+```
 
 ## Verification
 
@@ -76,7 +102,7 @@ pnpm test:e2e
 
 The database package contains the Drizzle setup, generated SQL migrations, and a Neon HTTP connection helper.
 
-Local database environment variables belong in the root `.env.local` file:
+Local database environment variables belong in the root `.env.local` file. `apps/web` does not require its own `.env.local`.
 
 ```sh
 DATABASE_URL="postgres://..."

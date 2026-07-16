@@ -64,27 +64,22 @@ export function getEmailFrom(
 
 function findLocalEnvFile(startDirectory: string): string | null {
   let currentDirectory = startDirectory;
-  let nearestEnvFile: string | null = null;
 
   while (true) {
-    const candidate = join(currentDirectory, ".env.local");
-
-    if (!nearestEnvFile && existsSync(candidate)) {
-      nearestEnvFile = candidate;
-    }
-
     const workspaceCandidate = join(currentDirectory, "pnpm-workspace.yaml");
 
     if (existsSync(workspaceCandidate)) {
       const workspaceEnvFile = join(currentDirectory, ".env.local");
 
-      return existsSync(workspaceEnvFile) ? workspaceEnvFile : nearestEnvFile;
+      return existsSync(workspaceEnvFile) ? workspaceEnvFile : null;
     }
 
     const parentDirectory = dirname(currentDirectory);
 
     if (parentDirectory === currentDirectory) {
-      return nearestEnvFile;
+      const localEnvFile = join(startDirectory, ".env.local");
+
+      return existsSync(localEnvFile) ? localEnvFile : null;
     }
 
     currentDirectory = parentDirectory;
