@@ -89,6 +89,16 @@ Then pass it on requests:
 -H "x-api-key: $API_KEY"
 ```
 
+## Public Intake
+
+The hosted public privacy request form runs at:
+
+```text
+http://localhost:3000/forms/privacy-request
+```
+
+The form submits to `POST /api/public/requests`. This public endpoint does not require `x-api-key` and only returns the public request reference.
+
 ## Verification
 
 ```sh

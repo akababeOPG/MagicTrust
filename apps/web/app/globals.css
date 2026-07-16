@@ -41,3 +41,100 @@ h1 {
 p {
   color: #475569;
 }
+
+.form-page {
+  place-content: start center;
+  background: #f8fafc;
+}
+
+.form-shell {
+  width: min(100%, 720px);
+  display: grid;
+  gap: 1.5rem;
+}
+
+.form-heading {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.privacy-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+label {
+  display: grid;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  padding: 0.7rem 0.75rem;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  width: fit-content;
+  border: 0;
+  border-radius: 6px;
+  background: #172033;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.75rem 1rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.honeypot {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.confirmation {
+  border: 1px solid #86efac;
+  border-radius: 6px;
+  background: #f0fdf4;
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem;
+}
+
+.confirmation h2 {
+  margin: 0;
+}
+
+.form-error {
+  color: #b91c1c;
+}
+
+@media (max-width: 640px) {
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+}

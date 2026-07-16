@@ -33,6 +33,48 @@ Example response when `DATABASE_URL` is missing:
 }
 ```
 
+## Hosted Privacy Request Form
+
+The hosted public intake form is available at:
+
+```text
+http://localhost:3000/forms/privacy-request
+```
+
+It submits to `POST /api/public/requests` and does not require `x-api-key`.
+
+## `POST /api/public/requests`
+
+Creates a public privacy request from hosted form intake.
+
+```sh
+curl -X POST "http://localhost:3000/api/public/requests" \
+  -H "content-type: application/json" \
+  -d '{
+    "type": "DATA_ACCESS",
+    "firstName": "John",
+    "lastName": "Doe",
+    "email": "john@example.com",
+    "phone": "+13055551234",
+    "message": "I want to access my data.",
+    "sourceUrl": "https://example.com/privacy",
+    "website": ""
+  }'
+```
+
+Example response:
+
+```json
+{
+  "request": {
+    "publicId": "req_example",
+    "type": "DATA_ACCESS",
+    "status": "SUBMITTED",
+    "createdAt": "2026-07-16T00:00:00.000Z"
+  }
+}
+```
+
 ## `POST /api/v1/requests/:id/attachments/upload`
 
 Uploads a private file to Vercel Blob and creates attachment metadata for an existing request. The request id may be the internal id or `publicId`.
