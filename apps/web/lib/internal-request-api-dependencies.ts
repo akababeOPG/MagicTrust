@@ -4,6 +4,7 @@ import {
   createRequestCreationStore,
   createRequestRepository,
 } from "@magictrust/database";
+import { createResendEmailProvider } from "@magictrust/email";
 import { createVercelBlobPrivateStorageProvider } from "@magictrust/storage";
 
 import type { InternalRequestApiDependencies } from "./internal-request-api";
@@ -52,8 +53,24 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
             "DATABASE_URL is required for internal request APIs.",
           );
         },
+        createCommunication() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        markCommunicationSent() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        markCommunicationFailed() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
       },
       storageProvider: createVercelBlobPrivateStorageProvider(),
+      emailProvider: createResendEmailProvider(),
     };
   }
 
@@ -64,5 +81,6 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
     requestCreationStore: createRequestCreationStore(db),
     requestRepository: createRequestRepository(db),
     storageProvider: createVercelBlobPrivateStorageProvider(),
+    emailProvider: createResendEmailProvider(),
   };
 }

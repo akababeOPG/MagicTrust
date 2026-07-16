@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
+import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
-const localEnvPath = new URL("../../../.env.local", import.meta.url);
+const localEnvPath = findLocalEnvFile(process.cwd());
 
-if (existsSync(localEnvPath)) {
+if (localEnvPath) {
   loadEnvFile(localEnvPath);
 }
 
@@ -14,6 +15,8 @@ const serverEnvSchema = z.object({
   DATABASE_URL_UNPOOLED: z.string().url().optional(),
   INTERNAL_API_KEY: z.string().min(1).optional(),
   BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().min(1).optional(),
   NEXT_PUBLIC_APP_NAME: z.string().default("MagicTrust"),
 });
 
@@ -45,4 +48,45 @@ export function getBlobReadWriteToken(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   return getServerEnv(env).BLOB_READ_WRITE_TOKEN ?? null;
+}
+
+export function getResendApiKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  return getServerEnv(env).RESEND_API_KEY ?? null;
+}
+
+export function getEmailFrom(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  return getServerEnv(env).EMAIL_FROM ?? null;
+}
+
+function findLocalEnvFile(startDirectory: string): string | null {
+  let currentDirectory = startDirectory;
+  let nearestEnvFile: string | null = null;
+
+  while (true) {
+    const candidate = join(currentDirectory, ".env.local");
+
+    if (!nearestEnvFile && existsSync(candidate)) {
+      nearestEnvFile = candidate;
+    }
+
+    const workspaceCandidate = join(currentDirectory, "pnpm-workspace.yaml");
+
+    if (existsSync(workspaceCandidate)) {
+      const workspaceEnvFile = join(currentDirectory, ".env.local");
+
+      return existsSync(workspaceEnvFile) ? workspaceEnvFile : nearestEnvFile;
+    }
+
+    const parentDirectory = dirname(currentDirectory);
+
+    if (parentDirectory === currentDirectory) {
+      return nearestEnvFile;
+    }
+
+    currentDirectory = parentDirectory;
+  }
 }

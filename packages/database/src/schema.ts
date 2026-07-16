@@ -46,11 +46,27 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "PUBLIC_ATTACHMENT_ADDED",
   "INTERNAL_ATTACHMENT_ADDED",
   "ATTACHMENT_DOWNLOADED",
+  "EMAIL_SENT",
+  "EMAIL_FAILED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
   "PUBLIC",
   "INTERNAL",
+]);
+
+export const communicationChannelEnum = pgEnum("communication_channel", [
+  "EMAIL",
+]);
+
+export const communicationDirectionEnum = pgEnum("communication_direction", [
+  "OUTBOUND",
+]);
+
+export const communicationStatusEnum = pgEnum("communication_status", [
+  "PENDING",
+  "SENT",
+  "FAILED",
 ]);
 
 export const requesters = pgTable(
@@ -158,6 +174,37 @@ export const requestAttachments = pgTable(
   }),
 );
 
+export const requestCommunications = pgTable(
+  "request_communications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => privacyRequests.id, { onDelete: "restrict" }),
+    channel: communicationChannelEnum("channel").notNull(),
+    direction: communicationDirectionEnum("direction").notNull(),
+    recipient: text("recipient").notNull(),
+    subject: text("subject").notNull(),
+    body: text("body").notNull(),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerMessageId: text("provider_message_id"),
+    status: communicationStatusEnum("status").default("PENDING").notNull(),
+    errorMessage: text("error_message"),
+    actorType: actorTypeEnum("actor_type").notNull(),
+    actorId: varchar("actor_id", { length: 128 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (table) => ({
+    requestIdIdx: index("request_communications_request_id_idx").on(
+      table.requestId,
+    ),
+    statusIdx: index("request_communications_status_idx").on(table.status),
+  }),
+);
+
 export const requestEvents = pgTable(
   "request_events",
   {
@@ -194,6 +241,7 @@ export const privacyRequestsRelations = relations(
     events: many(requestEvents),
     comments: many(requestComments),
     attachments: many(requestAttachments),
+    communications: many(requestCommunications),
   }),
 );
 
@@ -212,6 +260,16 @@ export const requestAttachmentsRelations = relations(
   ({ one }) => ({
     privacyRequest: one(privacyRequests, {
       fields: [requestAttachments.requestId],
+      references: [privacyRequests.id],
+    }),
+  }),
+);
+
+export const requestCommunicationsRelations = relations(
+  requestCommunications,
+  ({ one }) => ({
+    privacyRequest: one(privacyRequests, {
+      fields: [requestCommunications.requestId],
       references: [privacyRequests.id],
     }),
   }),

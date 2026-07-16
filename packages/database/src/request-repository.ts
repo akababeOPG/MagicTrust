@@ -4,6 +4,7 @@ import type {
   JsonObject,
   RequestAttachment,
   RequestComment,
+  RequestCommunication,
   RequestEventType,
   RequestStatus,
   RequestType,
@@ -15,6 +16,7 @@ import {
   privacyRequests,
   requestAttachments,
   requestComments,
+  requestCommunications,
   requestEvents,
 } from "./schema";
 
@@ -45,6 +47,7 @@ export type RequestDetails = RequestSummary & {
   events: RequestEventSummary[];
   comments: RequestComment[];
   attachments: RequestAttachment[];
+  communications: RequestCommunication[];
 };
 
 export type RequestListFilters = {
@@ -72,6 +75,20 @@ export type RequestRepository = {
     requestId: string,
     input: RecordAttachmentDownloadedInput,
   ): Promise<void>;
+  createCommunication(
+    id: string,
+    input: CreateRequestCommunicationInput,
+  ): Promise<RequestCommunication | null>;
+  markCommunicationSent(
+    requestId: string,
+    communicationId: string,
+    input: MarkCommunicationSentInput,
+  ): Promise<RequestCommunication | null>;
+  markCommunicationFailed(
+    requestId: string,
+    communicationId: string,
+    input: MarkCommunicationFailedInput,
+  ): Promise<RequestCommunication | null>;
 };
 
 export type UpdateRequestStatusInput = {
@@ -105,6 +122,27 @@ export type RecordAttachmentDownloadedInput = {
   fileName: string;
   storageProvider: string;
   actorId: string;
+};
+
+export type CreateRequestCommunicationInput = {
+  recipient: string;
+  subject: string;
+  body: string;
+  provider: string;
+  actorType: ActorType;
+  actorId: string | null;
+};
+
+export type MarkCommunicationSentInput = {
+  providerMessageId: string;
+  actorType: ActorType;
+  actorId: string | null;
+};
+
+export type MarkCommunicationFailedInput = {
+  errorMessage: string;
+  actorType: ActorType;
+  actorId: string | null;
 };
 
 const uuidPattern =
@@ -183,6 +221,12 @@ export function createRequestRepository(db: Database): RequestRepository {
         .where(eq(requestAttachments.requestId, request.id))
         .orderBy(desc(requestAttachments.createdAt));
 
+      const communications = await db
+        .select(communicationSelection)
+        .from(requestCommunications)
+        .where(eq(requestCommunications.requestId, request.id))
+        .orderBy(desc(requestCommunications.createdAt));
+
       return {
         ...request,
         events: events.map((event) => ({
@@ -191,6 +235,7 @@ export function createRequestRepository(db: Database): RequestRepository {
         })),
         comments,
         attachments,
+        communications,
       };
     },
     async list(filters) {
@@ -417,8 +462,143 @@ export function createRequestRepository(db: Database): RequestRepository {
         },
       });
     },
+    async createCommunication(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            id: privacyRequests.id,
+          })
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [communication] = await tx
+          .insert(requestCommunications)
+          .values({
+            requestId: request.id,
+            channel: "EMAIL",
+            direction: "OUTBOUND",
+            recipient: input.recipient,
+            subject: input.subject,
+            body: input.body,
+            provider: input.provider,
+            status: "PENDING",
+            actorType: input.actorType,
+            actorId: input.actorId,
+          })
+          .returning(communicationSelection);
+
+        return communication;
+      });
+    },
+    async markCommunicationSent(requestId, communicationId, input) {
+      return db.transaction(async (tx) => {
+        const now = new Date();
+        const [communication] = await tx
+          .update(requestCommunications)
+          .set({
+            status: "SENT",
+            providerMessageId: input.providerMessageId,
+            errorMessage: null,
+            sentAt: now,
+          })
+          .where(
+            and(
+              eq(requestCommunications.id, communicationId),
+              eq(requestCommunications.requestId, requestId),
+            ),
+          )
+          .returning(communicationSelection);
+
+        if (!communication) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: requestId,
+          type: "EMAIL_SENT",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            communicationId: communication.id,
+            provider: communication.provider,
+            providerMessageId: input.providerMessageId,
+            status: "SENT",
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return communication;
+      });
+    },
+    async markCommunicationFailed(requestId, communicationId, input) {
+      return db.transaction(async (tx) => {
+        const [communication] = await tx
+          .update(requestCommunications)
+          .set({
+            status: "FAILED",
+            errorMessage: input.errorMessage,
+            sentAt: null,
+          })
+          .where(
+            and(
+              eq(requestCommunications.id, communicationId),
+              eq(requestCommunications.requestId, requestId),
+            ),
+          )
+          .returning(communicationSelection);
+
+        if (!communication) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: requestId,
+          type: "EMAIL_FAILED",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            communicationId: communication.id,
+            provider: communication.provider,
+            status: "FAILED",
+            errorMessage: input.errorMessage,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return communication;
+      });
+    },
   };
 }
+
+const communicationSelection = {
+  id: requestCommunications.id,
+  requestId: requestCommunications.requestId,
+  channel: requestCommunications.channel,
+  direction: requestCommunications.direction,
+  recipient: requestCommunications.recipient,
+  subject: requestCommunications.subject,
+  body: requestCommunications.body,
+  provider: requestCommunications.provider,
+  providerMessageId: requestCommunications.providerMessageId,
+  status: requestCommunications.status,
+  errorMessage: requestCommunications.errorMessage,
+  actorType: requestCommunications.actorType,
+  actorId: requestCommunications.actorId,
+  createdAt: requestCommunications.createdAt,
+  sentAt: requestCommunications.sentAt,
+};
 
 function requestIdentifierCondition(id: string) {
   return uuidPattern.test(id)

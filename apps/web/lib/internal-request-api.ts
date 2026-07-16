@@ -8,10 +8,12 @@ import {
 import type {
   JsonObject,
   RequestCreationStore,
+  RequestCommunication,
   RequestStatus,
   RequestType,
 } from "@magictrust/domain";
 import type { RequestRepository } from "@magictrust/database";
+import type { EmailProvider } from "@magictrust/email";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
 
@@ -22,6 +24,7 @@ export type InternalRequestApiDependencies = {
   requestCreationStore: RequestCreationStore;
   requestRepository: RequestRepository;
   storageProvider: PrivateFileStorageProvider;
+  emailProvider: EmailProvider;
 };
 
 const maxUploadSizeBytes = 10 * 1024 * 1024;
@@ -94,6 +97,13 @@ const addAttachmentSchema = z.object({
   storageProvider: z.string().min(1),
   storageKey: z.string().min(1),
   checksum: z.string().min(1),
+  actor: actorSchema,
+});
+
+const sendEmailCommunicationSchema = z.object({
+  to: z.string().email(),
+  subject: z.string().min(1),
+  body: z.string().min(1),
   actor: actorSchema,
 });
 
@@ -215,6 +225,9 @@ export function createInternalRequestApi(
             actorId: attachment.actorId,
             createdAt: attachment.createdAt.toISOString(),
           })),
+          communications: result.communications.map((communication) =>
+            normalizeCommunicationMetadata(communication),
+          ),
         },
       });
     },
@@ -610,6 +623,118 @@ export function createInternalRequestApi(
         return serverError();
       }
     },
+
+    async sendEmailCommunication(
+      request: Request,
+      id: string,
+    ): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      const parsed = sendEmailCommunicationSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      let existingRequest;
+
+      try {
+        existingRequest =
+          await dependencies.requestRepository.findByIdOrPublicId(id);
+      } catch {
+        return serverError();
+      }
+
+      if (!existingRequest) {
+        return notFound();
+      }
+
+      let communication;
+
+      try {
+        communication =
+          await dependencies.requestRepository.createCommunication(
+            existingRequest.id,
+            {
+              recipient: parsed.data.to,
+              subject: parsed.data.subject,
+              body: parsed.data.body,
+              provider: dependencies.emailProvider.provider,
+              actorType: parsed.data.actor.type,
+              actorId: parsed.data.actor.id ?? null,
+            },
+          );
+      } catch {
+        return serverError();
+      }
+
+      if (!communication) {
+        return notFound();
+      }
+
+      try {
+        const sent = await dependencies.emailProvider.sendEmail({
+          to: parsed.data.to,
+          subject: parsed.data.subject,
+          body: parsed.data.body,
+        });
+        const updated =
+          await dependencies.requestRepository.markCommunicationSent(
+            existingRequest.id,
+            communication.id,
+            {
+              providerMessageId: sent.providerMessageId,
+              actorType: parsed.data.actor.type,
+              actorId: parsed.data.actor.id ?? null,
+            },
+          );
+
+        if (!updated) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            communication: normalizeCommunicationMetadata(updated),
+          },
+          {
+            status: 201,
+          },
+        );
+      } catch {
+        const failed =
+          await dependencies.requestRepository.markCommunicationFailed(
+            existingRequest.id,
+            communication.id,
+            {
+              errorMessage: "Email provider failed to send the message.",
+              actorType: parsed.data.actor.type,
+              actorId: parsed.data.actor.id ?? null,
+            },
+          );
+
+        if (!failed) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            communication: normalizeCommunicationMetadata(failed),
+          },
+          {
+            status: 502,
+          },
+        );
+      }
+    },
   };
 }
 
@@ -705,6 +830,25 @@ function normalizeRequestSummary(
   return {
     ...summary,
     completedAt: request.completedAt?.toISOString() ?? null,
+  };
+}
+
+function normalizeCommunicationMetadata(communication: RequestCommunication) {
+  return {
+    id: communication.id,
+    requestId: communication.requestId,
+    channel: communication.channel,
+    direction: communication.direction,
+    recipient: communication.recipient,
+    subject: communication.subject,
+    provider: communication.provider,
+    providerMessageId: communication.providerMessageId,
+    status: communication.status,
+    errorMessage: communication.errorMessage,
+    actorType: communication.actorType,
+    actorId: communication.actorId,
+    createdAt: communication.createdAt.toISOString(),
+    sentAt: communication.sentAt?.toISOString() ?? null,
   };
 }
 

@@ -57,3 +57,24 @@ curl -X GET "http://localhost:3000/api/v1/requests/req_example/attachments/attac
   -H "x-api-key: $INTERNAL_API_KEY" \
   -o data-export.json
 ```
+
+## `POST /api/v1/requests/:id/communications/email`
+
+Sends a basic outbound email for an existing request. The request id may be the internal id or `publicId`.
+
+```sh
+curl -X POST "http://localhost:3000/api/v1/requests/req_example/communications/email" \
+  -H "content-type: application/json" \
+  -H "x-api-key: $INTERNAL_API_KEY" \
+  -d '{
+    "to": "john@example.com",
+    "subject": "Your MagicTrust request was updated",
+    "body": "Your request has been updated.",
+    "actor": {
+      "type": "API_CLIENT",
+      "id": "privacy-processor"
+    }
+  }'
+```
+
+The response includes communication metadata only. It does not include provider secrets.

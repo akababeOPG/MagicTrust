@@ -34,6 +34,18 @@ export const commentVisibilities = ["PUBLIC", "INTERNAL"] as const;
 
 export type CommentVisibility = (typeof commentVisibilities)[number];
 
+export const communicationChannels = ["EMAIL"] as const;
+
+export type CommunicationChannel = (typeof communicationChannels)[number];
+
+export const communicationDirections = ["OUTBOUND"] as const;
+
+export type CommunicationDirection = (typeof communicationDirections)[number];
+
+export const communicationStatuses = ["PENDING", "SENT", "FAILED"] as const;
+
+export type CommunicationStatus = (typeof communicationStatuses)[number];
+
 export type RequestEventType =
   | "REQUEST_CREATED"
   | "STATUS_CHANGED"
@@ -41,7 +53,9 @@ export type RequestEventType =
   | "INTERNAL_COMMENT_ADDED"
   | "PUBLIC_ATTACHMENT_ADDED"
   | "INTERNAL_ATTACHMENT_ADDED"
-  | "ATTACHMENT_DOWNLOADED";
+  | "ATTACHMENT_DOWNLOADED"
+  | "EMAIL_SENT"
+  | "EMAIL_FAILED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -98,4 +112,22 @@ export type RequestAttachment = {
   actorType: ActorType;
   actorId: string | null;
   createdAt: Date;
+};
+
+export type RequestCommunication = {
+  id: string;
+  requestId: string;
+  channel: CommunicationChannel;
+  direction: CommunicationDirection;
+  recipient: string;
+  subject: string;
+  body: string;
+  provider: string;
+  providerMessageId: string | null;
+  status: CommunicationStatus;
+  errorMessage: string | null;
+  actorType: ActorType;
+  actorId: string | null;
+  createdAt: Date;
+  sentAt: Date | null;
 };

@@ -5,6 +5,7 @@ import type {
   PrivacyRequest,
   RequestAttachment,
   RequestComment,
+  RequestCommunication,
   RequestCreationStore,
   RequestEvent,
   Requester,
@@ -15,6 +16,7 @@ import type {
   RequestRepository,
   RequestSummary,
 } from "@magictrust/database";
+import type { EmailProvider } from "@magictrust/email";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test } from "vitest";
 
@@ -90,6 +92,41 @@ describe("internal request API", () => {
       ),
       created.publicId,
     );
+    const uploadResponse = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          body: validUploadFormData(),
+        },
+      ),
+      created.publicId,
+    );
+    const uploaded = (await uploadResponse.json()).attachment;
+    const downloadResponse = await api.downloadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/${uploaded.id}/download`,
+      ),
+      created.publicId,
+      uploaded.id,
+    );
+    const emailResponse = await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const detailAfterEmailResponse = await api.get(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}`,
+      ),
+      created.publicId,
+    );
+    const detailAfterEmail = await detailAfterEmailResponse.json();
 
     expect(createResponse.status).toBe(201);
     expect(listResponse.status).toBe(200);
@@ -97,6 +134,16 @@ describe("internal request API", () => {
     expect(statusResponse.status).toBe(200);
     expect(commentResponse.status).toBe(201);
     expect(attachmentResponse.status).toBe(201);
+    expect(uploadResponse.status).toBe(201);
+    expect(downloadResponse.status).toBe(200);
+    expect(emailResponse.status).toBe(201);
+    expect(detailAfterEmailResponse.status).toBe(200);
+    expect(detailAfterEmail.request.communications).toEqual([
+      expect.objectContaining({
+        channel: "EMAIL",
+        status: "SENT",
+      }),
+    ]);
   });
 
   test("creates a request via API", async () => {
@@ -769,6 +816,248 @@ describe("internal request API", () => {
       ]),
     );
   });
+
+  test("returns 401 for unauthorized email communication", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.sendEmailCommunication(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_test/communications/email",
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("returns 404 when sending email for a missing request", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.sendEmailCommunication(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_missing/communications/email",
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      "req_missing",
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("sends an email communication", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.communication).toMatchObject({
+      channel: "EMAIL",
+      direction: "OUTBOUND",
+      recipient: "john@example.com",
+      subject: "Your MagicTrust request was updated",
+      provider: "resend",
+      providerMessageId: "email-message-1",
+      status: "SENT",
+      errorMessage: null,
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+    });
+    expect(body.communication.body).toBeUndefined();
+    expect(body.communication.sentAt).toEqual(expect.any(String));
+  });
+
+  test("marks an email communication as failed when provider send fails", async () => {
+    const dependencies = createInMemoryDependencies({
+      emailShouldFail: true,
+    });
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.communication).toMatchObject({
+      status: "FAILED",
+      provider: "resend",
+      providerMessageId: null,
+      errorMessage: "Email provider failed to send the message.",
+    });
+    expect(body.communication.body).toBeUndefined();
+    expect(body.communication.sentAt).toBeNull();
+  });
+
+  test("creates an EMAIL_SENT event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "EMAIL_SENT",
+          actorType: "API_CLIENT",
+          actorId: "privacy-processor",
+          data: expect.objectContaining({
+            communicationId: body.communication.id,
+            provider: "resend",
+            providerMessageId: "email-message-1",
+            status: "SENT",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("creates an EMAIL_FAILED event", async () => {
+    const dependencies = createInMemoryDependencies({
+      emailShouldFail: true,
+    });
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(502);
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "EMAIL_FAILED",
+          actorType: "API_CLIENT",
+          actorId: "privacy-processor",
+          data: expect.objectContaining({
+            communicationId: body.communication.id,
+            provider: "resend",
+            status: "FAILED",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("GET detail includes communication metadata", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(detail.communications).toEqual([
+      expect.objectContaining({
+        channel: "EMAIL",
+        direction: "OUTBOUND",
+        recipient: "john@example.com",
+        subject: "Your MagicTrust request was updated",
+        provider: "resend",
+        status: "SENT",
+      }),
+    ]);
+    expect(detail.communications[0].body).toBeUndefined();
+  });
+
+  test("fetches request detail with communications after email send using the same API key", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const createResponse = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        body: JSON.stringify(validCreateRequestBody()),
+      }),
+    );
+    const created = (await createResponse.json()).request;
+
+    const emailResponse = await api.sendEmailCommunication(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/communications/email`,
+        {
+          method: "POST",
+          body: JSON.stringify(validEmailCommunicationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const detailResponse = await api.get(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}`,
+      ),
+      created.publicId,
+    );
+    const detail = await detailResponse.json();
+
+    expect(createResponse.status).toBe(201);
+    expect(emailResponse.status).toBe(201);
+    expect(detailResponse.status).toBe(200);
+    expect(detail.request.communications).toEqual([
+      expect.objectContaining({
+        channel: "EMAIL",
+        direction: "OUTBOUND",
+        provider: "resend",
+        status: "SENT",
+      }),
+    ]);
+  });
 });
 
 function authenticatedRequest(input: string, init: RequestInit = {}) {
@@ -844,6 +1133,18 @@ function validAttachmentBody(overrides: { visibility?: string } = {}) {
   };
 }
 
+function validEmailCommunicationBody() {
+  return {
+    to: "john@example.com",
+    subject: "Your MagicTrust request was updated",
+    body: "Your request has been updated.",
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+  };
+}
+
 function validUploadFormData(
   overrides: {
     visibility?: string;
@@ -909,7 +1210,11 @@ async function createUploadedAttachment(
   return body.attachment;
 }
 
-function createInMemoryDependencies() {
+function createInMemoryDependencies(
+  options: {
+    emailShouldFail?: boolean;
+  } = {},
+) {
   const state = {
     nextId: 1,
     requesters: [] as Requester[],
@@ -917,6 +1222,7 @@ function createInMemoryDependencies() {
     events: [] as RequestEvent[],
     comments: [] as RequestComment[],
     attachments: [] as RequestAttachment[],
+    communications: [] as RequestCommunication[],
   };
 
   const creationStore: RequestCreationStore = {
@@ -990,6 +1296,9 @@ function createInMemoryDependencies() {
         attachments: state.attachments
           .filter((attachment) => attachment.requestId === request.id)
           .map((attachment) => ({ ...attachment })),
+        communications: state.communications
+          .filter((communication) => communication.requestId === request.id)
+          .map((communication) => ({ ...communication })),
       };
     },
     async list(filters: RequestListFilters): Promise<RequestSummary[]> {
@@ -1152,6 +1461,105 @@ function createInMemoryDependencies() {
         createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
       });
     },
+    async createCommunication(id, input) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const communication = {
+        id: `communication-${state.nextId++}`,
+        requestId: request.id,
+        channel: "EMAIL" as const,
+        direction: "OUTBOUND" as const,
+        recipient: input.recipient,
+        subject: input.subject,
+        body: input.body,
+        provider: input.provider,
+        providerMessageId: null,
+        status: "PENDING" as const,
+        errorMessage: null,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+        sentAt: null,
+      };
+      state.communications.push(communication);
+
+      return communication;
+    },
+    async markCommunicationSent(requestId, communicationId, input) {
+      const communication = state.communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+
+      if (!communication) {
+        return null;
+      }
+
+      const sentAt = new Date(Date.UTC(2026, 0, state.nextId++));
+      communication.status = "SENT";
+      communication.providerMessageId = input.providerMessageId;
+      communication.errorMessage = null;
+      communication.sentAt = sentAt;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "EMAIL_SENT",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          communicationId: communication.id,
+          provider: communication.provider,
+          providerMessageId: input.providerMessageId,
+          status: "SENT",
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return { ...communication };
+    },
+    async markCommunicationFailed(requestId, communicationId, input) {
+      const communication = state.communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+
+      if (!communication) {
+        return null;
+      }
+
+      communication.status = "FAILED";
+      communication.errorMessage = input.errorMessage;
+      communication.providerMessageId = null;
+      communication.sentAt = null;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "EMAIL_FAILED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          communicationId: communication.id,
+          provider: communication.provider,
+          status: "FAILED",
+          errorMessage: input.errorMessage,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return { ...communication };
+    },
   };
 
   const storageProvider: PrivateFileStorageProvider = {
@@ -1174,11 +1582,26 @@ function createInMemoryDependencies() {
     },
   };
 
+  const emailProvider: EmailProvider = {
+    provider: "resend",
+    async sendEmail() {
+      if (options.emailShouldFail) {
+        throw new Error("Email provider failed to send the message.");
+      }
+
+      return {
+        provider: "resend",
+        providerMessageId: "email-message-1",
+      };
+    },
+  };
+
   return {
     apiKey,
     requestCreationStore: creationStore,
     requestRepository,
     storageProvider,
+    emailProvider,
   };
 }
 

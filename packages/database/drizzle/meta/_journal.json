@@ -29,6 +29,13 @@
       "when": 1784232326113,
       "tag": "0003_magical_shriek",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784233691603,
+      "tag": "0004_amazing_karnak",
+      "breakpoints": true
     }
   ]
 }
