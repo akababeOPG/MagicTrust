@@ -15,6 +15,7 @@ import type {
   RequestRepository,
   RequestSummary,
 } from "@magictrust/database";
+import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test } from "vitest";
 
 import { createInternalRequestApi } from "../../lib/internal-request-api";
@@ -503,12 +504,163 @@ describe("internal request API", () => {
     expect(response.status).toBe(404);
     expect(body.error.code).toBe("NOT_FOUND");
   });
+
+  test("returns 401 for unauthorized attachment upload", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.uploadAttachment(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_test/attachments/upload",
+        {
+          method: "POST",
+          body: validUploadFormData(),
+        },
+      ),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("requires a file for attachment upload", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const formData = validUploadFormData();
+    formData.delete("file");
+
+    const response = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test("rejects invalid upload visibility", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const formData = validUploadFormData({ visibility: "PRIVATE" });
+
+    const response = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test("rejects unsupported upload MIME types", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const formData = validUploadFormData({
+      file: new File(["hello"], "image.png", { type: "image/png" }),
+    });
+
+    const response = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test("rejects upload files larger than 10 MB", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const formData = validUploadFormData({
+      file: new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.json", {
+        type: "application/json",
+      }),
+    });
+
+    const response = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test("uploads a file, creates attachment metadata, and creates an event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          body: validUploadFormData(),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(body.attachment).toMatchObject({
+      visibility: "PUBLIC",
+      fileName: "data-export.json",
+      mimeType: "application/json",
+      sizeBytes: 11,
+      storageProvider: "vercel-blob",
+      checksum: "sha256-test-checksum",
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+    });
+    expect(body.attachment.storageKey).toMatch(
+      /^requests\/req_.+\/attachments\/.+-data-export\.json$/,
+    );
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "PUBLIC_ATTACHMENT_ADDED",
+          data: expect.objectContaining({
+            attachmentId: body.attachment.id,
+            storageProvider: "vercel-blob",
+          }),
+        }),
+      ]),
+    );
+  });
 });
 
 function authenticatedRequest(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("x-api-key", apiKey);
-  headers.set("content-type", "application/json");
+
+  if (!(init.body instanceof FormData)) {
+    headers.set("content-type", "application/json");
+  }
 
   return new Request(input, {
     ...init,
@@ -573,6 +725,27 @@ function validAttachmentBody(overrides: { visibility?: string } = {}) {
       id: "privacy-processor",
     },
   };
+}
+
+function validUploadFormData(
+  overrides: {
+    visibility?: string;
+    file?: File;
+  } = {},
+) {
+  const formData = new FormData();
+  formData.set(
+    "file",
+    overrides.file ??
+      new File([JSON.stringify({ ok: true })], "data export.json", {
+        type: "application/json",
+      }),
+  );
+  formData.set("visibility", overrides.visibility ?? "PUBLIC");
+  formData.set("actorType", "API_CLIENT");
+  formData.set("actorId", "privacy-processor");
+
+  return formData;
 }
 
 async function createRequest(api: ReturnType<typeof createInternalRequestApi>) {
@@ -826,10 +999,22 @@ function createInMemoryDependencies() {
     },
   };
 
+  const storageProvider: PrivateFileStorageProvider = {
+    provider: "vercel-blob",
+    async uploadPrivateFile(input) {
+      return {
+        provider: "vercel-blob",
+        storageKey: input.storageKey,
+        checksum: "sha256-test-checksum",
+      };
+    },
+  };
+
   return {
     apiKey,
     requestCreationStore: creationStore,
     requestRepository,
+    storageProvider,
   };
 }
 

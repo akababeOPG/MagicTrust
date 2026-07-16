@@ -4,6 +4,7 @@ import {
   createRequestCreationStore,
   createRequestRepository,
 } from "@magictrust/database";
+import { createVercelBlobPrivateStorageProvider } from "@magictrust/storage";
 
 import type { InternalRequestApiDependencies } from "./internal-request-api";
 
@@ -47,6 +48,7 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
           );
         },
       },
+      storageProvider: createVercelBlobPrivateStorageProvider(),
     };
   }
 
@@ -56,5 +58,6 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
     apiKey: getInternalApiKey(),
     requestCreationStore: createRequestCreationStore(db),
     requestRepository: createRequestRepository(db),
+    storageProvider: createVercelBlobPrivateStorageProvider(),
   };
 }

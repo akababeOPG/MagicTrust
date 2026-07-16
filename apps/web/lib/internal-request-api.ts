@@ -12,6 +12,7 @@ import type {
   RequestType,
 } from "@magictrust/domain";
 import type { RequestRepository } from "@magictrust/database";
+import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
 
 import { authenticateInternalApiRequest } from "./internal-api-auth";
@@ -20,7 +21,17 @@ export type InternalRequestApiDependencies = {
   apiKey: string | null;
   requestCreationStore: RequestCreationStore;
   requestRepository: RequestRepository;
+  storageProvider: PrivateFileStorageProvider;
 };
+
+const maxUploadSizeBytes = 10 * 1024 * 1024;
+const allowedUploadMimeTypes = new Set([
+  "application/json",
+  "text/csv",
+  "application/pdf",
+  "text/plain",
+  "application/zip",
+]);
 
 const jsonSchema: z.ZodType<JsonObject[string]> = z.lazy(() =>
   z.union([
@@ -392,6 +403,124 @@ export function createInternalRequestApi(
         return serverError();
       }
     },
+
+    async uploadAttachment(request: Request, id: string): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      let formData: FormData;
+
+      try {
+        formData = await request.formData();
+      } catch {
+        return validationError();
+      }
+
+      const file = formData.get("file");
+      const visibility = formData.get("visibility");
+      const actorType = formData.get("actorType");
+      const actorId = formData.get("actorId");
+
+      if (!(file instanceof File)) {
+        return validationError("File is required.");
+      }
+
+      if (file.size > maxUploadSizeBytes) {
+        return validationError("File is too large.");
+      }
+
+      if (!allowedUploadMimeTypes.has(file.type)) {
+        return validationError("File MIME type is not supported.");
+      }
+
+      const parsed = z
+        .object({
+          visibility: z.enum(commentVisibilities),
+          actorType: z.enum(actorTypes),
+          actorId: z.string().min(1).nullable(),
+        })
+        .safeParse({
+          visibility,
+          actorType,
+          actorId: typeof actorId === "string" && actorId ? actorId : null,
+        });
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      let existingRequest;
+
+      try {
+        existingRequest =
+          await dependencies.requestRepository.findByIdOrPublicId(id);
+      } catch {
+        return serverError();
+      }
+
+      if (!existingRequest) {
+        return notFound();
+      }
+
+      const safeFileName = sanitizeFileName(file.name);
+      const storageKey = `requests/${existingRequest.publicId}/attachments/${crypto.randomUUID()}-${safeFileName}`;
+
+      try {
+        const upload = await dependencies.storageProvider.uploadPrivateFile({
+          body: file,
+          storageKey,
+          contentType: file.type,
+        });
+        const attachment = await dependencies.requestRepository.addAttachment(
+          existingRequest.id,
+          {
+            visibility: parsed.data.visibility,
+            fileName: safeFileName,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            storageProvider: upload.provider,
+            storageKey: upload.storageKey,
+            checksum: upload.checksum,
+            actorType: parsed.data.actorType,
+            actorId: parsed.data.actorId,
+          },
+        );
+
+        if (!attachment) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            attachment: {
+              id: attachment.id,
+              requestId: attachment.requestId,
+              visibility: attachment.visibility,
+              fileName: attachment.fileName,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              storageProvider: attachment.storageProvider,
+              storageKey: attachment.storageKey,
+              checksum: attachment.checksum,
+              actorType: attachment.actorType,
+              actorId: attachment.actorId,
+              createdAt: attachment.createdAt.toISOString(),
+            },
+          },
+          {
+            status: 201,
+          },
+        );
+      } catch {
+        return serverError();
+      }
+    },
   };
 }
 
@@ -403,12 +532,12 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-function validationError(): Response {
+function validationError(message = "Request payload is invalid."): Response {
   return Response.json(
     {
       error: {
         code: "VALIDATION_ERROR",
-        message: "Request payload is invalid.",
+        message,
       },
     },
     {
@@ -478,4 +607,16 @@ function normalizeRequestSummary(
 
 function emptyToUndefined(value: string | null): string | undefined {
   return value === null || value === "" ? undefined : value;
+}
+
+function sanitizeFileName(fileName: string): string {
+  const sanitized = fileName
+    .normalize("NFKD")
+    .replace(/[^\w. -]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 160);
+
+  return sanitized || "attachment";
 }
