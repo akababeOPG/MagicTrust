@@ -3,6 +3,9 @@ import { drizzle } from "drizzle-orm/neon-http";
 import { sql } from "drizzle-orm";
 import { getRequiredDatabaseUrl } from "@magictrust/config";
 
+export * from "./request-creation-store";
+export * from "./schema";
+
 export type DatabaseHealth =
   | {
       ok: true;

@@ -28,6 +28,10 @@
     "db:generate": {
       "cache": false,
       "outputs": ["drizzle/**"]
+    },
+    "db:migrate": {
+      "cache": false,
+      "outputs": []
     }
   }
 }

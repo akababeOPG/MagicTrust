@@ -103,6 +103,9 @@ importers:
       '@magictrust/config':
         specifier: workspace:*
         version: link:../config
+      '@magictrust/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@neondatabase/serverless':
         specifier: ^0.10.4
         version: 0.10.4

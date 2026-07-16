@@ -41,18 +41,20 @@ docs/api              API notes
 2. Create a local environment file:
 
    ```sh
-   cp .env.example apps/web/.env.local
+   cp .env.example .env.local
    ```
 
-3. Set `DATABASE_URL` to a Neon Postgres connection string.
+3. Set `DATABASE_URL` to the pooled Neon Postgres connection string used by the app.
 
-4. Start the app:
+4. Set `DATABASE_URL_UNPOOLED` to the unpooled Neon Postgres connection string used for migrations.
+
+5. Start the app:
 
    ```sh
    pnpm dev
    ```
 
-5. Check health:
+6. Check health:
 
    ```sh
    curl http://localhost:3000/api/health
@@ -72,10 +74,27 @@ pnpm test:e2e
 
 ## Database
 
-The database package contains the Drizzle setup and a Neon HTTP connection helper. No application tables are defined yet. Drizzle loads local database settings from `apps/web/.env.local` during migration generation.
+The database package contains the Drizzle setup, generated SQL migrations, and a Neon HTTP connection helper.
 
-Generate migrations when schema is added:
+Local database environment variables belong in the root `.env.local` file:
+
+```sh
+DATABASE_URL="postgres://..."
+DATABASE_URL_UNPOOLED="postgres://..."
+```
+
+Use `DATABASE_URL` for application connectivity. Use `DATABASE_URL_UNPOOLED` for migrations so Drizzle applies schema changes through Neon's direct database connection.
+
+Generate a migration after changing the Drizzle schema:
 
 ```sh
 pnpm db:generate
 ```
+
+Apply existing migrations to Neon:
+
+```sh
+pnpm db:migrate
+```
+
+`db:generate` creates SQL files in `packages/database/drizzle`. `db:migrate` applies those existing SQL files to the database configured by `DATABASE_URL_UNPOOLED`.

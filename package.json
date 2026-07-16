@@ -12,7 +12,8 @@
     "format:write": "prettier --write .",
     "test": "turbo test",
     "test:e2e": "turbo test:e2e",
-    "db:generate": "turbo db:generate"
+    "db:generate": "turbo db:generate",
+    "db:migrate": "turbo db:migrate"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.1",
