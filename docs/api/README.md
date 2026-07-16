@@ -135,7 +135,13 @@ When the request exists, MagicTrust sends the requester a secure link:
 http://localhost:3000/requests/req_example/access?token=...
 ```
 
-Access tokens are stored only as hashes, expire after 30 minutes, and can be used once. The secure access page currently shows verified request status and public comments only. It does not expose attachments or download links yet; it is the foundation for future secure consumer file downloads.
+Opening the link exchanges the single-use access token for a temporary secure session, sets an `httpOnly` cookie scoped to the request path, and redirects to:
+
+```text
+http://localhost:3000/requests/req_example/secure
+```
+
+Access tokens and session tokens are stored only as hashes. Tokens are single-use, sessions expire after 30 minutes, and the secure page currently shows verified request status and public comments only. It does not expose attachments or download links yet; it is the foundation for future secure consumer file downloads.
 
 ## `POST /api/v1/requests/:id/attachments/upload`
 

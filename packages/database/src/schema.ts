@@ -50,6 +50,8 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "EMAIL_FAILED",
   "CONSUMER_ACCESS_LINK_SENT",
   "CONSUMER_ACCESS_TOKEN_USED",
+  "CONSUMER_ACCESS_SESSION_CREATED",
+  "CONSUMER_ACCESS_SESSION_USED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
@@ -234,6 +236,31 @@ export const requestAccessTokens = pgTable(
   }),
 );
 
+export const requestAccessSessions = pgTable(
+  "request_access_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => privacyRequests.id, { onDelete: "restrict" }),
+    sessionHash: text("session_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  },
+  (table) => ({
+    requestIdIdx: index("request_access_sessions_request_id_idx").on(
+      table.requestId,
+    ),
+    sessionHashIdx: uniqueIndex("request_access_sessions_session_hash_idx").on(
+      table.sessionHash,
+    ),
+  }),
+);
+
 export const requestEvents = pgTable(
   "request_events",
   {
@@ -272,6 +299,7 @@ export const privacyRequestsRelations = relations(
     attachments: many(requestAttachments),
     communications: many(requestCommunications),
     accessTokens: many(requestAccessTokens),
+    accessSessions: many(requestAccessSessions),
   }),
 );
 
@@ -310,6 +338,16 @@ export const requestAccessTokensRelations = relations(
   ({ one }) => ({
     privacyRequest: one(privacyRequests, {
       fields: [requestAccessTokens.requestId],
+      references: [privacyRequests.id],
+    }),
+  }),
+);
+
+export const requestAccessSessionsRelations = relations(
+  requestAccessSessions,
+  ({ one }) => ({
+    privacyRequest: one(privacyRequests, {
+      fields: [requestAccessSessions.requestId],
       references: [privacyRequests.id],
     }),
   }),

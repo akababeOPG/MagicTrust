@@ -116,6 +116,7 @@ POST /api/public/requests/req_example/access-link
 ```
 
 MagicTrust sends the link to the encrypted requester email on file. Access tokens are stored only as hashes, expire after 30 minutes, and are the foundation for future secure consumer downloads.
+Opening the link exchanges the single-use token for a temporary `httpOnly` secure session cookie and redirects to `/requests/req_example/secure`. Sessions also expire after 30 minutes.
 
 ## Verification
 

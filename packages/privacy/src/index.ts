@@ -60,6 +60,12 @@ export function hashAccessToken(value: string): string {
     .digest("hex");
 }
 
+export function hashAccessSession(value: string): string {
+  return createHmac("sha256", deriveKey("access-session"))
+    .update(value)
+    .digest("hex");
+}
+
 export function normalizeEmailForHash(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -74,7 +80,9 @@ function normalizePiiForHash(value: string): string {
     : normalizePhoneForHash(value);
 }
 
-function deriveKey(purpose: "encrypt" | "hash" | "access-token"): Buffer {
+function deriveKey(
+  purpose: "encrypt" | "hash" | "access-token" | "access-session",
+): Buffer {
   const encryptionKey = getEncryptionKey();
 
   if (!encryptionKey) {

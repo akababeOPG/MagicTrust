@@ -58,6 +58,9 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         consumeConsumerAccessToken() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        validateConsumerAccessSession() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
       },
       emailProvider: createResendEmailProvider(),
       appBaseUrl: getAppBaseUrl(),

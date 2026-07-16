@@ -3,6 +3,7 @@ import type {
   CommentVisibility,
   JsonObject,
   RequestAttachment,
+  RequestAccessSession,
   RequestAccessToken,
   RequestComment,
   RequestCommunication,
@@ -15,6 +16,7 @@ import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { createDatabase } from "./index";
 import {
   privacyRequests,
+  requestAccessSessions,
   requestAccessTokens,
   requestAttachments,
   requestComments,
@@ -114,6 +116,10 @@ export type RequestRepository = {
   consumeConsumerAccessToken(
     publicId: string,
     input: ConsumeConsumerAccessTokenInput,
+  ): Promise<ConsumerAccessSessionPreparation | null>;
+  validateConsumerAccessSession(
+    publicId: string,
+    input: ValidateConsumerAccessSessionInput,
   ): Promise<ConsumerSecureRequestDetails | null>;
 };
 
@@ -195,6 +201,19 @@ export type RecordConsumerAccessLinkSentInput = {
 
 export type ConsumeConsumerAccessTokenInput = {
   tokenHash: string;
+  sessionHash: string;
+  sessionExpiresAt: Date;
+  now: Date;
+};
+
+export type ConsumerAccessSessionPreparation = {
+  request: RequestSummary;
+  accessToken: RequestAccessToken;
+  accessSession: RequestAccessSession;
+};
+
+export type ValidateConsumerAccessSessionInput = {
+  sessionHash: string;
   now: Date;
 };
 
@@ -751,6 +770,75 @@ export function createRequestRepository(db: Database): RequestRepository {
           },
         });
 
+        const [accessSession] = await tx
+          .insert(requestAccessSessions)
+          .values({
+            requestId: request.id,
+            sessionHash: input.sessionHash,
+            expiresAt: input.sessionExpiresAt,
+            lastSeenAt: input.now,
+          })
+          .returning(accessSessionSelection);
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type: "CONSUMER_ACCESS_SESSION_CREATED",
+          actorType: "CONSUMER",
+          actorId: null,
+          data: {
+            accessTokenId: accessToken.id,
+            accessSessionId: accessSession.id,
+          },
+        });
+
+        return {
+          request,
+          accessToken,
+          accessSession,
+        };
+      });
+    },
+    async validateConsumerAccessSession(publicId, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(eq(privacyRequests.publicId, publicId))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [accessSession] = await tx
+          .update(requestAccessSessions)
+          .set({
+            lastSeenAt: input.now,
+          })
+          .where(
+            and(
+              eq(requestAccessSessions.requestId, request.id),
+              eq(requestAccessSessions.sessionHash, input.sessionHash),
+              isNull(requestAccessSessions.revokedAt),
+              gt(requestAccessSessions.expiresAt, input.now),
+            ),
+          )
+          .returning(accessSessionSelection);
+
+        if (!accessSession) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type: "CONSUMER_ACCESS_SESSION_USED",
+          actorType: "CONSUMER",
+          actorId: null,
+          data: {
+            accessSessionId: accessSession.id,
+          },
+        });
+
         const comments = await tx
           .select({
             id: requestComments.id,
@@ -792,6 +880,16 @@ const accessTokenSelection = {
   expiresAt: requestAccessTokens.expiresAt,
   usedAt: requestAccessTokens.usedAt,
   createdAt: requestAccessTokens.createdAt,
+};
+
+const accessSessionSelection = {
+  id: requestAccessSessions.id,
+  requestId: requestAccessSessions.requestId,
+  sessionHash: requestAccessSessions.sessionHash,
+  expiresAt: requestAccessSessions.expiresAt,
+  revokedAt: requestAccessSessions.revokedAt,
+  createdAt: requestAccessSessions.createdAt,
+  lastSeenAt: requestAccessSessions.lastSeenAt,
 };
 
 const communicationSelection = {

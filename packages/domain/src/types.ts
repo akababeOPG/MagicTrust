@@ -57,7 +57,9 @@ export type RequestEventType =
   | "EMAIL_SENT"
   | "EMAIL_FAILED"
   | "CONSUMER_ACCESS_LINK_SENT"
-  | "CONSUMER_ACCESS_TOKEN_USED";
+  | "CONSUMER_ACCESS_TOKEN_USED"
+  | "CONSUMER_ACCESS_SESSION_CREATED"
+  | "CONSUMER_ACCESS_SESSION_USED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -141,4 +143,14 @@ export type RequestAccessToken = {
   expiresAt: Date;
   usedAt: Date | null;
   createdAt: Date;
+};
+
+export type RequestAccessSession = {
+  id: string;
+  requestId: string;
+  sessionHash: string;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  createdAt: Date;
+  lastSeenAt: Date | null;
 };

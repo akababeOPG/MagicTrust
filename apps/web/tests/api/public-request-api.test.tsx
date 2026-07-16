@@ -3,6 +3,7 @@ import type {
   CreateRequestEventRecord,
   CreateRequesterRecord,
   PrivacyRequest,
+  RequestAccessSession,
   RequestAccessToken,
   RequestAttachment,
   RequestComment,
@@ -18,7 +19,7 @@ import type {
   RequestSummary,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { hashAccessToken } from "@magictrust/privacy";
+import { hashAccessSession, hashAccessToken } from "@magictrust/privacy";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -29,6 +30,7 @@ import { PrivacyRequestConfirmation } from "../../lib/privacy-request-confirmati
 import { submitPrivacyRequestForm } from "../../lib/privacy-request-form-submit";
 import {
   createPublicRequestApi,
+  exchangeConsumerAccessTokenForSession,
   getPublicSecureAccessData,
 } from "../../lib/public-request-api";
 import { PublicSecureAccessView } from "../../lib/public-secure-access-view";
@@ -382,111 +384,34 @@ describe("public request API", () => {
     );
   });
 
-  test("valid token returns secure access data and renders the secure page", async () => {
+  test("valid access token creates session for secure page", async () => {
     const dependencies = createInMemoryDependencies();
     const api = createPublicRequestApi(dependencies);
     const createResponse = await api.create(publicRequest());
     const createBody = await createResponse.json();
-    const request = dependencies.state.requests[0];
-    dependencies.state.comments.push({
-      id: "comment-public",
-      requestId: request.id,
-      visibility: "PUBLIC",
-      body: "Your request is being processed.",
-      actorType: "API_CLIENT",
-      actorId: "privacy-processor",
-      createdAt: new Date(Date.UTC(2026, 0, 2)),
+    await api.requestAccessLink(createBody.request.publicId);
+    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
+
+    const session = await exchangeConsumerAccessTokenForSession(
+      dependencies,
+      createBody.request.publicId,
+      token,
+    );
+
+    expect(session).toEqual({
+      sessionToken: expect.any(String),
+      expiresAt: new Date(Date.UTC(2026, 0, 1, 0, 30)),
     });
-    await api.requestAccessLink(createBody.request.publicId);
-
-    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
-    const access = await getPublicSecureAccessData(
-      dependencies,
-      createBody.request.publicId,
-      token,
-    );
-    const html = renderToStaticMarkup(
-      createElement(PublicSecureAccessView, {
-        publicId: createBody.request.publicId,
-        access,
-      }),
-    );
-
-    expect(access).toMatchObject({
-      publicId: createBody.request.publicId,
-      secureAccessVerified: true,
-      publicComments: [
-        {
-          body: "Your request is being processed.",
-          createdAt: "2026-01-02T00:00:00.000Z",
-        },
-      ],
-    });
-    expect(html).toContain("Secure access verified");
-  });
-
-  test("expired token is rejected", async () => {
-    const dependencies = createInMemoryDependencies();
-    const api = createPublicRequestApi(dependencies);
-    const createResponse = await api.create(publicRequest());
-    const createBody = await createResponse.json();
-    await api.requestAccessLink(createBody.request.publicId);
-    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
-    dependencies.state.accessTokens[0]!.expiresAt = new Date(
-      Date.UTC(2025, 0, 1),
-    );
-
-    await expect(
-      getPublicSecureAccessData(
-        dependencies,
-        createBody.request.publicId,
-        token,
-      ),
-    ).resolves.toBeNull();
-  });
-
-  test("used token is rejected", async () => {
-    const dependencies = createInMemoryDependencies();
-    const api = createPublicRequestApi(dependencies);
-    const createResponse = await api.create(publicRequest());
-    const createBody = await createResponse.json();
-    await api.requestAccessLink(createBody.request.publicId);
-    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
-
-    await getPublicSecureAccessData(
-      dependencies,
-      createBody.request.publicId,
-      token,
-    );
-
-    await expect(
-      getPublicSecureAccessData(
-        dependencies,
-        createBody.request.publicId,
-        token,
-      ),
-    ).resolves.toBeNull();
-  });
-
-  test("token use creates a CONSUMER_ACCESS_TOKEN_USED event", async () => {
-    const dependencies = createInMemoryDependencies();
-    const api = createPublicRequestApi(dependencies);
-    const createResponse = await api.create(publicRequest());
-    const createBody = await createResponse.json();
-    await api.requestAccessLink(createBody.request.publicId);
-    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
-
-    await getPublicSecureAccessData(
-      dependencies,
-      createBody.request.publicId,
-      token,
-    );
-
+    expect(dependencies.state.accessSessions).toHaveLength(1);
     expect(dependencies.state.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          privacyRequestId: dependencies.state.requests[0].id,
           type: "CONSUMER_ACCESS_TOKEN_USED",
+          actorType: "CONSUMER",
+          actorId: null,
+        }),
+        expect.objectContaining({
+          type: "CONSUMER_ACCESS_SESSION_CREATED",
           actorType: "CONSUMER",
           actorId: null,
         }),
@@ -494,21 +419,139 @@ describe("public request API", () => {
     );
   });
 
-  test("secure page does not expose internal or sensitive fields", async () => {
+  test("access token is single-use", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+    const createResponse = await api.create(publicRequest());
+    const createBody = await createResponse.json();
+    await api.requestAccessLink(createBody.request.publicId);
+    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
+
+    await exchangeConsumerAccessTokenForSession(
+      dependencies,
+      createBody.request.publicId,
+      token,
+    );
+
+    await expect(
+      exchangeConsumerAccessTokenForSession(
+        dependencies,
+        createBody.request.publicId,
+        token,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  test("session token is stored hashed, not raw", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+    const createResponse = await api.create(publicRequest());
+    const createBody = await createResponse.json();
+    await api.requestAccessLink(createBody.request.publicId);
+    const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
+
+    const session = await exchangeConsumerAccessTokenForSession(
+      dependencies,
+      createBody.request.publicId,
+      token,
+    );
+
+    expect(dependencies.state.accessSessions[0]?.sessionHash).not.toBe(
+      session?.sessionToken,
+    );
+    expect(dependencies.state.accessSessions[0]?.sessionHash).toBe(
+      hashAccessSession(session?.sessionToken ?? ""),
+    );
+  });
+
+  test("secure page requires valid session", async () => {
+    const dependencies = createInMemoryDependencies();
+
+    await expect(
+      getPublicSecureAccessData(dependencies, "req_missing", "bad-session"),
+    ).resolves.toBeNull();
+  });
+
+  test("expired session is rejected", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    dependencies.state.accessSessions[0]!.expiresAt = new Date(
+      Date.UTC(2025, 0, 1),
+    );
+
+    await expect(
+      getPublicSecureAccessData(
+        dependencies,
+        createBody.request.publicId,
+        session.sessionToken,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  test("revoked session is rejected", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+    dependencies.state.accessSessions[0]!.revokedAt = new Date(
+      Date.UTC(2026, 0, 1),
+    );
+
+    await expect(
+      getPublicSecureAccessData(
+        dependencies,
+        createBody.request.publicId,
+        session.sessionToken,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  test("secure page creates CONSUMER_ACCESS_SESSION_USED event", async () => {
+    const { createBody, dependencies, session } =
+      await createSecureSessionFixture();
+
+    await getPublicSecureAccessData(
+      dependencies,
+      createBody.request.publicId,
+      session.sessionToken,
+    );
+
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          privacyRequestId: dependencies.state.requests[0].id,
+          type: "CONSUMER_ACCESS_SESSION_USED",
+          actorType: "CONSUMER",
+          actorId: null,
+        }),
+      ]),
+    );
+  });
+
+  test("secure page shows verified data for a valid session", async () => {
     const dependencies = createInMemoryDependencies();
     const api = createPublicRequestApi(dependencies);
     const createResponse = await api.create(publicRequest());
     const createBody = await createResponse.json();
     const request = dependencies.state.requests[0];
-    dependencies.state.comments.push({
-      id: "comment-internal",
-      requestId: request.id,
-      visibility: "INTERNAL",
-      body: "Internal reviewer note.",
-      actorType: "INTERNAL_USER",
-      actorId: "reviewer-1",
-      createdAt: new Date(Date.UTC(2026, 0, 2)),
-    });
+    dependencies.state.comments.push(
+      {
+        id: "comment-public",
+        requestId: request.id,
+        visibility: "PUBLIC",
+        body: "Your request is being processed.",
+        actorType: "API_CLIENT",
+        actorId: "privacy-processor",
+        createdAt: new Date(Date.UTC(2026, 0, 2)),
+      },
+      {
+        id: "comment-internal",
+        requestId: request.id,
+        visibility: "INTERNAL",
+        body: "Internal reviewer note.",
+        actorType: "INTERNAL_USER",
+        actorId: "reviewer-1",
+        createdAt: new Date(Date.UTC(2026, 0, 2)),
+      },
+    );
     dependencies.state.attachments.push({
       id: "attachment-1",
       requestId: request.id,
@@ -525,11 +568,16 @@ describe("public request API", () => {
     });
     await api.requestAccessLink(createBody.request.publicId);
     const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
+    const session = await exchangeConsumerAccessTokenForSession(
+      dependencies,
+      createBody.request.publicId,
+      token,
+    );
 
     const access = await getPublicSecureAccessData(
       dependencies,
       createBody.request.publicId,
-      token,
+      session?.sessionToken,
     );
     const html = renderToStaticMarkup(
       createElement(PublicSecureAccessView, {
@@ -539,6 +587,17 @@ describe("public request API", () => {
     );
     const serialized = JSON.stringify(access) + html;
 
+    expect(access).toMatchObject({
+      publicId: createBody.request.publicId,
+      secureAccessVerified: true,
+      publicComments: [
+        {
+          body: "Your request is being processed.",
+          createdAt: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(html).toContain("Secure access verified");
     expect(serialized).not.toContain(request.id);
     expect(serialized).not.toContain("requesterId");
     expect(serialized).not.toContain("john@example.com");
@@ -682,6 +741,30 @@ describe("public request tracking pages", () => {
   });
 });
 
+async function createSecureSessionFixture() {
+  const dependencies = createInMemoryDependencies();
+  const api = createPublicRequestApi(dependencies);
+  const createResponse = await api.create(publicRequest());
+  const createBody = await createResponse.json();
+  await api.requestAccessLink(createBody.request.publicId);
+  const token = extractTokenFromEmail(dependencies.state.sentEmails.at(-1));
+  const session = await exchangeConsumerAccessTokenForSession(
+    dependencies,
+    createBody.request.publicId,
+    token,
+  );
+
+  if (!session) {
+    throw new Error("Expected secure access session.");
+  }
+
+  return {
+    createBody,
+    dependencies,
+    session,
+  };
+}
+
 function validFormData() {
   const formData = new FormData();
   formData.set("type", "DATA_ACCESS");
@@ -742,6 +825,7 @@ type InMemoryState = {
   attachments: RequestAttachment[];
   communications: RequestCommunication[];
   accessTokens: RequestAccessToken[];
+  accessSessions: RequestAccessSession[];
   sentEmails: Array<{ to: string; subject: string; body: string }>;
 };
 
@@ -759,6 +843,7 @@ function createInMemoryDependencies(
     attachments: [],
     communications: [],
     accessTokens: [],
+    accessSessions: [],
     sentEmails: [],
   };
 
@@ -1051,6 +1136,16 @@ function createInMemoryDependencies(
       }
 
       accessToken.usedAt = input.now;
+      const accessSession: RequestAccessSession = {
+        id: `access-session-${state.nextId++}`,
+        requestId: request.id,
+        sessionHash: input.sessionHash,
+        expiresAt: input.sessionExpiresAt,
+        revokedAt: null,
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+        lastSeenAt: input.now,
+      };
+      state.accessSessions.push(accessSession);
       state.events.push({
         id: `event-${state.nextId++}`,
         privacyRequestId: request.id,
@@ -1059,6 +1154,56 @@ function createInMemoryDependencies(
         actorId: null,
         data: {
           accessTokenId: accessToken.id,
+        },
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+      });
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type: "CONSUMER_ACCESS_SESSION_CREATED",
+        actorType: "CONSUMER",
+        actorId: null,
+        data: {
+          accessTokenId: accessToken.id,
+          accessSessionId: accessSession.id,
+        },
+        createdAt: new Date(Date.UTC(2026, 0, 1)),
+      });
+
+      return {
+        request: summaryFromRequest(request),
+        accessToken,
+        accessSession,
+      };
+    },
+    async validateConsumerAccessSession(publicId, input) {
+      const request = state.requests.find((item) => item.publicId === publicId);
+
+      if (!request) {
+        return null;
+      }
+
+      const accessSession = state.accessSessions.find(
+        (item) =>
+          item.requestId === request.id &&
+          item.sessionHash === input.sessionHash &&
+          !item.revokedAt &&
+          item.expiresAt > input.now,
+      );
+
+      if (!accessSession) {
+        return null;
+      }
+
+      accessSession.lastSeenAt = input.now;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type: "CONSUMER_ACCESS_SESSION_USED",
+        actorType: "CONSUMER",
+        actorId: null,
+        data: {
+          accessSessionId: accessSession.id,
         },
         createdAt: new Date(Date.UTC(2026, 0, 1)),
       });

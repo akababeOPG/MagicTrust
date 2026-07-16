@@ -9,8 +9,16 @@ import type {
 } from "@magictrust/domain";
 import type { RequestRepository } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { decryptPii, hashAccessToken } from "@magictrust/privacy";
+import {
+  decryptPii,
+  hashAccessSession,
+  hashAccessToken,
+} from "@magictrust/privacy";
 import { z } from "zod";
+
+export const consumerAccessSessionCookieName =
+  "magictrust_consumer_access_session";
+export const consumerAccessSessionTtlSeconds = 30 * 60;
 
 export type PublicRequestApiDependencies = {
   requestCreationStore: RequestCreationStore;
@@ -182,17 +190,20 @@ export async function getPublicRequestTrackingData(
 export async function getPublicSecureAccessData(
   dependencies: Pick<PublicRequestApiDependencies, "requestRepository" | "now">,
   publicId: string,
-  token: string | null | undefined,
+  sessionToken: string | null | undefined,
 ): Promise<PublicSecureAccessData | null> {
-  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId) || !token) {
+  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId) || !sessionToken) {
     return null;
   }
 
   const result =
-    await dependencies.requestRepository.consumeConsumerAccessToken(publicId, {
-      tokenHash: hashAccessToken(token),
-      now: dependencies.now(),
-    });
+    await dependencies.requestRepository.validateConsumerAccessSession(
+      publicId,
+      {
+        sessionHash: hashAccessSession(sessionToken),
+        now: dependencies.now(),
+      },
+    );
 
   if (!result || result.publicId !== publicId) {
     return null;
@@ -211,6 +222,38 @@ export async function getPublicSecureAccessData(
         createdAt: comment.createdAt.toISOString(),
       })),
     secureAccessVerified: true,
+  };
+}
+
+export async function exchangeConsumerAccessTokenForSession(
+  dependencies: Pick<PublicRequestApiDependencies, "requestRepository" | "now">,
+  publicId: string,
+  token: string | null | undefined,
+): Promise<{ sessionToken: string; expiresAt: Date } | null> {
+  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId) || !token) {
+    return null;
+  }
+
+  const sessionToken = generateSecureToken();
+  const now = dependencies.now();
+  const expiresAt = new Date(
+    now.getTime() + consumerAccessSessionTtlSeconds * 1000,
+  );
+  const result =
+    await dependencies.requestRepository.consumeConsumerAccessToken(publicId, {
+      tokenHash: hashAccessToken(token),
+      sessionHash: hashAccessSession(sessionToken),
+      sessionExpiresAt: expiresAt,
+      now,
+    });
+
+  if (!result) {
+    return null;
+  }
+
+  return {
+    sessionToken,
+    expiresAt,
   };
 }
 
@@ -233,7 +276,7 @@ async function sendConsumerAccessLink(
     }
 
     const recipient = decryptPii(target.requesterEmailEncrypted);
-    const token = generateAccessToken();
+    const token = generateSecureToken();
     const accessUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${target.publicId}/access?token=${encodeURIComponent(token)}`;
     const subject = `MagicTrust secure access link: ${target.publicId}`;
     const body = [
@@ -303,7 +346,7 @@ async function sendConsumerAccessLink(
   }
 }
 
-function generateAccessToken(): string {
+function generateSecureToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
