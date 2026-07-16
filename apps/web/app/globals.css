@@ -129,8 +129,77 @@ button:disabled {
   margin: 0;
 }
 
+.confirmation a {
+  color: #172033;
+  font-weight: 700;
+}
+
 .form-error {
   color: #b91c1c;
+}
+
+.tracking-page {
+  place-content: start center;
+  background: #f8fafc;
+}
+
+.tracking-shell {
+  width: min(100%, 720px);
+  display: grid;
+  gap: 1.5rem;
+}
+
+.tracking-summary {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.tracking-summary div {
+  border-bottom: 1px solid #e2e8f0;
+  display: grid;
+  gap: 0.25rem;
+  padding-bottom: 0.75rem;
+}
+
+.tracking-summary dt {
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.tracking-summary dd {
+  margin: 0;
+}
+
+.public-comments {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.public-comments h2 {
+  margin: 0;
+}
+
+.public-comments ol {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.public-comments li {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.9rem;
+}
+
+.public-comments time {
+  color: #64748b;
+  font-size: 0.9rem;
 }
 
 @media (max-width: 640px) {

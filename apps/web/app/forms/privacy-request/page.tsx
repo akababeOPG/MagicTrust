@@ -3,6 +3,7 @@
 import React from "react";
 import { FormEvent, useState } from "react";
 
+import { PrivacyRequestConfirmation } from "../../../lib/privacy-request-confirmation";
 import { submitPrivacyRequestForm } from "../../../lib/privacy-request-form-submit";
 
 const requestTypes = [
@@ -64,14 +65,10 @@ export default function PrivacyRequestFormPage() {
         </div>
 
         {submission.status === "success" ? (
-          <div className="confirmation" role="status">
-            <h2>Request submitted</h2>
-            <p>
-              Reference number: <strong>{submission.publicId}</strong>
-            </p>
-            <p>Current status: {submission.requestStatus}</p>
-            <p>Save this reference number for your records.</p>
-          </div>
+          <PrivacyRequestConfirmation
+            publicId={submission.publicId}
+            requestStatus={submission.requestStatus}
+          />
         ) : null}
 
         <form className="privacy-form" onSubmit={handleSubmit}>

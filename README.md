@@ -58,6 +58,7 @@ docs/api              API notes
    BLOB_READ_WRITE_TOKEN    Vercel Blob token for private attachment upload/download
    RESEND_API_KEY           Resend API key for internal email communications
    EMAIL_FROM               Sender address for internal email communications
+   APP_BASE_URL             Base URL used for public tracking links in emails
    NEXT_PUBLIC_APP_NAME     Public app name, usually MagicTrust
    ```
 
@@ -97,7 +98,16 @@ The hosted public privacy request form runs at:
 http://localhost:3000/forms/privacy-request
 ```
 
-The form submits to `POST /api/public/requests`. This public endpoint does not require `x-api-key`, sends a plain-text receipt email, and only returns the public request reference.
+The form submits to `POST /api/public/requests`. This public endpoint does not require `x-api-key`, sends a plain-text receipt email with a tracking link, and only returns the public request reference.
+
+Consumers can track a submitted request by reference number at:
+
+```text
+http://localhost:3000/requests
+http://localhost:3000/requests/req_example
+```
+
+Public tracking only exposes public-safe status data and public comments.
 
 ## Verification
 

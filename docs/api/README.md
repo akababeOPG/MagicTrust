@@ -43,10 +43,16 @@ http://localhost:3000/forms/privacy-request
 
 It submits to `POST /api/public/requests` and does not require `x-api-key`.
 
+Consumers can track a submitted request at:
+
+```text
+http://localhost:3000/requests/req_example
+```
+
 ## `POST /api/public/requests`
 
 Creates a public privacy request from hosted form intake.
-Successful public intake sends a plain-text receipt email to the requester with the public reference number. The public response does not include communication metadata.
+Successful public intake sends a plain-text receipt email to the requester with the public reference number and tracking link. The public response does not include communication metadata.
 
 ```sh
 curl -X POST "http://localhost:3000/api/public/requests" \
@@ -75,6 +81,36 @@ Example response:
   }
 }
 ```
+
+## `GET /api/public/requests/:publicId`
+
+Returns public-safe tracking data for a request. This endpoint does not require `x-api-key` and only looks up requests by `publicId`.
+
+```sh
+curl -X GET "http://localhost:3000/api/public/requests/req_example"
+```
+
+Example response:
+
+```json
+{
+  "request": {
+    "publicId": "req_example",
+    "type": "DATA_ACCESS",
+    "status": "PROCESSING",
+    "createdAt": "2026-07-16T00:00:00.000Z",
+    "completedAt": null,
+    "publicComments": [
+      {
+        "body": "Your request is being processed.",
+        "createdAt": "2026-07-16T01:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+The public tracking API and `/requests/:publicId` page expose only public-safe request status and public comments. They do not expose requester details, internal ids, internal comments, attachments, communications, storage keys, or event timelines.
 
 ## `POST /api/v1/requests/:id/attachments/upload`
 

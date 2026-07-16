@@ -1,4 +1,4 @@
-import { getRequiredDatabaseUrl } from "@magictrust/config";
+import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
 import {
   createDatabase,
   createRequestCreationStore,
@@ -48,6 +48,7 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         },
       },
       emailProvider: createResendEmailProvider(),
+      appBaseUrl: getAppBaseUrl(),
     };
   }
 
@@ -57,5 +58,6 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
     requestCreationStore: createRequestCreationStore(db),
     requestRepository: createRequestRepository(db),
     emailProvider: createResendEmailProvider(),
+    appBaseUrl: getAppBaseUrl(),
   };
 }

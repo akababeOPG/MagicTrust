@@ -13,6 +13,7 @@ export type PublicRequestApiDependencies = {
   requestCreationStore: RequestCreationStore;
   requestRepository: RequestRepository;
   emailProvider: EmailProvider;
+  appBaseUrl: string;
 };
 
 const publicRequestSchema = z.object({
@@ -85,6 +86,7 @@ export function createPublicRequestApi(
           publicId: result.request.publicId,
           type: result.request.type,
           status: result.request.status,
+          appBaseUrl: dependencies.appBaseUrl,
         });
 
         return Response.json(
@@ -99,6 +101,67 @@ export function createPublicRequestApi(
         return serverError();
       }
     },
+
+    async get(publicId: string): Promise<Response> {
+      try {
+        const tracking = await getPublicRequestTrackingData(
+          dependencies,
+          publicId,
+        );
+
+        if (!tracking) {
+          return notFound();
+        }
+
+        return Response.json({
+          request: tracking,
+        });
+      } catch {
+        return serverError();
+      }
+    },
+  };
+}
+
+export type PublicRequestTrackingData = {
+  publicId: string;
+  type: RequestType;
+  status: RequestStatus;
+  createdAt: string;
+  completedAt: string | null;
+  publicComments: Array<{
+    body: string;
+    createdAt: string;
+  }>;
+};
+
+export async function getPublicRequestTrackingData(
+  dependencies: Pick<PublicRequestApiDependencies, "requestRepository">,
+  publicId: string,
+): Promise<PublicRequestTrackingData | null> {
+  if (!/^req_[A-Za-z0-9_-]+$/.test(publicId)) {
+    return null;
+  }
+
+  const result =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!result || result.publicId !== publicId) {
+    return null;
+  }
+
+  return {
+    publicId: result.publicId,
+    type: result.type,
+    status: result.status,
+    createdAt: result.createdAt.toISOString(),
+    completedAt: result.completedAt?.toISOString() ?? null,
+    publicComments: result.comments
+      .filter((comment) => comment.visibility === "PUBLIC")
+      .map((comment) => ({
+        body: comment.body,
+        createdAt: comment.createdAt.toISOString(),
+      })),
   };
 }
 
@@ -110,14 +173,17 @@ async function sendReceiptEmail(input: {
   publicId: string;
   type: RequestType;
   status: RequestStatus;
+  appBaseUrl: string;
 }): Promise<void> {
   const subject = `MagicTrust request received: ${input.publicId}`;
+  const trackingUrl = `${input.appBaseUrl.replace(/\/$/, "")}/requests/${input.publicId}`;
   const body = [
     "We received your request.",
     "",
     `Reference number: ${input.publicId}`,
     `Request type: ${input.type}`,
     `Status: ${input.status}`,
+    `Track your request: ${trackingUrl}`,
     "",
     "Please save this reference number for your records.",
   ].join("\n");
@@ -189,6 +255,20 @@ function validationError(message = "Request payload is invalid."): Response {
     },
     {
       status: 400,
+    },
+  );
+}
+
+function notFound(): Response {
+  return Response.json(
+    {
+      error: {
+        code: "NOT_FOUND",
+        message: "Request not found.",
+      },
+    },
+    {
+      status: 404,
     },
   );
 }

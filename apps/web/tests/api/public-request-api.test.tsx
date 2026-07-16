@@ -22,8 +22,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import PrivacyRequestFormPage from "../../app/forms/privacy-request/page";
+import PublicRequestLookupPage from "../../app/requests/page";
+import { PrivacyRequestConfirmation } from "../../lib/privacy-request-confirmation";
 import { submitPrivacyRequestForm } from "../../lib/privacy-request-form-submit";
 import { createPublicRequestApi } from "../../lib/public-request-api";
+import { PublicRequestTrackingView } from "../../lib/public-request-tracking-view";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-public-intake";
 
@@ -118,6 +121,9 @@ describe("public request API", () => {
         ),
       }),
     ]);
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      `https://magictrust.test/requests/${body.request.publicId}`,
+    );
     expect(dependencies.state.communications).toEqual([
       expect.objectContaining({
         requestId: request.id,
@@ -207,6 +213,92 @@ describe("public request API", () => {
       ]),
     );
   });
+
+  test("tracks a public request with public-safe data only", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+    const createResponse = await api.create(publicRequest());
+    const createBody = await createResponse.json();
+    const request = dependencies.state.requests[0];
+
+    dependencies.state.comments.push(
+      {
+        id: "comment-public",
+        requestId: request.id,
+        visibility: "PUBLIC",
+        body: "Your request is being processed.",
+        actorType: "API_CLIENT",
+        actorId: "privacy-processor",
+        createdAt: new Date(Date.UTC(2026, 0, 2)),
+      },
+      {
+        id: "comment-internal",
+        requestId: request.id,
+        visibility: "INTERNAL",
+        body: "Internal reviewer note.",
+        actorType: "INTERNAL_USER",
+        actorId: "reviewer-1",
+        createdAt: new Date(Date.UTC(2026, 0, 2)),
+      },
+    );
+    dependencies.state.attachments.push({
+      id: "attachment-1",
+      requestId: request.id,
+      visibility: "PUBLIC",
+      fileName: "data-export.json",
+      mimeType: "application/json",
+      sizeBytes: 123,
+      storageProvider: "vercel_blob",
+      storageKey: "requests/req_test/attachments/file.json",
+      checksum: "sha256-placeholder",
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+      createdAt: new Date(Date.UTC(2026, 0, 2)),
+    });
+
+    const response = await api.get(createBody.request.publicId);
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.status).toBe(200);
+    expect(body.request).toEqual({
+      publicId: createBody.request.publicId,
+      type: "DATA_ACCESS",
+      status: "SUBMITTED",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      completedAt: null,
+      publicComments: [
+        {
+          body: "Your request is being processed.",
+          createdAt: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(serialized).not.toContain(request.id);
+    expect(serialized).not.toContain("requesterId");
+    expect(serialized).not.toContain("john@example.com");
+    expect(serialized).not.toContain("emailEncrypted");
+    expect(serialized).not.toContain("emailHash");
+    expect(serialized).not.toContain("phoneEncrypted");
+    expect(serialized).not.toContain("phoneHash");
+    expect(serialized).not.toContain("Internal reviewer note.");
+    expect(serialized).not.toContain("attachments");
+    expect(serialized).not.toContain("communications");
+    expect(serialized).not.toContain("events");
+    expect(serialized).not.toContain("storageKey");
+    expect(serialized).not.toContain("actorId");
+  });
+
+  test("public tracking returns 404 for an unknown public id", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const response = await api.get("req_missing");
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error.code).toBe("NOT_FOUND");
+  });
 });
 
 describe("hosted privacy request form", () => {
@@ -221,6 +313,18 @@ describe("hosted privacy request form", () => {
     expect(html).toContain('name="phone"');
     expect(html).toContain('name="message"');
     expect(html).toContain('name="website"');
+  });
+
+  test("confirmation includes a tracking link", () => {
+    const html = renderToStaticMarkup(
+      createElement(PrivacyRequestConfirmation, {
+        publicId: "req_public_test",
+        requestStatus: "SUBMITTED",
+      }),
+    );
+
+    expect(html).toContain('href="/requests/req_public_test"');
+    expect(html).toContain("Track this request");
   });
 
   test("submits successfully and resets the captured form", async () => {
@@ -282,6 +386,45 @@ describe("hosted privacy request form", () => {
       message: "Request payload is invalid.",
     });
     expect(resetForm).not.toHaveBeenCalled();
+  });
+});
+
+describe("public request tracking pages", () => {
+  test("tracking page renders request status and public comments", () => {
+    const html = renderToStaticMarkup(
+      createElement(PublicRequestTrackingView, {
+        publicId: "req_public_test",
+        tracking: {
+          publicId: "req_public_test",
+          type: "DATA_ACCESS",
+          status: "PROCESSING",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          completedAt: null,
+          publicComments: [
+            {
+              body: "Your request is being processed.",
+              createdAt: "2026-01-02T00:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(html).toContain("req_public_test");
+    expect(html).toContain("Data Access");
+    expect(html).toContain("Processing");
+    expect(html).toContain("Your request is being processed.");
+  });
+
+  test("lookup page renders a reference number form", async () => {
+    const page = await PublicRequestLookupPage({
+      searchParams: Promise.resolve({}),
+    });
+    const html = renderToStaticMarkup(page);
+
+    expect(html).toContain('action="/requests"');
+    expect(html).toContain('name="publicId"');
+    expect(html).toContain("Track request");
   });
 });
 
@@ -559,6 +702,7 @@ function createInMemoryDependencies(
     requestCreationStore,
     requestRepository,
     emailProvider,
+    appBaseUrl: "https://magictrust.test",
   };
 }
 

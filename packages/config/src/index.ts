@@ -18,6 +18,7 @@ const serverEnvSchema = z.object({
   BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(1).optional(),
+  APP_BASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_APP_NAME: z.string().default("MagicTrust"),
 });
 
@@ -67,6 +68,10 @@ export function getEmailFrom(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   return getServerEnv(env).EMAIL_FROM ?? null;
+}
+
+export function getAppBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return getServerEnv(env).APP_BASE_URL ?? "http://localhost:3000";
 }
 
 function findLocalEnvFile(startDirectory: string): string | null {
