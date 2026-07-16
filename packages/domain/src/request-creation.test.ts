@@ -174,6 +174,8 @@ function createInMemoryStore(): RequestCreationStore & {
 
           return {
             id: randomUUID(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
             ...data,
           };
         },
@@ -184,6 +186,7 @@ function createInMemoryStore(): RequestCreationStore & {
 
           return {
             id: randomUUID(),
+            createdAt: new Date(),
             ...data,
           };
         },

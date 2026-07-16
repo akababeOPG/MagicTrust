@@ -67,6 +67,8 @@ async function insertPrivacyRequest(
       status: privacyRequests.status,
       submittedData: privacyRequests.submittedData,
       mutableData: privacyRequests.mutableData,
+      createdAt: privacyRequests.createdAt,
+      updatedAt: privacyRequests.updatedAt,
     });
 
   return {
@@ -96,6 +98,7 @@ async function insertRequestEvent(
       actorType: requestEvents.actorType,
       actorId: requestEvents.actorId,
       data: requestEvents.data,
+      createdAt: requestEvents.createdAt,
     });
 
   return {

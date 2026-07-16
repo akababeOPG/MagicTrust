@@ -1,9 +1,10 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { Pool } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-serverless";
 import { sql } from "drizzle-orm";
 import { getRequiredDatabaseUrl } from "@magictrust/config";
 
 export * from "./request-creation-store";
+export * from "./request-repository";
 export * from "./schema";
 
 export type DatabaseHealth =
@@ -18,8 +19,8 @@ export type DatabaseHealth =
     };
 
 export function createDatabase(databaseUrl: string) {
-  const client = neon(databaseUrl);
-  return drizzle(client);
+  const pool = new Pool({ connectionString: databaseUrl });
+  return drizzle(pool);
 }
 
 export async function checkDatabaseHealth(): Promise<DatabaseHealth> {

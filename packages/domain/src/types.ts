@@ -49,6 +49,8 @@ export type PrivacyRequest = {
   status: RequestStatus;
   submittedData: JsonObject;
   mutableData: JsonObject;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type RequestEvent = {
@@ -58,4 +60,5 @@ export type RequestEvent = {
   actorType: ActorType;
   actorId: string | null;
   data: JsonObject;
+  createdAt: Date;
 };
