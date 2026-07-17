@@ -36,6 +36,7 @@ export const requestStatusEnum = pgEnum("request_status", [
 export const actorTypeEnum = pgEnum("actor_type", [
   "CONSUMER",
   "INTERNAL_USER",
+  "ADMIN_USER",
   "API_CLIENT",
   "SYSTEM",
 ]);
@@ -49,6 +50,7 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "PUBLIC_ATTACHMENT_ADDED",
   "INTERNAL_ATTACHMENT_ADDED",
   "ATTACHMENT_DOWNLOADED",
+  "ADMIN_ATTACHMENT_DOWNLOADED",
   "EMAIL_SENT",
   "EMAIL_FAILED",
   "CONSUMER_ACCESS_LINK_SENT",

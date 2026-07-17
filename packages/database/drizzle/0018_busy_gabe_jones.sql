@@ -1,0 +1,2 @@
+ALTER TYPE "public"."actor_type" ADD VALUE 'ADMIN_USER' BEFORE 'API_CLIENT';--> statement-breakpoint
+ALTER TYPE "public"."request_event_type" ADD VALUE 'ADMIN_ATTACHMENT_DOWNLOADED' BEFORE 'EMAIL_SENT';

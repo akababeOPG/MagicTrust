@@ -334,6 +334,58 @@ Logout revokes the current admin session, clears the cookie, and redirects to `/
 
 Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `ENCRYPTION_KEY`, and serve over HTTPS so secure cookies work correctly.
 
+## Internal Requests Dashboard
+
+The read-only admin dashboard is available at:
+
+```text
+GET /admin/requests
+```
+
+All admin dashboard pages and admin download routes require a valid admin session from `requireAdminSession()`. The browser never receives Internal API keys, API client keys, encryption keys, ciphertext, hashes, raw requester PII, storage keys, access tokens, sessions, or idempotency records.
+
+Allowed roles:
+
+```text
+ADMIN
+OPERATOR
+VIEWER
+```
+
+Supported list filters:
+
+```text
+publicId      exact public reference
+type          one request type
+status        one request status
+createdFrom   inclusive ISO-8601 datetime
+createdTo     exclusive ISO-8601 datetime
+```
+
+Example:
+
+```text
+/admin/requests?status=PROCESSING&type=DATA_ACCESS&createdFrom=2026-07-01T00:00:00Z
+```
+
+Filters combine with `AND` and pagination uses the same stable ordering as the Internal API request list: `created_at DESC, id DESC`. The dashboard does not expose email or phone search in this version.
+
+Request detail pages are available at:
+
+```text
+GET /admin/requests/:publicId
+```
+
+They display request summary, safe source metadata, mutable data, timeline, comments, attachment metadata, and communication metadata. Communications show `recipientMasked` only. Attachments include an admin-authenticated download action:
+
+```text
+GET /admin/requests/:publicId/attachments/:attachmentId/download
+```
+
+Admin downloads stream private storage through MagicTrust, verify that the attachment belongs to the request, and audit successful downloads with `ADMIN_ATTACHMENT_DOWNLOADED` using `actorType: ADMIN_USER`.
+
+This dashboard version is read-only for every role. It does not support request editing, status changes, comment creation, uploads, email sending, analytics, CSV exports, bulk actions, user management, API client management, or requester PII decryption/display.
+
 ## `GET /api/v1/requests`
 
 Lists Internal API request summaries. Requires `x-api-key` with `requests:read`.

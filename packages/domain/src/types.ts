@@ -24,6 +24,7 @@ export type RequestStatus = (typeof requestStatuses)[number];
 export const actorTypes = [
   "CONSUMER",
   "INTERNAL_USER",
+  "ADMIN_USER",
   "API_CLIENT",
   "SYSTEM",
 ] as const;
@@ -55,6 +56,7 @@ export type RequestEventType =
   | "PUBLIC_ATTACHMENT_ADDED"
   | "INTERNAL_ATTACHMENT_ADDED"
   | "ATTACHMENT_DOWNLOADED"
+  | "ADMIN_ATTACHMENT_DOWNLOADED"
   | "EMAIL_SENT"
   | "EMAIL_FAILED"
   | "CONSUMER_ACCESS_LINK_SENT"

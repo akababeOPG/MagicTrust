@@ -44,6 +44,9 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         recordAttachmentDownloaded() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        recordAdminAttachmentDownloaded() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         createCommunication() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },

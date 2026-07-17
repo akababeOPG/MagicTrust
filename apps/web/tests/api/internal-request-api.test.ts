@@ -3140,6 +3140,22 @@ function createInMemoryDependencies(
         createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
       });
     },
+    async recordAdminAttachmentDownloaded(requestId, input) {
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "ADMIN_ATTACHMENT_DOWNLOADED",
+        actorType: "ADMIN_USER",
+        actorId: input.actorId,
+        data: {
+          attachmentId: input.attachmentId,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+    },
     async createCommunication(id, input) {
       const request = state.requests.find(
         (item) => item.id === id || item.publicId === id,

@@ -1489,6 +1489,9 @@ function createInMemoryDependencies(
     async recordAttachmentDownloaded() {
       throw new Error("Not implemented in public intake tests.");
     },
+    async recordAdminAttachmentDownloaded() {
+      throw new Error("Not implemented in public intake tests.");
+    },
     async createCommunication(id, input) {
       const request = state.requests.find(
         (item) => item.id === id || item.publicId === id,

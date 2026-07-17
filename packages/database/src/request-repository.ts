@@ -142,6 +142,10 @@ export type RequestRepository = {
     requestId: string,
     input: RecordAttachmentDownloadedInput,
   ): Promise<void>;
+  recordAdminAttachmentDownloaded(
+    requestId: string,
+    input: RecordAdminAttachmentDownloadedInput,
+  ): Promise<void>;
   createCommunication(
     id: string,
     input: CreateRequestCommunicationInput,
@@ -254,6 +258,14 @@ export type RecordAttachmentDownloadedInput = {
   attachmentId: string;
   fileName: string;
   storageProvider: string;
+  actorId: string;
+};
+
+export type RecordAdminAttachmentDownloadedInput = {
+  attachmentId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
   actorId: string;
 };
 
@@ -862,6 +874,20 @@ export function createRequestRepository(db: Database): RequestRepository {
             type: "API_CLIENT",
             id: input.actorId,
           },
+        },
+      });
+    },
+    async recordAdminAttachmentDownloaded(requestId, input) {
+      await db.insert(requestEvents).values({
+        privacyRequestId: requestId,
+        type: "ADMIN_ATTACHMENT_DOWNLOADED",
+        actorType: "ADMIN_USER",
+        actorId: input.actorId,
+        data: {
+          attachmentId: input.attachmentId,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
         },
       });
     },
