@@ -7,6 +7,7 @@ import type {
   RequestAccessToken,
   RequestComment,
   RequestCommunication,
+  RequestEventCategory,
   RequestEventType,
   RequestIdentityVerificationToken,
   RequestStatus,
@@ -44,6 +45,9 @@ export type RequestEventSummary = {
   id: string;
   privacyRequestId: string;
   type: RequestEventType;
+  category: RequestEventCategory;
+  customType: string | null;
+  visibility: CommentVisibility;
   actorType: ActorType;
   actorId: string | null;
   data: JsonObject;
@@ -69,6 +73,7 @@ export type ConsumerNotificationTarget = RequestSummary & {
 export type ConsumerSecureRequestDetails = RequestSummary & {
   comments: RequestComment[];
   attachments: RequestAttachment[];
+  events: RequestEventSummary[];
 };
 
 export type RequestListFilters = {
@@ -94,6 +99,10 @@ export type RequestRepository = {
     id: string,
     input: UpdateMutableDataInput,
   ): Promise<MutableDataUpdateResult | null>;
+  addCustomEvent(
+    id: string,
+    input: AddCustomRequestEventInput,
+  ): Promise<RequestEventSummary | null>;
   addComment(
     id: string,
     input: AddRequestCommentInput,
@@ -185,6 +194,14 @@ export type UpdateMutableDataInput = {
 export type MutableDataUpdateResult = {
   mutableData: JsonObject;
   updatedAt: Date;
+};
+
+export type AddCustomRequestEventInput = {
+  customType: string;
+  visibility: CommentVisibility;
+  data: JsonObject;
+  actorType: ActorType;
+  actorId: string | null;
 };
 
 export type AddRequestCommentInput = {
@@ -354,15 +371,7 @@ export function createRequestRepository(db: Database): RequestRepository {
       }
 
       const events = await db
-        .select({
-          id: requestEvents.id,
-          privacyRequestId: requestEvents.privacyRequestId,
-          type: requestEvents.type,
-          actorType: requestEvents.actorType,
-          actorId: requestEvents.actorId,
-          data: requestEvents.data,
-          createdAt: requestEvents.createdAt,
-        })
+        .select(eventSelection)
         .from(requestEvents)
         .where(eq(requestEvents.privacyRequestId, request.id))
         .orderBy(desc(requestEvents.createdAt));
@@ -591,6 +600,40 @@ export function createRequestRepository(db: Database): RequestRepository {
         return {
           mutableData: updatedRequest.mutableData as JsonObject,
           updatedAt: updatedRequest.updatedAt,
+        };
+      });
+    },
+    async addCustomEvent(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            id: privacyRequests.id,
+          })
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const [event] = await tx
+          .insert(requestEvents)
+          .values({
+            privacyRequestId: request.id,
+            type: "CUSTOM_EVENT",
+            category: "CUSTOM",
+            customType: input.customType,
+            visibility: input.visibility,
+            actorType: input.actorType,
+            actorId: input.actorId,
+            data: input.data,
+          })
+          .returning(eventSelection);
+
+        return {
+          ...event,
+          data: event.data as JsonObject,
         };
       });
     },
@@ -1149,10 +1192,26 @@ export function createRequestRepository(db: Database): RequestRepository {
           )
           .orderBy(desc(requestAttachments.createdAt));
 
+        const events = await tx
+          .select(eventSelection)
+          .from(requestEvents)
+          .where(
+            and(
+              eq(requestEvents.privacyRequestId, request.id),
+              eq(requestEvents.category, "CUSTOM"),
+              eq(requestEvents.visibility, "PUBLIC"),
+            ),
+          )
+          .orderBy(desc(requestEvents.createdAt));
+
         return {
           ...request,
           comments,
           attachments,
+          events: events.map((event) => ({
+            ...event,
+            data: event.data as JsonObject,
+          })),
         };
       });
     },
@@ -1316,6 +1375,19 @@ const attachmentSelection = {
   actorType: requestAttachments.actorType,
   actorId: requestAttachments.actorId,
   createdAt: requestAttachments.createdAt,
+};
+
+const eventSelection = {
+  id: requestEvents.id,
+  privacyRequestId: requestEvents.privacyRequestId,
+  type: requestEvents.type,
+  category: requestEvents.category,
+  customType: requestEvents.customType,
+  visibility: requestEvents.visibility,
+  actorType: requestEvents.actorType,
+  actorId: requestEvents.actorId,
+  data: requestEvents.data,
+  createdAt: requestEvents.createdAt,
 };
 
 const identityVerificationTokenSelection = {

@@ -93,6 +93,42 @@ const updateMutableDataSchema = z.object({
   reason: z.string().min(1).nullable().optional(),
 });
 
+const builtInEventTypes = new Set([
+  "CUSTOM_EVENT",
+  "REQUEST_CREATED",
+  "STATUS_CHANGED",
+  "PUBLIC_COMMENT_ADDED",
+  "INTERNAL_COMMENT_ADDED",
+  "PUBLIC_ATTACHMENT_ADDED",
+  "INTERNAL_ATTACHMENT_ADDED",
+  "ATTACHMENT_DOWNLOADED",
+  "EMAIL_SENT",
+  "EMAIL_FAILED",
+  "CONSUMER_ACCESS_LINK_SENT",
+  "CONSUMER_ACCESS_TOKEN_USED",
+  "CONSUMER_ACCESS_SESSION_CREATED",
+  "CONSUMER_ACCESS_SESSION_USED",
+  "CONSUMER_ATTACHMENT_DOWNLOADED",
+  "IDENTITY_VERIFICATION_SENT",
+  "IDENTITY_VERIFIED",
+  "CONSUMER_NOTIFICATION_SENT",
+  "CONSUMER_NOTIFICATION_FAILED",
+  "REQUEST_DATA_UPDATED",
+]);
+
+const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;
+const maxCustomEventDataBytes = 16 * 1024;
+
+const addCustomEventSchema = z.object({
+  type: z
+    .string()
+    .regex(customEventNamePattern)
+    .refine((type) => !builtInEventTypes.has(type)),
+  visibility: z.enum(commentVisibilities),
+  data: jsonObjectSchema,
+  actor: actorSchema,
+});
+
 const addCommentSchema = z.object({
   visibility: z.enum(commentVisibilities),
   body: z.string().min(1),
@@ -223,7 +259,10 @@ export function createInternalRequestApi(
           mutableData: result.mutableData,
           events: result.events.map((event) => ({
             id: event.id,
-            type: event.type,
+            type: event.customType ?? event.type,
+            category: event.category ?? "BUILT_IN",
+            customType: event.customType,
+            visibility: event.visibility ?? "INTERNAL",
             actorType: event.actorType,
             actorId: event.actorId,
             data: event.data,
@@ -377,6 +416,56 @@ export function createInternalRequestApi(
             updatedAt: updated.updatedAt.toISOString(),
           },
         });
+      } catch {
+        return serverError();
+      }
+    },
+
+    async addCustomEvent(request: Request, id: string): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      if (hasDangerousKeyInUnknown(body)) {
+        return validationError();
+      }
+
+      const parsed = addCustomEventSchema.safeParse(body);
+
+      if (
+        !parsed.success ||
+        serializedJsonByteLength(parsed.data.data) > maxCustomEventDataBytes
+      ) {
+        return validationError();
+      }
+
+      try {
+        const event = await dependencies.requestRepository.addCustomEvent(id, {
+          customType: parsed.data.type,
+          visibility: parsed.data.visibility,
+          data: parsed.data.data,
+          actorType: parsed.data.actor.type,
+          actorId: parsed.data.actor.id ?? null,
+        });
+
+        if (!event) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            event: normalizeRequestEvent(event),
+          },
+          {
+            status: 201,
+          },
+        );
       } catch {
         return serverError();
       }
@@ -986,6 +1075,32 @@ export function createInternalRequestApi(
   };
 }
 
+function normalizeRequestEvent(event: {
+  id: string;
+  privacyRequestId: string;
+  type: string;
+  category?: string;
+  customType?: string | null;
+  visibility?: string;
+  actorType: string;
+  actorId: string | null;
+  data: JsonObject;
+  createdAt: Date;
+}) {
+  return {
+    id: event.id,
+    requestId: event.privacyRequestId,
+    type: event.customType ?? event.type,
+    category: event.category ?? "BUILT_IN",
+    customType: event.customType ?? null,
+    visibility: event.visibility ?? "INTERNAL",
+    actorType: event.actorType,
+    actorId: event.actorId,
+    data: event.data,
+    createdAt: event.createdAt.toISOString(),
+  };
+}
+
 async function readJson(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -1140,6 +1255,10 @@ function hasDangerousKeyInUnknown(value: unknown): boolean {
       key === "constructor" ||
       hasDangerousKeyInUnknown(child),
   );
+}
+
+function serializedJsonByteLength(value: JsonObject): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
 function generateSecureToken(): string {

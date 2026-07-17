@@ -160,6 +160,78 @@ describe("public request API", () => {
     expect(JSON.stringify(trackingBody)).not.toContain("DATA_EXPORT_READY");
   });
 
+  test("public APIs exclude INTERNAL custom events", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const createResponse = await api.create(publicRequest());
+    const createBody = await createResponse.json();
+    const request = dependencies.state.requests[0]!;
+    dependencies.state.events.push({
+      id: "event-internal-custom",
+      privacyRequestId: request.id,
+      type: "CUSTOM_EVENT",
+      category: "CUSTOM",
+      customType: "DATA_EXPORT_GENERATED",
+      visibility: "INTERNAL",
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+      data: {
+        processorReference: "job-99999",
+      },
+      createdAt: new Date(Date.UTC(2026, 0, 2)),
+    });
+
+    const response = await api.get(createBody.request.publicId);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.request.publicEvents).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("job-99999");
+    expect(JSON.stringify(body)).not.toContain("privacy-processor");
+  });
+
+  test("public APIs expose PUBLIC custom events without actor identifiers", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const createResponse = await api.create(publicRequest());
+    const createBody = await createResponse.json();
+    const request = dependencies.state.requests[0]!;
+    dependencies.state.events.push({
+      id: "event-public-custom",
+      privacyRequestId: request.id,
+      type: "CUSTOM_EVENT",
+      category: "CUSTOM",
+      customType: "DATA_EXPORT_GENERATED",
+      visibility: "PUBLIC",
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+      data: {
+        system: "Vector",
+      },
+      createdAt: new Date(Date.UTC(2026, 0, 2)),
+    });
+
+    const response = await api.get(createBody.request.publicId);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.request.publicEvents).toEqual([
+      {
+        type: "DATA_EXPORT_GENERATED",
+        data: {
+          system: "Vector",
+        },
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+    ]);
+    expect(JSON.stringify(body.request.publicEvents)).not.toContain(
+      "privacy-processor",
+    );
+    expect(JSON.stringify(body.request.publicEvents)).not.toContain("actorId");
+  });
+
   test("rejects honeypot submissions", async () => {
     const dependencies = createInMemoryDependencies();
     const api = createPublicRequestApi(dependencies);
@@ -452,6 +524,7 @@ describe("public request API", () => {
           createdAt: "2026-01-02T00:00:00.000Z",
         },
       ],
+      publicEvents: [],
     });
     expect(serialized).not.toContain(request.id);
     expect(serialized).not.toContain("requesterId");
@@ -767,6 +840,7 @@ describe("public request API", () => {
           createdAt: "2026-01-02T00:00:00.000Z",
         },
       ],
+      publicEvents: [],
     });
     expect(html).toContain("Secure access verified");
     expect(serialized).not.toContain(request.id);
@@ -1075,6 +1149,15 @@ describe("public request tracking pages", () => {
               createdAt: "2026-01-02T00:00:00.000Z",
             },
           ],
+          publicEvents: [
+            {
+              type: "DATA_EXPORT_GENERATED",
+              data: {
+                system: "Vector",
+              },
+              createdAt: "2026-01-02T00:00:00.000Z",
+            },
+          ],
         },
       }),
     );
@@ -1083,6 +1166,8 @@ describe("public request tracking pages", () => {
     expect(html).toContain("Data Access");
     expect(html).toContain("Processing");
     expect(html).toContain("Your request is being processed.");
+    expect(html).toContain("Data Export Generated");
+    expect(html).toContain("Vector");
     expect(html).toContain("Send me a secure access link");
   });
 
@@ -1308,6 +1393,9 @@ function createInMemoryDependencies(
             id: event.id,
             privacyRequestId: event.privacyRequestId,
             type: event.type,
+            category: event.category ?? "BUILT_IN",
+            customType: event.customType ?? null,
+            visibility: event.visibility ?? "INTERNAL",
             actorType: event.actorType,
             actorId: event.actorId,
             data: event.data,
@@ -1358,6 +1446,9 @@ function createInMemoryDependencies(
       throw new Error("Not implemented in public intake tests.");
     },
     async updateMutableData() {
+      throw new Error("Not implemented in public intake tests.");
+    },
+    async addCustomEvent() {
       throw new Error("Not implemented in public intake tests.");
     },
     async addComment() {
@@ -1626,6 +1717,25 @@ function createInMemoryDependencies(
             attachment.requestId === request.id &&
             attachment.visibility === "PUBLIC",
         ),
+        events: state.events
+          .filter(
+            (event) =>
+              event.privacyRequestId === request.id &&
+              event.category === "CUSTOM" &&
+              event.visibility === "PUBLIC",
+          )
+          .map((event) => ({
+            id: event.id,
+            privacyRequestId: event.privacyRequestId,
+            type: event.type,
+            category: event.category ?? "BUILT_IN",
+            customType: event.customType ?? null,
+            visibility: event.visibility ?? "INTERNAL",
+            actorType: event.actorType,
+            actorId: event.actorId,
+            data: event.data,
+            createdAt: event.createdAt,
+          })),
       };
     },
     async recordConsumerAttachmentDownloaded(requestId, input) {

@@ -39,6 +39,7 @@ export const actorTypeEnum = pgEnum("actor_type", [
 ]);
 
 export const requestEventTypeEnum = pgEnum("request_event_type", [
+  "CUSTOM_EVENT",
   "REQUEST_CREATED",
   "STATUS_CHANGED",
   "PUBLIC_COMMENT_ADDED",
@@ -58,6 +59,11 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "CONSUMER_NOTIFICATION_SENT",
   "CONSUMER_NOTIFICATION_FAILED",
   "REQUEST_DATA_UPDATED",
+]);
+
+export const requestEventCategoryEnum = pgEnum("request_event_category", [
+  "BUILT_IN",
+  "CUSTOM",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
@@ -299,6 +305,13 @@ export const requestEvents = pgTable(
       .notNull()
       .references(() => privacyRequests.id, { onDelete: "restrict" }),
     type: requestEventTypeEnum("type").notNull(),
+    category: requestEventCategoryEnum("category")
+      .default("BUILT_IN")
+      .notNull(),
+    customType: varchar("custom_type", { length: 80 }),
+    visibility: commentVisibilityEnum("visibility")
+      .default("INTERNAL")
+      .notNull(),
     actorType: actorTypeEnum("actor_type").notNull(),
     actorId: varchar("actor_id", { length: 128 }),
     data: jsonb("data").default({}).notNull(),

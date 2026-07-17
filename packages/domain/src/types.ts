@@ -47,6 +47,7 @@ export const communicationStatuses = ["PENDING", "SENT", "FAILED"] as const;
 export type CommunicationStatus = (typeof communicationStatuses)[number];
 
 export type RequestEventType =
+  | "CUSTOM_EVENT"
   | "REQUEST_CREATED"
   | "STATUS_CHANGED"
   | "PUBLIC_COMMENT_ADDED"
@@ -66,6 +67,8 @@ export type RequestEventType =
   | "CONSUMER_NOTIFICATION_SENT"
   | "CONSUMER_NOTIFICATION_FAILED"
   | "REQUEST_DATA_UPDATED";
+
+export type RequestEventCategory = "BUILT_IN" | "CUSTOM";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -93,6 +96,9 @@ export type RequestEvent = {
   id: string;
   privacyRequestId: string;
   type: RequestEventType;
+  category?: RequestEventCategory;
+  customType?: string | null;
+  visibility?: CommentVisibility;
   actorType: ActorType;
   actorId: string | null;
   data: JsonObject;

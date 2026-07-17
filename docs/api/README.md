@@ -251,3 +251,54 @@ curl -X POST "http://localhost:3000/api/v1/requests/req_example/notifications" \
 ```
 
 The response includes communication metadata only. Notification audit events never include the recipient email or email body.
+
+## `POST /api/v1/requests/:id/events`
+
+Records a custom business event for an existing request. The request id may be the internal id or `publicId`.
+
+Custom event names must start with a letter, use only uppercase letters, numbers, and underscores, and be 3-80 characters long. Built-in MagicTrust event names are reserved. Event data must be a JSON object and is limited to 16 KB.
+
+### Internal Custom Event
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
+curl -X POST "http://localhost:3000/api/v1/requests/req_example/events" \
+  -H "content-type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "type": "DATA_EXPORT_GENERATED",
+    "visibility": "INTERNAL",
+    "data": {
+      "system": "Vector",
+      "processorReference": "job-99999"
+    },
+    "actor": {
+      "type": "API_CLIENT",
+      "id": "privacy-processor"
+    }
+  }'
+```
+
+### Public Custom Event
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
+curl -X POST "http://localhost:3000/api/v1/requests/req_example/events" \
+  -H "content-type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "type": "DATA_EXPORT_READY",
+    "visibility": "PUBLIC",
+    "data": {
+      "message": "Your data export is ready."
+    },
+    "actor": {
+      "type": "API_CLIENT",
+      "id": "privacy-processor"
+    }
+  }'
+```
+
+Internal request detail includes all custom events. Public tracking and secure consumer pages expose only `PUBLIC` custom events, and never include actor identifiers.

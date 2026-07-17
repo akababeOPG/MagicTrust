@@ -143,6 +143,16 @@ describe("internal request API", () => {
       ),
       created.publicId,
     );
+    const customEventResponse = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCustomEventBody()),
+        },
+      ),
+      created.publicId,
+    );
     const detailAfterEmailResponse = await api.get(
       authenticatedRequest(
         `https://magictrust.test/api/v1/requests/${created.publicId}`,
@@ -162,6 +172,7 @@ describe("internal request API", () => {
     expect(downloadResponse.status).toBe(200);
     expect(emailResponse.status).toBe(201);
     expect(notificationResponse.status).toBe(201);
+    expect(customEventResponse.status).toBe(201);
     expect(detailAfterEmailResponse.status).toBe(200);
     expect(detailAfterEmail.request.communications).toEqual([
       expect.objectContaining({
@@ -527,6 +538,223 @@ describe("internal request API", () => {
     );
     expect(JSON.stringify(detail.events)).not.toContain("job-12345");
     expect(JSON.stringify(detail.events)).not.toContain("DATA_EXPORT_READY");
+  });
+
+  test("returns 401 for unauthorized custom event", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.addCustomEvent(
+      new Request("https://magictrust.test/api/v1/requests/req_test/events", {
+        method: "POST",
+        body: JSON.stringify(validCustomEventBody()),
+      }),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("returns 404 when adding a custom event to a missing request", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_missing/events",
+        {
+          method: "POST",
+          body: JSON.stringify(validCustomEventBody()),
+        },
+      ),
+      "req_missing",
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("creates a valid internal custom event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCustomEventBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(body.event).toMatchObject({
+      type: "DATA_EXPORT_GENERATED",
+      category: "CUSTOM",
+      customType: "DATA_EXPORT_GENERATED",
+      visibility: "INTERNAL",
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+      data: {
+        system: "Vector",
+        processorReference: "job-99999",
+      },
+    });
+    expect(detail.events).toEqual([
+      expect.objectContaining({
+        type: "DATA_EXPORT_GENERATED",
+        category: "CUSTOM",
+        customType: "DATA_EXPORT_GENERATED",
+        visibility: "INTERNAL",
+      }),
+      expect.objectContaining({
+        type: "REQUEST_CREATED",
+      }),
+    ]);
+  });
+
+  test("creates a valid public custom event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCustomEventBody({ visibility: "PUBLIC" })),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.event.visibility).toBe("PUBLIC");
+    expect(body.event.type).toBe("DATA_EXPORT_GENERATED");
+  });
+
+  test.each(["data_export", "1_BAD", "NO", "BAD-NAME"])(
+    "rejects invalid custom event name %s",
+    async (type) => {
+      const dependencies = createInMemoryDependencies();
+      const api = createInternalRequestApi(dependencies);
+      const created = await createRequest(api);
+
+      const response = await api.addCustomEvent(
+        authenticatedRequest(
+          `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+          {
+            method: "POST",
+            body: JSON.stringify(validCustomEventBody({ type })),
+          },
+        ),
+        created.publicId,
+      );
+
+      expect(response.status).toBe(400);
+    },
+  );
+
+  test("rejects reserved built-in event names", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            validCustomEventBody({ type: "REQUEST_CREATED" }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test("rejects dangerous custom event data keys", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: '{"type":"DATA_EXPORT_GENERATED","visibility":"INTERNAL","data":{"safe":{"constructor":{"polluted":true}}},"actor":{"type":"API_CLIENT","id":"privacy-processor"}}',
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(dependencies.state.events).toHaveLength(1);
+  });
+
+  test("rejects custom event data larger than 16 KB", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            validCustomEventBody({
+              data: {
+                oversized: "x".repeat(17 * 1024),
+              },
+            }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test("custom event does not modify status or mutable data", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(validMutableDataBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const mutableData = structuredClone(
+      dependencies.state.requests[0]!.mutableData,
+    );
+
+    const response = await api.addCustomEvent(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCustomEventBody()),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(201);
+    expect(dependencies.state.requests[0]!.status).toBe("SUBMITTED");
+    expect(dependencies.state.requests[0]!.mutableData).toEqual(mutableData);
   });
 
   test("creates a public comment and event", async () => {
@@ -1624,6 +1852,27 @@ function validMutableDataBody(
   };
 }
 
+function validCustomEventBody(
+  overrides: {
+    type?: string;
+    visibility?: "INTERNAL" | "PUBLIC";
+    data?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    type: overrides.type ?? "DATA_EXPORT_GENERATED",
+    visibility: overrides.visibility ?? "INTERNAL",
+    data: overrides.data ?? {
+      system: "Vector",
+      processorReference: "job-99999",
+    },
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+  };
+}
+
 function validCommentBody(overrides: { visibility?: string } = {}) {
   return {
     visibility: overrides.visibility ?? "PUBLIC",
@@ -1840,6 +2089,9 @@ function createInMemoryDependencies(
             id: event.id,
             privacyRequestId: event.privacyRequestId,
             type: event.type,
+            category: event.category ?? "BUILT_IN",
+            customType: event.customType ?? null,
+            visibility: event.visibility ?? "INTERNAL",
             actorType: event.actorType,
             actorId: event.actorId,
             data: event.data,
@@ -1958,6 +2210,31 @@ function createInMemoryDependencies(
         mutableData: request.mutableData,
         updatedAt: request.updatedAt,
       };
+    },
+    async addCustomEvent(id, input) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const event = {
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type: "CUSTOM_EVENT" as const,
+        category: "CUSTOM" as const,
+        customType: input.customType,
+        visibility: input.visibility,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: input.data,
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      };
+      state.events.unshift(event);
+
+      return event;
     },
     async addComment(id, input) {
       const request = state.requests.find(

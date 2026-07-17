@@ -71,6 +71,25 @@ export function PublicRequestTrackingView(input: {
             <p>No public comments yet.</p>
           )}
         </section>
+
+        <section className="public-events" aria-labelledby="events-title">
+          <h2 id="events-title">Public Updates</h2>
+          {input.tracking.publicEvents.length > 0 ? (
+            <ol>
+              {input.tracking.publicEvents.map((event) => (
+                <li key={`${event.createdAt}:${event.type}`}>
+                  <p>{formatRequestType(event.type)}</p>
+                  <pre>{JSON.stringify(event.data, null, 2)}</pre>
+                  <time dateTime={event.createdAt}>
+                    {formatDate(event.createdAt)}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p>No public updates yet.</p>
+          )}
+        </section>
       </section>
     </main>
   );

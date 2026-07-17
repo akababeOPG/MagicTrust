@@ -168,6 +168,11 @@ export type PublicRequestTrackingData = {
     body: string;
     createdAt: string;
   }>;
+  publicEvents: Array<{
+    type: string;
+    data: JsonObject;
+    createdAt: string;
+  }>;
 };
 
 export type PublicSecureAccessData = PublicRequestTrackingData & {
@@ -209,6 +214,7 @@ export async function getPublicRequestTrackingData(
         body: comment.body,
         createdAt: comment.createdAt.toISOString(),
       })),
+    publicEvents: publicCustomEvents(result.events),
   };
 }
 
@@ -246,6 +252,7 @@ export async function getPublicSecureAccessData(
         body: comment.body,
         createdAt: comment.createdAt.toISOString(),
       })),
+    publicEvents: publicCustomEvents(result.events),
     publicAttachments: result.attachments
       .filter((attachment) => attachment.visibility === "PUBLIC")
       .map((attachment) => ({
@@ -258,6 +265,29 @@ export async function getPublicSecureAccessData(
       })),
     secureAccessVerified: true,
   };
+}
+
+function publicCustomEvents(
+  events: Array<{
+    category?: string;
+    customType?: string | null;
+    visibility?: string;
+    data: JsonObject;
+    createdAt: Date;
+  }>,
+) {
+  return events
+    .filter(
+      (event) =>
+        event.category === "CUSTOM" &&
+        event.visibility === "PUBLIC" &&
+        event.customType,
+    )
+    .map((event) => ({
+      type: event.customType as string,
+      data: event.data,
+      createdAt: event.createdAt.toISOString(),
+    }));
 }
 
 export async function downloadPublicAttachmentForConsumer(

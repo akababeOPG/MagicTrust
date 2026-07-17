@@ -32,6 +32,9 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         updateMutableData() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        addCustomEvent() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         addComment() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
