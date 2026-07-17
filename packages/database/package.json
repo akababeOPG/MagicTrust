@@ -12,11 +12,13 @@
     "test": "vitest run --passWithNoTests",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "api-client:create": "node scripts/create-api-client.mjs"
+    "api-client:create": "node scripts/create-api-client.mjs",
+    "pii:backfill": "node scripts/pii-backfill.mjs"
   },
   "dependencies": {
     "@magictrust/config": "workspace:*",
     "@magictrust/domain": "workspace:*",
+    "@magictrust/privacy": "workspace:*",
     "@neondatabase/serverless": "^0.10.4",
     "drizzle-orm": "^0.38.3"
   },

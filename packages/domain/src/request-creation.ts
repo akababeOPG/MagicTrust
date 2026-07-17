@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 
-import { encryptPii, hashPii } from "@magictrust/privacy";
+import {
+  decryptSubmittedPayload,
+  encryptPii,
+  encryptSubmittedPayload,
+  hashPii,
+  hashSubmittedPayload,
+} from "@magictrust/privacy";
 
 import type {
   ActorType,
@@ -42,6 +48,9 @@ export type CreatePrivacyRequestRecord = {
   type: RequestType;
   status: Extract<RequestStatus, "SUBMITTED" | "PENDING_VERIFICATION">;
   submittedData: JsonObject;
+  submittedDataEncrypted: string;
+  submittedDataHash: string;
+  encryptionVersion: number;
   mutableData: JsonObject;
 };
 
@@ -81,12 +90,32 @@ export function generatePublicId(): string {
   return `req_${randomBytes(12).toString("base64url")}`;
 }
 
+export function decryptOriginalSubmittedData(input: {
+  submittedDataEncrypted: string | null;
+}): JsonObject | null {
+  if (!input.submittedDataEncrypted) {
+    return null;
+  }
+
+  const decrypted = decryptSubmittedPayload(input.submittedDataEncrypted);
+
+  if (!decrypted || typeof decrypted !== "object" || Array.isArray(decrypted)) {
+    throw new Error("Encrypted submitted payload did not contain an object.");
+  }
+
+  return decrypted as JsonObject;
+}
+
 export async function createPrivacyRequest(
   input: CreateRequestInput,
   store: RequestCreationStore,
   options: CreateRequestOptions = {},
 ): Promise<CreateRequestResult> {
-  const submittedData = cloneJsonObject(input.submittedData);
+  const originalSubmittedData = cloneJsonObject(input.submittedData);
+  const submittedData = sanitizeSubmittedDataSnapshot(
+    originalSubmittedData,
+    input.type,
+  );
 
   return store.transaction(async (tx) => {
     const publicId = (options.generatePublicId ?? generatePublicId)();
@@ -105,6 +134,9 @@ export async function createPrivacyRequest(
       type: input.type,
       status: input.initialStatus ?? "SUBMITTED",
       submittedData,
+      submittedDataEncrypted: encryptSubmittedPayload(originalSubmittedData),
+      submittedDataHash: hashSubmittedPayload(originalSubmittedData),
+      encryptionVersion: 1,
       mutableData: {},
     });
 
@@ -138,4 +170,29 @@ function hashOptionalPii(value: string | null | undefined): string | null {
 
 function cloneJsonObject(value: JsonObject): JsonObject {
   return structuredClone(value);
+}
+
+function sanitizeSubmittedDataSnapshot(
+  submittedData: JsonObject,
+  requestType: RequestType,
+): JsonObject {
+  const source =
+    submittedData.source &&
+    typeof submittedData.source === "object" &&
+    !Array.isArray(submittedData.source)
+      ? (submittedData.source as JsonObject)
+      : {};
+
+  return {
+    type: requestType,
+    source: {
+      channel: safeString(source.channel),
+      formKey: safeString(source.formKey),
+      siteKey: safeString(source.siteKey),
+    },
+  };
+}
+
+function safeString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }

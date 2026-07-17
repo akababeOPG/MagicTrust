@@ -28,7 +28,7 @@ import {
   verifyApiKey,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { hashAccessToken } from "@magictrust/privacy";
+import { encryptPii, hashAccessToken, hashPii } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test } from "vitest";
 
@@ -544,6 +544,30 @@ describe("internal request API", () => {
     expect(JSON.stringify(body)).not.toContain("emailHash");
     expect(JSON.stringify(body)).not.toContain("phoneEncrypted");
     expect(JSON.stringify(body)).not.toContain("phoneHash");
+    expect(JSON.stringify(body)).not.toContain("submittedDataEncrypted");
+    expect(JSON.stringify(body)).not.toContain("submittedDataHash");
+    expect(JSON.stringify(body)).not.toContain("encryptionVersion");
+    expect(dependencies.state.requests[0]?.submittedData).toEqual({
+      type: "DATA_ACCESS",
+      source: {
+        channel: "API",
+        formKey: "manual-api",
+        siteKey: "test-site",
+      },
+    });
+    expect(
+      JSON.stringify(dependencies.state.requests[0]?.submittedData),
+    ).not.toContain("john@example.com");
+    expect(
+      JSON.stringify(dependencies.state.requests[0]?.submittedData),
+    ).not.toContain("+13055551234");
+    expect(dependencies.state.requests[0]?.submittedDataEncrypted).toEqual(
+      expect.any(String),
+    );
+    expect(dependencies.state.requests[0]?.submittedDataHash).toEqual(
+      expect.any(String),
+    );
+    expect(dependencies.state.requests[0]?.encryptionVersion).toBe(1);
   });
 
   test("returns normalized JSON when transactional creation fails", async () => {
@@ -1632,7 +1656,7 @@ describe("internal request API", () => {
     expect(body.communication).toMatchObject({
       channel: "EMAIL",
       direction: "OUTBOUND",
-      recipient: "john@example.com",
+      recipientMasked: "j***n@example.com",
       subject: "Your MagicTrust request was updated",
       provider: "resend",
       providerMessageId: "email-message-1",
@@ -1642,7 +1666,17 @@ describe("internal request API", () => {
       actorId: "privacy-processor",
     });
     expect(body.communication.body).toBeUndefined();
+    expect(body.communication.recipient).toBeUndefined();
+    expect(body.communication.recipientEncrypted).toBeUndefined();
+    expect(body.communication.recipientHash).toBeUndefined();
     expect(body.communication.sentAt).toEqual(expect.any(String));
+    expect(dependencies.state.communications[0]?.recipient).toBeNull();
+    expect(dependencies.state.communications[0]?.recipientEncrypted).toEqual(
+      expect.any(String),
+    );
+    expect(dependencies.state.communications[0]?.recipientHash).toBe(
+      hashPii("john@example.com"),
+    );
   });
 
   test("marks an email communication as failed when provider send fails", async () => {
@@ -1770,13 +1804,16 @@ describe("internal request API", () => {
       expect.objectContaining({
         channel: "EMAIL",
         direction: "OUTBOUND",
-        recipient: "john@example.com",
+        recipientMasked: "j***n@example.com",
         subject: "Your MagicTrust request was updated",
         provider: "resend",
         status: "SENT",
       }),
     ]);
     expect(detail.communications[0].body).toBeUndefined();
+    expect(detail.communications[0].recipient).toBeUndefined();
+    expect(detail.communications[0].recipientEncrypted).toBeUndefined();
+    expect(detail.communications[0].recipientHash).toBeUndefined();
   });
 
   test("fetches request detail with communications after email send using the same API key", async () => {
@@ -1874,7 +1911,7 @@ describe("internal request API", () => {
     expect(body.communication).toMatchObject({
       channel: "EMAIL",
       direction: "OUTBOUND",
-      recipient: "john@example.com",
+      recipientMasked: "j***n@example.com",
       provider: "resend",
       providerMessageId: "email-message-1",
       status: "SENT",
@@ -2721,7 +2758,10 @@ function createInMemoryDependencies(
         requestId: request.id,
         channel: "EMAIL" as const,
         direction: "OUTBOUND" as const,
-        recipient: input.recipient,
+        recipient: null,
+        recipientEncrypted: encryptPii(input.recipient),
+        recipientHash: hashPii(input.recipient),
+        encryptionVersion: 1,
         subject: input.subject,
         body: input.body,
         provider: input.provider,

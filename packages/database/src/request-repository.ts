@@ -13,6 +13,7 @@ import type {
   RequestStatus,
   RequestType,
 } from "@magictrust/domain";
+import { encryptPii, hashPii } from "@magictrust/privacy";
 import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
@@ -798,7 +799,7 @@ export function createRequestRepository(db: Database): RequestRepository {
             requestId: request.id,
             channel: "EMAIL",
             direction: "OUTBOUND",
-            recipient: input.recipient,
+            ...protectedRecipientValues(input.recipient),
             subject: input.subject,
             body: input.body,
             provider: input.provider,
@@ -922,7 +923,7 @@ export function createRequestRepository(db: Database): RequestRepository {
             requestId: request.id,
             channel: "EMAIL",
             direction: "OUTBOUND",
-            recipient: input.recipient,
+            ...protectedRecipientValues(input.recipient),
             subject: input.subject,
             body: input.body,
             provider: input.provider,
@@ -1405,6 +1406,9 @@ const communicationSelection = {
   channel: requestCommunications.channel,
   direction: requestCommunications.direction,
   recipient: requestCommunications.recipient,
+  recipientEncrypted: requestCommunications.recipientEncrypted,
+  recipientHash: requestCommunications.recipientHash,
+  encryptionVersion: requestCommunications.encryptionVersion,
   subject: requestCommunications.subject,
   body: requestCommunications.body,
   provider: requestCommunications.provider,
@@ -1421,6 +1425,15 @@ function requestIdentifierCondition(id: string) {
   return uuidPattern.test(id)
     ? or(eq(privacyRequests.id, id), eq(privacyRequests.publicId, id))
     : eq(privacyRequests.publicId, id);
+}
+
+function protectedRecipientValues(recipient: string) {
+  return {
+    recipient: null,
+    recipientEncrypted: encryptPii(recipient),
+    recipientHash: hashPii(recipient),
+    encryptionVersion: 1,
+  };
 }
 
 function isTerminalStatus(status: RequestStatus): boolean {

@@ -106,6 +106,13 @@
       "when": 1784249822002,
       "tag": "0014_talented_adam_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1784252752080,
+      "tag": "0015_slimy_justice",
+      "breakpoints": true
     }
   ]
 }

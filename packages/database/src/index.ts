@@ -7,6 +7,7 @@ export * from "./request-creation-store";
 export * from "./request-repository";
 export * from "./api-idempotency-store";
 export * from "./api-client-store";
+export * from "./pii-backfill";
 export * from "./schema";
 
 export type DatabaseHealth =

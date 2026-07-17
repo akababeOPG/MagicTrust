@@ -208,7 +208,7 @@ curl -X POST "http://localhost:3000/api/v1/requests/req_example/communications/e
   }'
 ```
 
-The response includes communication metadata only. It does not include provider secrets.
+The response includes communication metadata only. It returns `recipientMasked` instead of the plaintext recipient and does not include provider secrets, encrypted recipient values, or recipient hashes.
 
 ## `POST /api/v1/requests/:id/notifications`
 

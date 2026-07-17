@@ -59,6 +59,9 @@ async function insertPrivacyRequest(
       type: data.type,
       status: data.status,
       submittedData: data.submittedData,
+      submittedDataEncrypted: data.submittedDataEncrypted,
+      submittedDataHash: data.submittedDataHash,
+      encryptionVersion: data.encryptionVersion,
       mutableData: data.mutableData,
     })
     .returning({
@@ -68,6 +71,9 @@ async function insertPrivacyRequest(
       type: privacyRequests.type,
       status: privacyRequests.status,
       submittedData: privacyRequests.submittedData,
+      submittedDataEncrypted: privacyRequests.submittedDataEncrypted,
+      submittedDataHash: privacyRequests.submittedDataHash,
+      encryptionVersion: privacyRequests.encryptionVersion,
       mutableData: privacyRequests.mutableData,
       createdAt: privacyRequests.createdAt,
       updatedAt: privacyRequests.updatedAt,

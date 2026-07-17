@@ -14,7 +14,8 @@
     "test:e2e": "turbo test:e2e",
     "db:generate": "turbo db:generate",
     "db:migrate": "turbo db:migrate",
-    "api-client:create": "pnpm --filter @magictrust/database api-client:create"
+    "api-client:create": "pnpm --filter @magictrust/database api-client:create",
+    "pii:backfill": "pnpm --filter @magictrust/database pii:backfill"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.1",

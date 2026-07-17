@@ -86,6 +86,9 @@ export type PrivacyRequest = {
   type: RequestType;
   status: RequestStatus;
   submittedData: JsonObject;
+  submittedDataEncrypted: string | null;
+  submittedDataHash: string | null;
+  encryptionVersion: number | null;
   mutableData: JsonObject;
   createdAt: Date;
   updatedAt: Date;
@@ -135,7 +138,10 @@ export type RequestCommunication = {
   requestId: string;
   channel: CommunicationChannel;
   direction: CommunicationDirection;
-  recipient: string;
+  recipient: string | null;
+  recipientEncrypted: string | null;
+  recipientHash: string | null;
+  encryptionVersion: number | null;
   subject: string;
   body: string;
   provider: string;

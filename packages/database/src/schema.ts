@@ -122,6 +122,9 @@ export const privacyRequests = pgTable(
     type: requestTypeEnum("type").notNull(),
     status: requestStatusEnum("status").default("SUBMITTED").notNull(),
     submittedData: jsonb("submitted_data").notNull(),
+    submittedDataEncrypted: text("submitted_data_encrypted"),
+    submittedDataHash: text("submitted_data_hash"),
+    encryptionVersion: integer("encryption_version"),
     mutableData: jsonb("mutable_data").default({}).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -286,7 +289,10 @@ export const requestCommunications = pgTable(
       .references(() => privacyRequests.id, { onDelete: "restrict" }),
     channel: communicationChannelEnum("channel").notNull(),
     direction: communicationDirectionEnum("direction").notNull(),
-    recipient: text("recipient").notNull(),
+    recipient: text("recipient"),
+    recipientEncrypted: text("recipient_encrypted"),
+    recipientHash: text("recipient_hash"),
+    encryptionVersion: integer("encryption_version"),
     subject: text("subject").notNull(),
     body: text("body").notNull(),
     provider: varchar("provider", { length: 64 }).notNull(),

@@ -21,9 +21,11 @@ import type {
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
 import {
+  encryptPii,
   hashAccessSession,
   hashAccessToken,
   hashIdentityVerificationToken,
+  hashPii,
 } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { createElement } from "react";
@@ -133,11 +135,35 @@ describe("public request API", () => {
     expect(serialized).not.toContain("emailHash");
     expect(serialized).not.toContain("phoneEncrypted");
     expect(serialized).not.toContain("phoneHash");
+    expect(serialized).not.toContain("submittedDataEncrypted");
+    expect(serialized).not.toContain("submittedDataHash");
+    expect(serialized).not.toContain("encryptionVersion");
     expect(serialized).not.toContain("events");
     expect(serialized).not.toContain("comments");
     expect(serialized).not.toContain("attachments");
     expect(serialized).not.toContain("communications");
     expect(serialized).not.toContain("providerMessageId");
+    expect(dependencies.state.requests[0]?.submittedData).toEqual({
+      type: "DATA_ACCESS",
+      source: {
+        channel: "FORM",
+        formKey: "privacy-request",
+        siteKey: "magictrust-hosted",
+      },
+    });
+    expect(
+      JSON.stringify(dependencies.state.requests[0]?.submittedData),
+    ).not.toContain("john@example.com");
+    expect(
+      JSON.stringify(dependencies.state.requests[0]?.submittedData),
+    ).not.toContain("+13055551234");
+    expect(dependencies.state.requests[0]?.submittedDataEncrypted).toEqual(
+      expect.any(String),
+    );
+    expect(dependencies.state.requests[0]?.submittedDataHash).toEqual(
+      expect.any(String),
+    );
+    expect(dependencies.state.requests[0]?.encryptionVersion).toBe(1);
   });
 
   test("public APIs do not expose mutable data", async () => {
@@ -1474,7 +1500,10 @@ function createInMemoryDependencies(
         requestId: request.id,
         channel: "EMAIL",
         direction: "OUTBOUND",
-        recipient: input.recipient,
+        recipient: null,
+        recipientEncrypted: encryptPii(input.recipient),
+        recipientHash: hashPii(input.recipient),
+        encryptionVersion: 1,
         subject: input.subject,
         body: input.body,
         provider: input.provider,
@@ -1569,7 +1598,10 @@ function createInMemoryDependencies(
         requestId: request.id,
         channel: "EMAIL",
         direction: "OUTBOUND",
-        recipient: input.recipient,
+        recipient: null,
+        recipientEncrypted: encryptPii(input.recipient),
+        recipientHash: hashPii(input.recipient),
+        encryptionVersion: 1,
         subject: input.subject,
         body: input.body,
         provider: input.provider,

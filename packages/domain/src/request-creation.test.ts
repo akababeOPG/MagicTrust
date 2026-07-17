@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { decryptPii, hashPii } from "@magictrust/privacy";
+import { decryptPii, hashPii, hashSubmittedPayload } from "@magictrust/privacy";
 import { describe, expect, test } from "vitest";
 
 import {
   createPrivacyRequest,
+  decryptOriginalSubmittedData,
   generatePublicId,
   type CreatePrivacyRequestRecord,
   type CreateRequestEventRecord,
@@ -102,10 +103,19 @@ describe("createPrivacyRequest", () => {
     });
   });
 
-  test("keeps submitted_data separate from mutable_data", async () => {
+  test("stores only safe submitted_data metadata and keeps mutable_data separate", async () => {
     const store = createInMemoryStore();
     const submittedData: JsonObject = {
+      type: "GENERAL_INQUIRY",
+      source: {
+        channel: "FORM",
+        formKey: "privacy-request",
+        siteKey: "magictrust-hosted",
+        sourceUrl: "https://example.test/privacy?email=consumer@example.test",
+      },
       requester: {
+        firstName: "John",
+        lastName: "Doe",
         email: "consumer@example.test",
       },
       request: {
@@ -133,15 +143,87 @@ describe("createPrivacyRequest", () => {
     };
 
     expect(result.request.submittedData).toEqual({
-      requester: {
-        email: "consumer@example.test",
-      },
-      request: {
-        details: "Original request text",
+      type: "GENERAL_INQUIRY",
+      source: {
+        channel: "FORM",
+        formKey: "privacy-request",
+        siteKey: "magictrust-hosted",
       },
     });
+    expect(JSON.stringify(result.request.submittedData)).not.toContain(
+      "consumer@example.test",
+    );
+    expect(JSON.stringify(result.request.submittedData)).not.toContain(
+      "Original request text",
+    );
     expect(result.request.mutableData).toEqual({});
     expect(result.request.mutableData).not.toBe(result.request.submittedData);
+  });
+
+  test("encrypts and hashes the complete original submitted payload", async () => {
+    const store = createInMemoryStore();
+    const submittedData: JsonObject = {
+      type: "DATA_ACCESS",
+      source: {
+        channel: "API",
+        formKey: "manual-api",
+        siteKey: "test-site",
+        sourceUrl: "https://example.test/privacy?email=john@example.com",
+      },
+      requester: {
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        phone: "+13055551234",
+      },
+      submittedData: {
+        message: "I want to access my data",
+      },
+    };
+
+    const result = await createPrivacyRequest(
+      {
+        requester: {},
+        type: "DATA_ACCESS",
+        submittedData,
+        actor: {
+          type: "API_CLIENT",
+        },
+      },
+      store,
+      {
+        generatePublicId: () => "req_original_submission",
+      },
+    );
+
+    expect(result.request.submittedDataEncrypted).toEqual(expect.any(String));
+    expect(result.request.submittedDataEncrypted).not.toContain(
+      "john@example.com",
+    );
+    expect(result.request.submittedDataHash).toBe(
+      hashSubmittedPayload(submittedData),
+    );
+    expect(result.request.encryptionVersion).toBe(1);
+    expect(decryptOriginalSubmittedData(result.request)).toEqual(submittedData);
+  });
+
+  test("submitted_data_hash is deterministic for the same normalized payload", async () => {
+    const payloadA: JsonObject = {
+      b: "two",
+      a: {
+        second: 2,
+        first: 1,
+      },
+    };
+    const payloadB: JsonObject = {
+      a: {
+        first: 1,
+        second: 2,
+      },
+      b: "two",
+    };
+
+    expect(hashSubmittedPayload(payloadA)).toBe(hashSubmittedPayload(payloadB));
   });
 
   test("stores encrypted and hashed requester email and phone", async () => {

@@ -1518,7 +1518,7 @@ function normalizeCommunicationMetadata(communication: RequestCommunication) {
     requestId: communication.requestId,
     channel: communication.channel,
     direction: communication.direction,
-    recipient: communication.recipient,
+    recipientMasked: maskCommunicationRecipient(communication),
     subject: communication.subject,
     provider: communication.provider,
     providerMessageId: communication.providerMessageId,
@@ -1529,6 +1529,41 @@ function normalizeCommunicationMetadata(communication: RequestCommunication) {
     createdAt: communication.createdAt.toISOString(),
     sentAt: communication.sentAt?.toISOString() ?? null,
   };
+}
+
+function maskEmailAddress(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const [localPart, domain] = value.split("@");
+
+  if (!localPart || !domain) {
+    return "***";
+  }
+
+  const first = localPart[0] ?? "*";
+  const last = localPart.length > 1 ? localPart[localPart.length - 1] : "*";
+
+  return `${first}***${last}@${domain}`;
+}
+
+function maskCommunicationRecipient(
+  communication: RequestCommunication,
+): string | null {
+  if (communication.recipient) {
+    return maskEmailAddress(communication.recipient);
+  }
+
+  if (!communication.recipientEncrypted) {
+    return null;
+  }
+
+  try {
+    return maskEmailAddress(decryptPii(communication.recipientEncrypted));
+  } catch {
+    return null;
+  }
 }
 
 function emptyToUndefined(value: string | null): string | undefined {

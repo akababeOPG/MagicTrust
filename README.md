@@ -182,3 +182,16 @@ pnpm db:migrate
 ```
 
 `db:generate` creates SQL files in `packages/database/drizzle`. `db:migrate` applies those existing SQL files to the database configured by `DATABASE_URL_UNPOOLED`.
+
+## PII Backfill
+
+New request submissions store the complete original payload encrypted, with only a safe metadata snapshot in `submitted_data`. New communication rows store recipients encrypted and return only `recipientMasked` through Internal API responses.
+
+After applying the PII storage hardening migration, backfill legacy rows explicitly:
+
+```sh
+pnpm pii:backfill --dry-run
+pnpm pii:backfill --apply
+```
+
+The backfill requires `ENCRYPTION_KEY`, is idempotent, processes records in batches, and prints counts only.

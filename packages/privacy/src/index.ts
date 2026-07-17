@@ -54,6 +54,20 @@ export function hashPii(value: string): string {
     .digest("hex");
 }
 
+export function encryptSubmittedPayload(value: unknown): string {
+  return encryptPii(stableStringify(value));
+}
+
+export function decryptSubmittedPayload(value: string): unknown {
+  return JSON.parse(decryptPii(value));
+}
+
+export function hashSubmittedPayload(value: unknown): string {
+  return createHmac("sha256", deriveKey("submitted-payload"))
+    .update(stableStringify(value))
+    .digest("hex");
+}
+
 export function hashAccessToken(value: string): string {
   return createHmac("sha256", deriveKey("access-token"))
     .update(value)
@@ -86,10 +100,26 @@ function normalizePiiForHash(value: string): string {
     : normalizePhoneForHash(value);
 }
 
+export function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
 function deriveKey(
   purpose:
     | "encrypt"
     | "hash"
+    | "submitted-payload"
     | "access-token"
     | "access-session"
     | "identity-verification",
