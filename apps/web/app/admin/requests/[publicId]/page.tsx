@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { unstable_noStore as noStore } from "next/cache";
 import { notFound } from "next/navigation";
+import React from "react";
 
 import { requireAdminSession } from "@/lib/admin-auth";
 import {
@@ -26,6 +28,9 @@ const statusLabels = {
   CANCELLED: "Cancelled",
 } as const;
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function AdminRequestDetailPage({
   params,
   searchParams,
@@ -36,11 +41,14 @@ export default async function AdminRequestDetailPage({
     return null;
   }
 
+  noStore();
+
   const { publicId } = await params;
   const messages = await searchParams;
   const request = await getAdminRequestDetail(
     publicId,
     createAdminDashboardDependencies(),
+    session.role,
   );
 
   if (!request) {
@@ -125,6 +133,85 @@ export default async function AdminRequestDetailPage({
           </div>
         </dl>
       </section>
+
+      {request.requester && request.originalSubmission ? (
+        <>
+          <section className="admin-card" aria-labelledby="requester-heading">
+            <h2 id="requester-heading">Requester</h2>
+            <dl className="detail-grid">
+              <div>
+                <dt>First name</dt>
+                <dd>{request.requester.firstName ?? "Not provided"}</dd>
+              </div>
+              <div>
+                <dt>Last name</dt>
+                <dd>{request.requester.lastName ?? "Not provided"}</dd>
+              </div>
+              <div>
+                <dt>Email</dt>
+                <dd>{request.requester.email ?? "Not provided"}</dd>
+              </div>
+              <div>
+                <dt>Phone</dt>
+                <dd>{request.requester.phone ?? "Not provided"}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section
+            className="admin-card"
+            aria-labelledby="original-submission-heading"
+          >
+            <h2 id="original-submission-heading">Original Submission</h2>
+            <dl className="detail-grid">
+              <div>
+                <dt>Request type</dt>
+                <dd>{formatEnumLabel(request.originalSubmission.type)}</dd>
+              </div>
+              <div>
+                <dt>Source channel</dt>
+                <dd>
+                  {request.originalSubmission.source.channel ?? "Not provided"}
+                </dd>
+              </div>
+              <div>
+                <dt>Site key</dt>
+                <dd>
+                  {request.originalSubmission.source.siteKey ?? "Not provided"}
+                </dd>
+              </div>
+              <div>
+                <dt>Form key</dt>
+                <dd>
+                  {request.originalSubmission.source.formKey ?? "Not provided"}
+                </dd>
+              </div>
+              <div>
+                <dt>Source URL</dt>
+                <dd>
+                  {request.originalSubmission.source.sourceUrl ??
+                    "Not provided"}
+                </dd>
+              </div>
+            </dl>
+            <h3>Message</h3>
+            <p>{request.originalSubmission.message ?? "Not provided"}</p>
+            <h3>Additional submitted data</h3>
+            {Object.keys(request.originalSubmission.submittedData).length ===
+            0 ? (
+              <p>No additional submitted data was provided.</p>
+            ) : (
+              <pre className="json-panel">
+                {JSON.stringify(
+                  request.originalSubmission.submittedData,
+                  null,
+                  2,
+                )}
+              </pre>
+            )}
+          </section>
+        </>
+      ) : null}
 
       <section className="admin-card" aria-labelledby="actions-heading">
         <div>

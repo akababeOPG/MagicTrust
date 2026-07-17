@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import {
   createDatabase,
   createRequestRepository,
+  type AdminRequestSensitiveData,
   type ConsumerNotificationType,
   type RequestDetails,
   type RequestListFilters,
@@ -13,6 +14,7 @@ import {
 } from "@magictrust/database";
 import {
   commentVisibilities,
+  decryptOriginalSubmittedData,
   requestStatuses,
   requestTypes,
   type JsonObject,
@@ -65,6 +67,23 @@ export type AdminRequestListItem = {
 };
 
 export type AdminRequestDetailView = AdminRequestListItem & {
+  requester?: {
+    firstName: string | null;
+    lastName: string | null;
+    email: string | null;
+    phone: string | null;
+  };
+  originalSubmission?: {
+    type: RequestType;
+    source: {
+      channel: string | null;
+      siteKey: string | null;
+      formKey: string | null;
+      sourceUrl: string | null;
+    };
+    message: string | null;
+    submittedData: JsonObject;
+  };
   mutableData: JsonObject;
   timeline: Array<{
     id: string;
@@ -177,6 +196,45 @@ const sensitiveEventKeys = new Set([
   "sessiontokenhash",
   "requester",
 ]);
+const sensitiveSubmissionKeys = new Set([
+  "proto",
+  "prototype",
+  "constructor",
+  "firstname",
+  "lastname",
+  "email",
+  "phone",
+  "address",
+  "requester",
+  "token",
+  "accesstoken",
+  "refreshtoken",
+  "sessiontoken",
+  "cookie",
+  "cookies",
+  "credential",
+  "credentials",
+  "password",
+  "secret",
+  "apikey",
+  "authorization",
+  "encryptionkey",
+  "encryptionversion",
+  "encrypted",
+  "ciphertext",
+  "hash",
+  "id",
+  "requesterid",
+  "privacyrequestid",
+  "internalid",
+  "submitteddataencrypted",
+  "submitteddatahash",
+  "emailencrypted",
+  "emailhash",
+  "phoneencrypted",
+  "phonehash",
+  "nameencrypted",
+]);
 
 export function createAdminDashboardDependencies(): AdminDashboardDependencies {
   const databaseUrl = getRequiredDatabaseUrl();
@@ -227,11 +285,32 @@ export async function listAdminRequests(
 export async function getAdminRequestDetail(
   publicId: string,
   dependencies: AdminDashboardDependencies,
+  role: AdminSession["role"] = "VIEWER",
 ): Promise<AdminRequestDetailView | null> {
   const request =
     await dependencies.requestRepository.findByIdOrPublicId(publicId);
 
-  return request ? normalizeAdminRequestDetail(request) : null;
+  if (!request) {
+    return null;
+  }
+
+  const detail = normalizeAdminRequestDetail(request);
+
+  if (role !== "ADMIN" && role !== "OPERATOR") {
+    return detail;
+  }
+
+  const sensitive =
+    await dependencies.requestRepository.findAdminSensitiveData(publicId);
+
+  if (!sensitive || sensitive.requestId !== request.id) {
+    return detail;
+  }
+
+  return {
+    ...detail,
+    ...normalizeAdminSensitiveRequestData(request, sensitive),
+  };
 }
 
 export async function downloadAdminAttachment(
@@ -1077,6 +1156,196 @@ export function normalizeAdminRequestDetail(
   };
 }
 
+function normalizeAdminSensitiveRequestData(
+  request: RequestDetails,
+  sensitive: AdminRequestSensitiveData,
+): Pick<AdminRequestDetailView, "requester" | "originalSubmission"> {
+  const original = safelyDecryptOriginalSubmission(
+    sensitive.submittedDataEncrypted,
+  );
+  const originalRequester = jsonObjectValue(original?.requester);
+  const originalSource = jsonObjectValue(original?.source);
+  const originalSubmittedData = jsonObjectValue(original?.submittedData);
+  const encryptedName = safelyDecryptRequesterName(
+    sensitive.requesterNameEncrypted,
+  );
+
+  return {
+    requester: {
+      firstName:
+        stringValue(originalRequester?.firstName) ??
+        encryptedName?.firstName ??
+        null,
+      lastName:
+        stringValue(originalRequester?.lastName) ??
+        encryptedName?.lastName ??
+        null,
+      email:
+        safelyDecryptPii(sensitive.requesterEmailEncrypted) ??
+        stringValue(originalRequester?.email),
+      phone:
+        safelyDecryptPii(sensitive.requesterPhoneEncrypted) ??
+        stringValue(originalRequester?.phone),
+    },
+    originalSubmission: {
+      type: requestTypes.includes(original?.type as RequestType)
+        ? (original?.type as RequestType)
+        : request.type,
+      source: {
+        channel:
+          stringValue(originalSource?.channel) ??
+          request.source?.channel ??
+          null,
+        siteKey:
+          stringValue(originalSource?.siteKey) ??
+          request.source?.siteKey ??
+          null,
+        formKey:
+          stringValue(originalSource?.formKey) ??
+          request.source?.formKey ??
+          null,
+        sourceUrl: sanitizeOriginalSourceUrl(
+          stringValue(originalSource?.sourceUrl),
+        ),
+      },
+      message: stringValue(originalSubmittedData?.message),
+      submittedData: sanitizeOriginalSubmittedData(originalSubmittedData),
+    },
+  };
+}
+
+function safelyDecryptOriginalSubmission(
+  submittedDataEncrypted: string | null,
+): JsonObject | null {
+  try {
+    return decryptOriginalSubmittedData({ submittedDataEncrypted });
+  } catch {
+    return null;
+  }
+}
+
+function safelyDecryptPii(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return decryptPii(value);
+  } catch {
+    return null;
+  }
+}
+
+function safelyDecryptRequesterName(
+  value: string | null,
+): { firstName: string | null; lastName: string | null } | null {
+  const decrypted = safelyDecryptPii(value);
+
+  if (!decrypted) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(decrypted) as unknown;
+    const name = jsonObjectValue(parsed);
+
+    return name
+      ? {
+          firstName: stringValue(name.firstName),
+          lastName: stringValue(name.lastName),
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeOriginalSourceUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return null;
+    }
+
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeOriginalSubmittedData(value: JsonObject | null): JsonObject {
+  if (!value) {
+    return {};
+  }
+
+  const sanitized = sanitizeOriginalSubmissionValue(value, "submittedData");
+
+  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) {
+    return {};
+  }
+
+  delete sanitized.message;
+
+  return sanitized;
+}
+
+function sanitizeOriginalSubmissionValue(
+  value: JsonValue,
+  key: string,
+): JsonValue | undefined {
+  if (isSensitiveSubmissionKey(key)) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeOriginalSubmissionValue(item, "item"))
+      .filter((item): item is JsonValue => item !== undefined);
+  }
+
+  if (value && typeof value === "object") {
+    const output: JsonObject = {};
+
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const sanitized = sanitizeOriginalSubmissionValue(childValue, childKey);
+
+      if (sanitized !== undefined) {
+        output[childKey] = sanitized;
+      }
+    }
+
+    return output;
+  }
+
+  return value;
+}
+
+function isSensitiveSubmissionKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  return (
+    sensitiveSubmissionKeys.has(normalized) ||
+    /(?:token|tokens|cookie|cookies|credential|credentials|password|secret|apikey|authorization|encryptionkey|encrypted|ciphertext|hash)$/.test(
+      normalized,
+    )
+  );
+}
+
+function jsonObjectValue(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
+function stringValue(value: JsonValue | undefined): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function normalizeAdminRequestList(
   result: RequestListResult,
   limit: number,
@@ -1498,6 +1767,9 @@ function notFoundResponse(): Response {
 function missingDatabaseRequestRepository(): RequestRepository {
   return {
     findByIdOrPublicId() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    findAdminSensitiveData() {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     list() {

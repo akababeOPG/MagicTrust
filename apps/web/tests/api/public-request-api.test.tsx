@@ -1401,6 +1401,9 @@ function createInMemoryDependencies(
   };
 
   const requestRepository: RequestRepository = {
+    async findAdminSensitiveData() {
+      return null;
+    },
     async findByIdOrPublicId(id): Promise<RequestDetails | null> {
       const request = state.requests.find(
         (item) => item.id === id || item.publicId === id,

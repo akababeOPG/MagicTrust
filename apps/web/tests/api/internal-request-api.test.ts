@@ -617,6 +617,7 @@ describe("internal request API", () => {
       created.request.publicId,
     );
     const body = await response.json();
+    const serialized = JSON.stringify(body);
 
     expect(response.status).toBe(200);
     expect(body.request).toMatchObject({
@@ -629,6 +630,14 @@ describe("internal request API", () => {
         },
       ],
     });
+    expect(serialized).not.toContain("John");
+    expect(serialized).not.toContain("Doe");
+    expect(serialized).not.toContain("john@example.com");
+    expect(serialized).not.toContain("+13055551234");
+    expect(serialized).not.toContain("I want to access my data");
+    expect(serialized).not.toContain("submittedDataEncrypted");
+    expect(serialized).not.toContain("submittedDataHash");
+    expect(serialized).not.toContain("encryptionVersion");
   });
 
   test("lists requests newest first with filters", async () => {
@@ -2812,6 +2821,9 @@ function createInMemoryDependencies(
   };
 
   const requestRepository: RequestRepository = {
+    async findAdminSensitiveData() {
+      return null;
+    },
     async findByIdOrPublicId(id: string): Promise<RequestDetails | null> {
       const request = state.requests.find(
         (item) => item.id === id || item.publicId === id,

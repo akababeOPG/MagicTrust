@@ -71,6 +71,14 @@ export type RequestDetails = RequestSummary & {
   communications: RequestCommunication[];
 };
 
+export type AdminRequestSensitiveData = {
+  requestId: string;
+  requesterEmailEncrypted: string | null;
+  requesterPhoneEncrypted: string | null;
+  requesterNameEncrypted: string | null;
+  submittedDataEncrypted: string | null;
+};
+
 export type ConsumerAccessLinkTarget = RequestSummary & {
   requesterEmailEncrypted: string | null;
 };
@@ -112,6 +120,9 @@ export type RequestListResult = {
 
 export type RequestRepository = {
   findByIdOrPublicId(id: string): Promise<RequestDetails | null>;
+  findAdminSensitiveData(
+    publicId: string,
+  ): Promise<AdminRequestSensitiveData | null>;
   findConsumerAccessLinkTarget(
     publicId: string,
   ): Promise<ConsumerAccessLinkTarget | null>;
@@ -466,6 +477,22 @@ export function createRequestRepository(db: Database): RequestRepository {
         communications,
         mutableData: request.mutableData as JsonObject,
       };
+    },
+    async findAdminSensitiveData(publicId) {
+      const [request] = await db
+        .select({
+          requestId: privacyRequests.id,
+          requesterEmailEncrypted: requesters.emailEncrypted,
+          requesterPhoneEncrypted: requesters.phoneEncrypted,
+          requesterNameEncrypted: requesters.nameEncrypted,
+          submittedDataEncrypted: privacyRequests.submittedDataEncrypted,
+        })
+        .from(privacyRequests)
+        .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
+        .where(eq(privacyRequests.publicId, publicId))
+        .limit(1);
+
+      return request ?? null;
     },
     async findConsumerAccessLinkTarget(publicId) {
       const [request] = await db

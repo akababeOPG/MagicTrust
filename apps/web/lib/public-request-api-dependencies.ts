@@ -23,6 +23,9 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         findByIdOrPublicId() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        findAdminSensitiveData() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         list() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },

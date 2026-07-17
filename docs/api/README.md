@@ -342,7 +342,7 @@ The read-only admin dashboard is available at:
 GET /admin/requests
 ```
 
-All admin dashboard pages and admin download routes require a valid admin session from `requireAdminSession()`. The browser never receives Internal API keys, API client keys, encryption keys, ciphertext, hashes, raw requester PII, storage keys, access tokens, sessions, or idempotency records.
+All admin dashboard pages and admin download routes require a valid admin session from `requireAdminSession()`. The browser never receives Internal API keys, API client keys, encryption keys, ciphertext, hashes, storage keys, access tokens, sessions, or idempotency records. Requester identity and original submission data are available only on the request detail page to authenticated `ADMIN` and `OPERATOR` users.
 
 Allowed roles:
 
@@ -376,7 +376,7 @@ Request detail pages are available at:
 GET /admin/requests/:publicId
 ```
 
-They display request summary, safe source metadata, mutable data, timeline, comments, attachment metadata, and communication metadata. Communications show `recipientMasked` only. Attachments include an admin-authenticated download action:
+They display request summary, safe source metadata, mutable data, timeline, comments, attachment metadata, and communication metadata. For `ADMIN` and `OPERATOR`, the detail page also displays a Requester section and a sanitized Original Submission section so authorized staff can process the request. Communications show `recipientMasked` only. Attachments include an admin-authenticated download action:
 
 ```text
 GET /admin/requests/:publicId/attachments/:attachmentId/download
@@ -384,7 +384,11 @@ GET /admin/requests/:publicId/attachments/:attachmentId/download
 
 Admin downloads stream private storage through MagicTrust, verify that the attachment belongs to the request, and audit successful downloads with `ADMIN_ATTACHMENT_DOWNLOADED` using `actorType: ADMIN_USER`.
 
-The dashboard list and detail views are read-only for `VIEWER` users. This version does not support attachment deletion, bulk uploads, analytics, CSV exports, bulk actions, user management, API client management, or requester PII decryption/display.
+Requester email, phone, and the encrypted original payload are decrypted exclusively in server-only code after role authorization. `VIEWER` users never trigger the sensitive-data query or decryption and never receive requester identity or original submission content. The Original Submission section removes requester/contact duplicates, dangerous object keys, tokens, cookies, credentials, encryption metadata, hashes, and internal database fields from additional JSON. Source URL query parameters and fragments are removed.
+
+Admin request detail responses are dynamic and use `Cache-Control: private, no-store, max-age=0`. Consumer-provided text is rendered as text, never interpreted as HTML. Ciphertext, hashes, encryption versions, and encryption keys are never rendered.
+
+The dashboard list and detail views remain read-only for `VIEWER` users. This version does not support requester data editing or exports, attachment deletion, bulk uploads, analytics, CSV exports, bulk actions, user management, or API client management.
 
 ## Admin Request Actions
 
@@ -455,7 +459,7 @@ Sending a notification creates an encrypted-recipient communication record and e
 
 Upload and notification are separate actions: uploading a file does not notify the consumer, and sending a notification does not change request status or add comments automatically.
 
-Mutable data updates require a JSON object and a trimmed reason of 1-2,000 characters. The operation merges incoming keys into `mutable_data` and preserves omitted keys. It does not replace the entire object and does not delete keys. The original submitted request payload remains immutable; the admin dashboard never edits or exposes `submitted_data_encrypted`, requester PII, hashes, ciphertext, or decrypted original submissions.
+Mutable data updates require a JSON object and a trimmed reason of 1-2,000 characters. The operation merges incoming keys into `mutable_data` and preserves omitted keys. It does not replace the entire object and does not delete keys. The original submitted request payload remains immutable. Authorized `ADMIN` and `OPERATOR` users may view its sanitized decrypted content, but the dashboard never edits it or exposes `submitted_data_encrypted`, hashes, ciphertext, or encryption metadata.
 
 Mutable data JSON must be an object, not an array, cannot contain `__proto__`, `prototype`, or `constructor` anywhere in the structure, and is limited to 32 KB when serialized. The `REQUEST_DATA_UPDATED` audit event contains only `changedKeys`, the safe reason, and `ADMIN_USER` actor metadata. It does not store previous values, new values, requester PII, encrypted values, tokens, cookies, hashes, or API keys.
 
@@ -465,7 +469,7 @@ Custom events require an event type, visibility, and optional JSON object data. 
 
 Mutable data updates and custom events use minimal duplicate-submission protection for identical browser retries. They do not change request status, create comments, or send consumer email notifications automatically.
 
-This version does not add deleting mutable data keys, replacing the full mutable data object, submitted data editing, attachment deletion, bulk uploads, SMS, automatic workflows, webhooks, email template UI, admin user management, API client management, analytics, or requester PII display.
+This version does not add deleting mutable data keys, replacing the full mutable data object, submitted data editing, requester data editing or exports, attachment deletion, bulk uploads, SMS, automatic workflows, email template UI, admin user management, API client management, or analytics.
 
 ## `GET /api/v1/requests`
 

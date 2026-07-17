@@ -41,6 +41,11 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
             "DATABASE_URL is required for internal request APIs.",
           );
         },
+        findAdminSensitiveData() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
         list() {
           throw new Error(
             "DATABASE_URL is required for internal request APIs.",

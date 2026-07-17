@@ -13,7 +13,11 @@ import type {
   RequestRepository,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { encryptPii, hashAccessToken } from "@magictrust/privacy";
+import {
+  encryptPii,
+  encryptSubmittedPayload,
+  hashAccessToken,
+} from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test, vi } from "vitest";
 
@@ -136,6 +140,79 @@ describe("admin dashboard", () => {
     expect(serialized).not.toContain("checksum");
     expect(serialized).not.toContain("manual/data-export.json");
     expect(serialized).not.toContain("john@example.com");
+  });
+
+  test.each(["ADMIN", "OPERATOR"] as const)(
+    "%s can view requester identity and the original submission",
+    async (role) => {
+      const dependencies = createInMemoryDependencies();
+      const detail = await getAdminRequestDetail("req_one", dependencies, role);
+
+      expect(detail?.requester).toEqual({
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        phone: "+13055551234",
+      });
+      expect(detail?.originalSubmission).toMatchObject({
+        type: "DATA_ACCESS",
+        source: {
+          channel: "API",
+          siteKey: "test-site",
+          formKey: "manual-api",
+          sourceUrl: "https://example.com/privacy",
+        },
+        message: '<script>alert("unsafe")</script> Please process this.',
+        submittedData: {
+          processorReference: "job-12345",
+          nested: { safe: true },
+        },
+      });
+      expect(dependencies.state.sensitiveReads).toBe(1);
+    },
+  );
+
+  test("VIEWER does not load or decrypt requester identity", async () => {
+    const dependencies = createInMemoryDependencies();
+    const detail = await getAdminRequestDetail(
+      "req_one",
+      dependencies,
+      "VIEWER",
+    );
+
+    expect(detail).not.toHaveProperty("requester");
+    expect(detail).not.toHaveProperty("originalSubmission");
+    expect(dependencies.state.sensitiveReads).toBe(0);
+  });
+
+  test("sensitive admin view excludes ciphertext and unsafe submitted fields", async () => {
+    const dependencies = createInMemoryDependencies();
+    const detail = await getAdminRequestDetail(
+      "req_one",
+      dependencies,
+      "ADMIN",
+    );
+    const serialized = JSON.stringify(detail);
+
+    expect(serialized).not.toContain("submittedDataEncrypted");
+    expect(serialized).not.toContain("submittedDataHash");
+    expect(serialized).not.toContain("encryptionVersion");
+    expect(serialized).not.toContain("emailEncrypted");
+    expect(serialized).not.toContain("emailHash");
+    expect(serialized).not.toContain("must-not-render");
+    expect(serialized).not.toContain("duplicate@example.com");
+    expect(serialized).not.toContain("private-token");
+  });
+
+  test("viewing sensitive request detail does not modify the request", async () => {
+    const dependencies = createInMemoryDependencies();
+    const before = JSON.stringify(dependencies.state.requests);
+    const eventCount = dependencies.state.events.length;
+
+    await getAdminRequestDetail("req_one", dependencies, "ADMIN");
+
+    expect(JSON.stringify(dependencies.state.requests)).toBe(before);
+    expect(dependencies.state.events).toHaveLength(eventCount);
   });
 
   test("mutable data and timeline render through sanitized detail", async () => {
@@ -1332,7 +1409,31 @@ function createInMemoryDependencies(
           formKey: "manual-api",
         },
       },
-      submittedDataEncrypted: "encrypted-submission",
+      submittedDataEncrypted: encryptSubmittedPayload({
+        type: "DATA_ACCESS",
+        requester: {
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+          phone: "+13055551234",
+        },
+        source: {
+          channel: "API",
+          siteKey: "test-site",
+          formKey: "manual-api",
+          sourceUrl: "https://example.com/privacy?token=private-token#consumer",
+        },
+        submittedData: {
+          message: '<script>alert("unsafe")</script> Please process this.',
+          processorReference: "job-12345",
+          email: "duplicate@example.com",
+          accessToken: "must-not-render",
+          nested: {
+            safe: true,
+            password: "must-not-render",
+          },
+        },
+      }),
       submittedDataHash: "submission-hash",
       encryptionVersion: 1,
       mutableData: {
@@ -1445,6 +1546,7 @@ function createInMemoryDependencies(
     attachments,
     communications,
     accessTokens,
+    sensitiveReads: 0,
     uploadedFiles: [] as Array<{
       storageKey: string;
       contentType: string;
@@ -1496,6 +1598,22 @@ function createInMemoryDependencies(
         communications: communications.filter(
           (communication) => communication.requestId === request.id,
         ),
+      };
+    },
+    async findAdminSensitiveData(publicId) {
+      state.sensitiveReads += 1;
+      const request = requests.find((item) => item.publicId === publicId);
+
+      if (!request) {
+        return null;
+      }
+
+      return {
+        requestId: request.id,
+        requesterEmailEncrypted: encryptPii("john@example.com"),
+        requesterPhoneEncrypted: encryptPii("+13055551234"),
+        requesterNameEncrypted: null,
+        submittedDataEncrypted: request.submittedDataEncrypted,
       };
     },
     async list(filters: RequestListFilters) {
