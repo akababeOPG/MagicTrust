@@ -12,12 +12,20 @@ import type {
   Requester,
 } from "@magictrust/domain";
 import type {
+  ApiClientScope,
+  AuthenticatedApiClient,
   ApiIdempotencyRecord,
   ApiIdempotencyStore,
   RequestDetails,
   RequestListFilters,
   RequestRepository,
   RequestSummary,
+} from "@magictrust/database";
+import {
+  apiClientScopesList,
+  getApiKeyPrefix,
+  hashApiKey,
+  verifyApiKey,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
 import { hashAccessToken } from "@magictrust/privacy";
@@ -26,7 +34,9 @@ import { describe, expect, test } from "vitest";
 
 import { createInternalRequestApi } from "../../lib/internal-request-api";
 
-const apiKey = "test-internal-api-key";
+const apiKey = "mt_live_test-internal-api-key";
+const legacyApiKey = "test-internal-api-key";
+const apiClientId = "privacy-processor";
 let idempotencyCounter = 1;
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-web-api";
 
@@ -46,6 +56,154 @@ describe("internal request API", () => {
 
     expect(missing.status).toBe(401);
     expect(invalid.status).toBe(401);
+  });
+
+  test("authenticates a valid database-backed API client key", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+
+    const response = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(dependencies.state.apiClientKey.lastUsedAt).toBeInstanceOf(Date);
+  });
+
+  test("rejects expired API client keys", async () => {
+    const api = createInternalRequestApi(
+      createInMemoryDependencies({
+        keyExpiresAt: new Date(Date.now() - 60_000),
+      }),
+    );
+
+    const response = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("rejects inactive API clients and keys", async () => {
+    const inactiveClientApi = createInternalRequestApi(
+      createInMemoryDependencies({ clientActive: false }),
+    );
+    const inactiveKeyApi = createInternalRequestApi(
+      createInMemoryDependencies({ keyActive: false }),
+    );
+
+    const inactiveClientResponse = await inactiveClientApi.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+    const inactiveKeyResponse = await inactiveKeyApi.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+
+    expect(inactiveClientResponse.status).toBe(401);
+    expect(inactiveKeyResponse.status).toBe(401);
+  });
+
+  test("returns 403 when an API client is missing a required scope", async () => {
+    const api = createInternalRequestApi(
+      createInMemoryDependencies({ scopes: ["requests:read"] }),
+    );
+
+    const response = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        body: JSON.stringify(validCreateRequestBody()),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  test("allows API clients with the authorized scope", async () => {
+    const api = createInternalRequestApi(
+      createInMemoryDependencies({ scopes: ["requests:read"] }),
+    );
+
+    const response = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  test("does not store raw API keys", () => {
+    const dependencies = createInMemoryDependencies();
+
+    expect(dependencies.state.apiClientKey.keyHash).not.toBe(apiKey);
+    expect(dependencies.state.apiClientKey.keyHash).toBe(hashApiKey(apiKey));
+  });
+
+  test("derives API_CLIENT actorId from the authenticated API client", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    await api.updateStatus(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/status`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...validStatusUpdateBody(),
+            actor: {
+              type: "API_CLIENT",
+              id: "spoofed-client",
+            },
+          }),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "STATUS_CHANGED",
+          actorId: apiClientId,
+        }),
+      ]),
+    );
+  });
+
+  test("legacy INTERNAL_API_KEY works outside production", async () => {
+    const api = createInternalRequestApi(
+      createInMemoryDependencies({ dbKeyEnabled: false }),
+    );
+
+    const response = await api.list(
+      new Request("https://magictrust.test/api/v1/requests", {
+        headers: {
+          "x-api-key": legacyApiKey,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  test("legacy INTERNAL_API_KEY is rejected in production", async () => {
+    const api = createInternalRequestApi(
+      createInMemoryDependencies({
+        appEnv: "production",
+        dbKeyEnabled: false,
+      }),
+    );
+
+    const response = await api.list(
+      new Request("https://magictrust.test/api/v1/requests", {
+        headers: {
+          "x-api-key": legacyApiKey,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(401);
   });
 
   test("requires Idempotency-Key on protected mutations", async () => {
@@ -2191,10 +2349,31 @@ async function createUploadedAttachment(
 function createInMemoryDependencies(
   options: {
     emailShouldFail?: boolean;
+    appEnv?: string;
+    clientActive?: boolean;
+    dbKeyEnabled?: boolean;
+    keyActive?: boolean;
+    keyExpiresAt?: Date | null;
+    scopes?: ApiClientScope[];
   } = {},
 ) {
+  const apiClientKey = {
+    keyPrefix: getApiKeyPrefix(apiKey),
+    keyHash: hashApiKey(apiKey),
+    active: options.keyActive ?? true,
+    expiresAt: options.keyExpiresAt ?? null,
+    lastUsedAt: null as Date | null,
+  };
+  const apiClient = {
+    id: apiClientId,
+    name: "Privacy Processor",
+    active: options.clientActive ?? true,
+    scopes: options.scopes ?? [...apiClientScopesList],
+  };
   const state = {
     nextId: 1,
+    apiClient,
+    apiClientKey,
     requesters: [] as Requester[],
     requesterEmailEncrypted: new Map<string, string | null>(),
     requests: [] as PrivacyRequest[],
@@ -2778,7 +2957,41 @@ function createInMemoryDependencies(
   };
 
   return {
-    apiKey,
+    apiKey: legacyApiKey,
+    apiClientStore: {
+      async authenticateApiKey(
+        rawKey: string,
+      ): Promise<AuthenticatedApiClient | null> {
+        if (options.dbKeyEnabled === false) {
+          return null;
+        }
+
+        if (!apiClient.active || !apiClientKey.active) {
+          return null;
+        }
+
+        if (apiClientKey.expiresAt && apiClientKey.expiresAt <= new Date()) {
+          return null;
+        }
+
+        if (
+          getApiKeyPrefix(rawKey) !== apiClientKey.keyPrefix ||
+          !verifyApiKey(rawKey, apiClientKey.keyHash)
+        ) {
+          return null;
+        }
+
+        apiClientKey.lastUsedAt = new Date();
+
+        return {
+          id: apiClient.id,
+          name: apiClient.name,
+          keyId: "api-client-key-1",
+          scopes: apiClient.scopes,
+        };
+      },
+    },
+    appEnv: options.appEnv ?? "development",
     requestCreationStore: creationStore,
     requestRepository,
     idempotencyStore: {

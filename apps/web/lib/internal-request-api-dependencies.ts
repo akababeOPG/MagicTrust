@@ -1,10 +1,12 @@
 import {
+  getAppEnv,
   getAppBaseUrl,
   getInternalApiKey,
   getRequiredDatabaseUrl,
 } from "@magictrust/config";
 import {
   createDatabase,
+  createApiClientStore,
   createApiIdempotencyStore,
   createRequestCreationStore,
   createRequestRepository,
@@ -20,6 +22,12 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
   if (!databaseUrl) {
     return {
       apiKey: getInternalApiKey(),
+      apiClientStore: {
+        authenticateApiKey() {
+          return Promise.resolve(null);
+        },
+      },
+      appEnv: getAppEnv(),
       requestCreationStore: {
         transaction() {
           throw new Error(
@@ -171,6 +179,8 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
 
   return {
     apiKey: getInternalApiKey(),
+    apiClientStore: createApiClientStore(db),
+    appEnv: getAppEnv(),
     requestCreationStore: createRequestCreationStore(db),
     requestRepository: createRequestRepository(db),
     idempotencyStore: createApiIdempotencyStore(db),

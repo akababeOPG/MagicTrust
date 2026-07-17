@@ -1,10 +1,12 @@
 import { relations } from "drizzle-orm";
 import {
+  boolean,
   integer,
   index,
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -164,6 +166,61 @@ export const apiIdempotencyRecords = pgTable(
     expiresAtIdx: index("api_idempotency_records_expires_at_idx").on(
       table.expiresAt,
     ),
+  }),
+);
+
+export const apiClients = pgTable(
+  "api_clients",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    activeIdx: index("api_clients_active_idx").on(table.active),
+  }),
+);
+
+export const apiClientKeys = pgTable(
+  "api_client_keys",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    apiClientId: uuid("api_client_id")
+      .notNull()
+      .references(() => apiClients.id, { onDelete: "restrict" }),
+    keyPrefix: varchar("key_prefix", { length: 32 }).notNull(),
+    keyHash: text("key_hash").notNull(),
+    active: boolean("active").default(true).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (table) => ({
+    keyPrefixIdx: index("api_client_keys_key_prefix_idx").on(table.keyPrefix),
+    apiClientIdIdx: index("api_client_keys_api_client_id_idx").on(
+      table.apiClientId,
+    ),
+  }),
+);
+
+export const apiClientScopes = pgTable(
+  "api_client_scopes",
+  {
+    apiClientId: uuid("api_client_id")
+      .notNull()
+      .references(() => apiClients.id, { onDelete: "restrict" }),
+    scope: varchar("scope", { length: 64 }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.apiClientId, table.scope] }),
   }),
 );
 
@@ -356,6 +413,28 @@ export const requestEvents = pgTable(
 export const requestersRelations = relations(requesters, ({ many }) => ({
   privacyRequests: many(privacyRequests),
 }));
+
+export const apiClientsRelations = relations(apiClients, ({ many }) => ({
+  keys: many(apiClientKeys),
+  scopes: many(apiClientScopes),
+}));
+
+export const apiClientKeysRelations = relations(apiClientKeys, ({ one }) => ({
+  apiClient: one(apiClients, {
+    fields: [apiClientKeys.apiClientId],
+    references: [apiClients.id],
+  }),
+}));
+
+export const apiClientScopesRelations = relations(
+  apiClientScopes,
+  ({ one }) => ({
+    apiClient: one(apiClients, {
+      fields: [apiClientScopes.apiClientId],
+      references: [apiClients.id],
+    }),
+  }),
+);
 
 export const privacyRequestsRelations = relations(
   privacyRequests,

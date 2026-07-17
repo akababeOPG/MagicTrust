@@ -16,6 +16,9 @@ import type {
   RequestType,
 } from "@magictrust/domain";
 import type {
+  ApiClientScope,
+  ApiClientStore,
+  AuthenticatedApiClient,
   ApiIdempotencyStore,
   RequestRepository,
 } from "@magictrust/database";
@@ -28,6 +31,8 @@ import { authenticateInternalApiRequest } from "./internal-api-auth";
 
 export type InternalRequestApiDependencies = {
   apiKey: string | null;
+  apiClientStore: ApiClientStore;
+  appEnv: string;
   requestCreationStore: RequestCreationStore;
   requestRepository: RequestRepository;
   idempotencyStore: ApiIdempotencyStore;
@@ -175,7 +180,6 @@ const downloadAttachmentQuerySchema = z.object({
   actorId: z.string().min(1).max(128).default("internal-api"),
 });
 
-const internalApiClientId = "internal-api";
 const idempotencyTtlMs = 24 * 60 * 60 * 1000;
 
 export function createInternalRequestApi(
@@ -183,28 +187,26 @@ export function createInternalRequestApi(
 ) {
   return {
     async create(request: Request): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "requests:create");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        createRequest(preparedRequest, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          createRequest(preparedRequest, dependencies, auth.apiClient),
       );
     },
 
     async get(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "requests:read");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
       let result;
@@ -275,13 +277,10 @@ export function createInternalRequestApi(
     },
 
     async list(request: Request): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "requests:read");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
       const url = new URL(request.url);
@@ -311,92 +310,98 @@ export function createInternalRequestApi(
     },
 
     async updateStatus(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "requests:update");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        updateStatus(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          updateStatus(preparedRequest, id, dependencies, auth.apiClient),
       );
     },
 
     async updateMutableData(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "requests:update");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        updateMutableData(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          updateMutableData(preparedRequest, id, dependencies, auth.apiClient),
       );
     },
 
     async addCustomEvent(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "events:write");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        addCustomEvent(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          addCustomEvent(preparedRequest, id, dependencies, auth.apiClient),
       );
     },
 
     async addComment(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "comments:write");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        addComment(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          addComment(preparedRequest, id, dependencies, auth.apiClient),
       );
     },
 
     async addAttachment(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "attachments:write");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        addAttachment(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          addAttachment(preparedRequest, id, dependencies, auth.apiClient),
       );
     },
 
     async uploadAttachment(request: Request, id: string): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "attachments:write");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        uploadAttachment(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          uploadAttachment(preparedRequest, id, dependencies, auth.apiClient),
       );
     },
 
@@ -405,13 +410,10 @@ export function createInternalRequestApi(
       requestId: string,
       attachmentId: string,
     ): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
-      );
+      const auth = await authorize(request, dependencies, "attachments:read");
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
       const url = new URL(request.url);
@@ -466,7 +468,7 @@ export function createInternalRequestApi(
             attachmentId: attachment.id,
             fileName: attachment.fileName,
             storageProvider: attachment.storageProvider,
-            actorId: parsed.data.actorId,
+            actorId: auth.apiClient.id,
           },
         );
 
@@ -489,17 +491,27 @@ export function createInternalRequestApi(
       request: Request,
       id: string,
     ): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
+      const auth = await authorize(
+        request,
+        dependencies,
+        "communications:write",
       );
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        sendEmailCommunication(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          sendEmailCommunication(
+            preparedRequest,
+            id,
+            dependencies,
+            auth.apiClient,
+          ),
       );
     },
 
@@ -507,25 +519,59 @@ export function createInternalRequestApi(
       request: Request,
       id: string,
     ): Promise<Response> {
-      const unauthorized = authenticateInternalApiRequest(
-        request.headers,
-        dependencies.apiKey,
+      const auth = await authorize(
+        request,
+        dependencies,
+        "notifications:write",
       );
 
-      if (unauthorized) {
-        return unauthorized;
+      if (auth.response) {
+        return auth.response;
       }
 
-      return withIdempotency(request, dependencies, (preparedRequest) =>
-        sendConsumerNotification(preparedRequest, id, dependencies),
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          sendConsumerNotification(
+            preparedRequest,
+            id,
+            dependencies,
+            auth.apiClient,
+          ),
       );
     },
   };
 }
 
+async function authorize(
+  request: Request,
+  dependencies: InternalRequestApiDependencies,
+  scope: ApiClientScope,
+) {
+  return authenticateInternalApiRequest(request.headers, dependencies, scope);
+}
+
+function actorIdFor(
+  actor: { type: string; id?: string | null },
+  apiClient: AuthenticatedApiClient,
+): string | null {
+  return actor.type === "API_CLIENT" ? apiClient.id : (actor.id ?? null);
+}
+
+function actorIdForFields(
+  actorType: string,
+  actorId: string | null,
+  apiClient: AuthenticatedApiClient,
+): string | null {
+  return actorType === "API_CLIENT" ? apiClient.id : actorId;
+}
+
 async function createRequest(
   request: Request,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   const parsed = createRequestSchema.safeParse(body);
@@ -545,7 +591,7 @@ async function createRequest(
         submittedData: parsed.data,
         actor: {
           type: "API_CLIENT",
-          id: parsed.data.source.siteKey,
+          id: apiClient.id,
         },
       },
       dependencies.requestCreationStore,
@@ -568,6 +614,7 @@ async function updateStatus(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   const parsed = updateStatusSchema.safeParse(body);
@@ -582,7 +629,7 @@ async function updateStatus(
       {
         status: parsed.data.status,
         actorType: parsed.data.actor.type,
-        actorId: parsed.data.actor.id ?? null,
+        actorId: actorIdFor(parsed.data.actor, apiClient),
         reason: parsed.data.reason ?? null,
       },
     );
@@ -605,6 +652,7 @@ async function updateMutableData(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   if (hasDangerousKeyInUnknown(body)) {
@@ -621,7 +669,7 @@ async function updateMutableData(
     const updated = await dependencies.requestRepository.updateMutableData(id, {
       data: parsed.data.data,
       actorType: parsed.data.actor.type,
-      actorId: parsed.data.actor.id ?? null,
+      actorId: actorIdFor(parsed.data.actor, apiClient),
       reason: parsed.data.reason ?? null,
     });
 
@@ -644,6 +692,7 @@ async function addCustomEvent(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   if (hasDangerousKeyInUnknown(body)) {
@@ -665,7 +714,7 @@ async function addCustomEvent(
       visibility: parsed.data.visibility,
       data: parsed.data.data,
       actorType: parsed.data.actor.type,
-      actorId: parsed.data.actor.id ?? null,
+      actorId: actorIdFor(parsed.data.actor, apiClient),
     });
 
     if (!event) {
@@ -689,6 +738,7 @@ async function addComment(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   const parsed = addCommentSchema.safeParse(body);
@@ -702,7 +752,7 @@ async function addComment(
       visibility: parsed.data.visibility,
       body: parsed.data.body,
       actorType: parsed.data.actor.type,
-      actorId: parsed.data.actor.id ?? null,
+      actorId: actorIdFor(parsed.data.actor, apiClient),
     });
 
     if (!comment) {
@@ -734,6 +784,7 @@ async function addAttachment(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   const parsed = addAttachmentSchema.safeParse(body);
@@ -752,7 +803,7 @@ async function addAttachment(
       storageKey: parsed.data.storageKey,
       checksum: parsed.data.checksum,
       actorType: parsed.data.actor.type,
-      actorId: parsed.data.actor.id ?? null,
+      actorId: actorIdFor(parsed.data.actor, apiClient),
     });
 
     if (!attachment) {
@@ -789,6 +840,7 @@ async function uploadAttachment(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   let formData: FormData;
 
@@ -864,7 +916,11 @@ async function uploadAttachment(
         storageKey: upload.storageKey,
         checksum: upload.checksum,
         actorType: parsed.data.actorType,
-        actorId: parsed.data.actorId,
+        actorId: actorIdForFields(
+          parsed.data.actorType,
+          parsed.data.actorId,
+          apiClient,
+        ),
       },
     );
 
@@ -902,6 +958,7 @@ async function sendEmailCommunication(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   const parsed = sendEmailCommunicationSchema.safeParse(body);
@@ -934,7 +991,7 @@ async function sendEmailCommunication(
         body: parsed.data.body,
         provider: dependencies.emailProvider.provider,
         actorType: parsed.data.actor.type,
-        actorId: parsed.data.actor.id ?? null,
+        actorId: actorIdFor(parsed.data.actor, apiClient),
       },
     );
   } catch {
@@ -957,7 +1014,7 @@ async function sendEmailCommunication(
       {
         providerMessageId: sent.providerMessageId,
         actorType: parsed.data.actor.type,
-        actorId: parsed.data.actor.id ?? null,
+        actorId: actorIdFor(parsed.data.actor, apiClient),
       },
     );
 
@@ -980,7 +1037,7 @@ async function sendEmailCommunication(
       {
         errorMessage: "Email provider failed to send the message.",
         actorType: parsed.data.actor.type,
-        actorId: parsed.data.actor.id ?? null,
+        actorId: actorIdFor(parsed.data.actor, apiClient),
       },
     );
 
@@ -1003,6 +1060,7 @@ async function sendConsumerNotification(
   request: Request,
   id: string,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
 ): Promise<Response> {
   const body = await readJson(request);
   const parsed = sendConsumerNotificationSchema.safeParse(body);
@@ -1093,7 +1151,7 @@ async function sendConsumerNotification(
         body: emailBody,
         provider: dependencies.emailProvider.provider,
         actorType: parsed.data.actor.type,
-        actorId: parsed.data.actor.id ?? null,
+        actorId: actorIdFor(parsed.data.actor, apiClient),
       },
     );
   } catch {
@@ -1118,7 +1176,7 @@ async function sendConsumerNotification(
           notificationType: parsed.data.type,
           providerMessageId: sent.providerMessageId,
           actorType: parsed.data.actor.type,
-          actorId: parsed.data.actor.id ?? null,
+          actorId: actorIdFor(parsed.data.actor, apiClient),
         },
       );
 
@@ -1143,7 +1201,7 @@ async function sendConsumerNotification(
           notificationType: parsed.data.type,
           errorMessage: "Email provider failed to send the notification.",
           actorType: parsed.data.actor.type,
-          actorId: parsed.data.actor.id ?? null,
+          actorId: actorIdFor(parsed.data.actor, apiClient),
         },
       );
 
@@ -1165,6 +1223,7 @@ async function sendConsumerNotification(
 async function withIdempotency(
   request: Request,
   dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
   operation: (request: Request) => Promise<Response>,
 ): Promise<Response> {
   const idempotencyKey = request.headers.get("Idempotency-Key")?.trim();
@@ -1186,7 +1245,7 @@ async function withIdempotency(
   const prepared = await prepareIdempotentRequest(request);
   const now = new Date();
   const existing = await dependencies.idempotencyStore.findActive(
-    internalApiClientId,
+    apiClient.id,
     idempotencyKey,
     now,
   );
@@ -1219,7 +1278,7 @@ async function withIdempotency(
   const responseBody = (await response.clone().json()) as JsonValue;
   await dependencies.idempotencyStore.create({
     idempotencyKey,
-    apiClientId: internalApiClientId,
+    apiClientId: apiClient.id,
     method: prepared.method,
     route: prepared.route,
     requestHash: prepared.requestHash,

@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "api-client:create": "node scripts/create-api-client.mjs"
   },
   "dependencies": {
     "@magictrust/config": "workspace:*",

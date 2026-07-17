@@ -256,6 +256,42 @@ curl -X POST "http://localhost:3000/api/v1/requests/req_example/notifications" \
 
 The response includes communication metadata only. Notification audit events never include the recipient email or email body.
 
+## Internal API Authentication
+
+Internal API v1 routes require `x-api-key`. Preferred keys are database-backed API client keys in this format:
+
+```text
+mt_live_<random-secret>
+```
+
+Create a client and one key with scoped access:
+
+```sh
+pnpm api-client:create --name "Privacy Processor" --scopes "requests:read,requests:create,requests:update,comments:write,attachments:write,attachments:read,communications:write,notifications:write,events:write"
+```
+
+The raw API key is displayed exactly once. MagicTrust stores only the key hash and a short key prefix used for lookup.
+
+Scopes:
+
+```text
+requests:read          GET request list/detail
+requests:create        POST /api/v1/requests
+requests:update        status and mutable data updates
+comments:write         request comments
+attachments:write      attachment metadata and upload
+attachments:read       internal attachment download
+communications:write   internal email communications
+notifications:write    explicit consumer notifications
+events:write           custom request events
+```
+
+If a valid API client key lacks the required scope, MagicTrust returns `403` with code `FORBIDDEN`.
+
+`INTERNAL_API_KEY` remains as a deprecated development fallback only when `APP_ENV` is not `production`. Production rejects the fallback key.
+
+Key rotation expectation: create a replacement client/key or key row, update the caller to use the new secret, then deactivate the old key. Raw keys are not recoverable from MagicTrust after creation.
+
 ## `POST /api/v1/requests/:id/events`
 
 Records a custom business event for an existing request. The request id may be the internal id or `publicId`.

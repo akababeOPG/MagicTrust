@@ -2,7 +2,7 @@
 
 MagicTrust is OnPoint's internal system of record for receiving, verifying, tracking, auditing, and communicating consumer privacy and preference requests.
 
-This repository is currently bootstrapped only. It does not implement request intake, forms, authentication, email delivery, file upload, OTP, webhooks, or an admin UI.
+MagicTrust currently includes public intake, public tracking, secure consumer sessions, private attachment storage, internal communications, request audit events, and Internal API v1.
 
 ## Stack
 
@@ -59,6 +59,7 @@ docs/api              API notes
    RESEND_API_KEY           Resend API key for internal email communications
    EMAIL_FROM               Sender address for internal email communications
    APP_BASE_URL             Base URL used for public tracking links in emails
+   APP_ENV                  App environment, for example development or production
    NEXT_PUBLIC_APP_NAME     Public app name, usually MagicTrust
    ```
 
@@ -78,7 +79,7 @@ Without `DATABASE_URL`, the health endpoint returns `degraded` with database sta
 
 ## Curl API Key
 
-For local Internal API v1 curl tests, load the root API key into your shell:
+For local Internal API v1 curl tests with the deprecated development fallback, load the root API key into your shell:
 
 ```sh
 API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
@@ -88,6 +89,32 @@ Then pass it on requests:
 
 ```sh
 -H "x-api-key: $API_KEY"
+```
+
+`INTERNAL_API_KEY` is a development fallback only. It is rejected when `APP_ENV=production`. Prefer database-backed API client keys created with `pnpm api-client:create`.
+
+## Internal API Clients
+
+Create an Internal API client and one scoped API key:
+
+```sh
+pnpm api-client:create --name "Privacy Processor" --scopes "requests:read,requests:create,requests:update,comments:write,attachments:write,attachments:read,communications:write,notifications:write,events:write"
+```
+
+The command stores only the key hash and prints the raw `mt_live_...` key exactly once. Store it securely. To rotate a key, create a new key/client, deploy the replacement secret to the caller, then deactivate the old key in the database.
+
+Available scopes:
+
+```text
+requests:read
+requests:create
+requests:update
+comments:write
+attachments:write
+attachments:read
+communications:write
+notifications:write
+events:write
 ```
 
 ## Public Intake
