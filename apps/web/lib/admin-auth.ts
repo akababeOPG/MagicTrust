@@ -184,6 +184,23 @@ export async function requireAdminSession(options?: {
   };
 }
 
+export async function requireAdminRole(
+  allowedRoles: readonly AdminRole[],
+  options?: { response?: "json" },
+): Promise<AdminSession | Response> {
+  const session = await requireAdminSession(options);
+
+  if (session instanceof Response) {
+    return session;
+  }
+
+  if (!allowedRoles.includes(session.role)) {
+    return forbidden(options);
+  }
+
+  return session;
+}
+
 export function adminSessionCookieOptions(appEnv: string) {
   return {
     httpOnly: true,
@@ -217,6 +234,24 @@ function unauthenticated(options?: { response?: "json" }): Response {
   }
 
   redirect("/admin/login");
+}
+
+function forbidden(options?: { response?: "json" }): Response {
+  if (options?.response === "json") {
+    return Response.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Admin role is not allowed to perform this action.",
+        },
+      },
+      {
+        status: 403,
+      },
+    );
+  }
+
+  return new Response("Forbidden", { status: 403 });
 }
 
 async function readJson(request: Request): Promise<unknown> {

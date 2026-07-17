@@ -9,6 +9,7 @@ import {
   type RequestRepository,
 } from "@magictrust/database";
 import {
+  commentVisibilities,
   requestStatuses,
   requestTypes,
   type JsonObject,
@@ -108,6 +109,11 @@ type AdminListParseResult =
 
 const defaultAdminPageSize = 25;
 const maxAdminPageSize = 100;
+const terminalStatuses = new Set<RequestStatus>([
+  "SUCCESS",
+  "REJECTED",
+  "CANCELLED",
+]);
 const sensitiveEventKeys = new Set([
   "storagekey",
   "checksum",
@@ -231,6 +237,150 @@ export async function downloadAdminAttachment(
       "content-length": downloaded.sizeBytes.toString(),
     },
   });
+}
+
+export async function updateAdminRequestStatus(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const parsed = z
+    .object({
+      newStatus: z.enum(requestStatuses),
+      reason: z.string().trim().min(1).max(2_000),
+    })
+    .safeParse({
+      newStatus: formData.get("newStatus"),
+      reason: formData.get("reason"),
+    });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Status and reason are required.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const validDestinations = getValidAdminStatusDestinations(existing.status);
+
+  if (!validDestinations.includes(parsed.data.newStatus)) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Status transition is not allowed.",
+    });
+  }
+
+  const updated = await dependencies.requestRepository.updateStatus(
+    existing.id,
+    {
+      status: parsed.data.newStatus,
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+      reason: parsed.data.reason,
+    },
+  );
+
+  if (!updated) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Status updated.",
+  });
+}
+
+export async function createAdminRequestComment(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const parsed = z
+    .object({
+      visibility: z.enum(commentVisibilities),
+      body: z.string().trim().min(1).max(5_000),
+    })
+    .safeParse({
+      visibility: formData.get("visibility"),
+      body: formData.get("body"),
+    });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Comment visibility and body are required.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const duplicate = existing.comments.some(
+    (comment) =>
+      comment.visibility === parsed.data.visibility &&
+      comment.body === parsed.data.body &&
+      comment.actorType === "ADMIN_USER" &&
+      comment.actorId === adminSession.adminUserId,
+  );
+
+  if (!duplicate) {
+    const comment = await dependencies.requestRepository.addComment(
+      existing.id,
+      {
+        visibility: parsed.data.visibility,
+        body: parsed.data.body,
+        actorType: "ADMIN_USER",
+        actorId: adminSession.adminUserId,
+      },
+    );
+
+    if (!comment) {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: duplicate ? "Comment already recorded." : "Comment added.",
+  });
+}
+
+export function getValidAdminStatusDestinations(
+  status: RequestStatus,
+): RequestStatus[] {
+  if (terminalStatuses.has(status)) {
+    return [];
+  }
+
+  return requestStatuses.filter((candidate) => candidate !== status);
 }
 
 export function parseAdminRequestListSearchParams(
@@ -601,6 +751,57 @@ function contentDispositionAttachment(fileName: string): string {
 
 function escapeHeaderValue(value: string): string {
   return value.replace(/["\\\r\n]/g, "_");
+}
+
+async function safeFormData(request: Request): Promise<FormData | null> {
+  try {
+    return await request.formData();
+  } catch {
+    return null;
+  }
+}
+
+function isSameOriginRequest(request: Request): boolean {
+  const origin = request.headers.get("origin");
+
+  if (!origin) {
+    return false;
+  }
+
+  return origin === new URL(request.url).origin;
+}
+
+function redirectToRequestDetail(
+  request: Request,
+  publicId: string,
+  params: { success?: string; error?: string },
+): Response {
+  const url = new URL(
+    `/admin/requests/${encodeURIComponent(publicId)}`,
+    request.url,
+  );
+
+  if (params.success) {
+    url.searchParams.set("success", params.success);
+  }
+
+  if (params.error) {
+    url.searchParams.set("error", params.error);
+  }
+
+  return Response.redirect(url, 303);
+}
+
+function actionError(code: string, message: string, status: number): Response {
+  return Response.json(
+    {
+      error: {
+        code,
+        message,
+      },
+    },
+    { status },
+  );
 }
 
 function notFoundResponse(): Response {

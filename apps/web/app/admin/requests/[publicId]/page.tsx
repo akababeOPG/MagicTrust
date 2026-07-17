@@ -4,11 +4,15 @@ import { notFound } from "next/navigation";
 import { requireAdminSession } from "@/lib/admin-auth";
 import {
   createAdminDashboardDependencies,
+  getValidAdminStatusDestinations,
   getAdminRequestDetail,
 } from "@/lib/admin-dashboard";
+import { AdminSubmitButton } from "@/lib/admin-request-action-forms";
+import { commentVisibilities } from "@magictrust/domain";
 
 type PageProps = {
   params: Promise<{ publicId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const statusLabels = {
@@ -22,7 +26,10 @@ const statusLabels = {
   CANCELLED: "Cancelled",
 } as const;
 
-export default async function AdminRequestDetailPage({ params }: PageProps) {
+export default async function AdminRequestDetailPage({
+  params,
+  searchParams,
+}: PageProps) {
   const session = await requireAdminSession();
 
   if (session instanceof Response) {
@@ -30,6 +37,7 @@ export default async function AdminRequestDetailPage({ params }: PageProps) {
   }
 
   const { publicId } = await params;
+  const messages = await searchParams;
   const request = await getAdminRequestDetail(
     publicId,
     createAdminDashboardDependencies(),
@@ -38,6 +46,11 @@ export default async function AdminRequestDetailPage({ params }: PageProps) {
   if (!request) {
     notFound();
   }
+
+  const canMutate = session.role === "ADMIN" || session.role === "OPERATOR";
+  const validStatuses = getValidAdminStatusDestinations(request.status);
+  const successMessage = firstParam(messages?.success);
+  const errorMessage = firstParam(messages?.error);
 
   return (
     <main className="admin-page">
@@ -54,6 +67,18 @@ export default async function AdminRequestDetailPage({ params }: PageProps) {
           </form>
         </div>
       </header>
+
+      {successMessage ? (
+        <section className="admin-card success-message" role="status">
+          <p>{successMessage}</p>
+        </section>
+      ) : null}
+
+      {errorMessage ? (
+        <section className="admin-card error-message" role="alert">
+          <p>{errorMessage}</p>
+        </section>
+      ) : null}
 
       <section className="admin-card" aria-labelledby="summary-heading">
         <h2 id="summary-heading">Request Summary</h2>
@@ -99,6 +124,80 @@ export default async function AdminRequestDetailPage({ params }: PageProps) {
             <dd>{request.source?.formKey ?? "Unknown"}</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="admin-card" aria-labelledby="actions-heading">
+        <div>
+          <h2 id="actions-heading">Request Actions</h2>
+          <p>Current status: {statusLabels[request.status]}</p>
+        </div>
+        {!canMutate ? (
+          <p>
+            Your role is read-only. ADMIN and OPERATOR users can update status
+            and add comments.
+          </p>
+        ) : (
+          <div className="admin-actions-grid">
+            <section aria-labelledby="status-update-heading">
+              <h3 id="status-update-heading">Status Update</h3>
+              {validStatuses.length === 0 ? (
+                <p>No status updates are available for this request.</p>
+              ) : (
+                <form
+                  className="admin-action-form"
+                  action={`/admin/requests/${request.publicId}/status`}
+                  method="post"
+                >
+                  <label>
+                    New status
+                    <select name="newStatus" required>
+                      {validStatuses.map((status) => (
+                        <option key={status} value={status}>
+                          {statusLabels[status]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Reason
+                    <textarea
+                      name="reason"
+                      required
+                      maxLength={2000}
+                      rows={4}
+                    />
+                  </label>
+                  <AdminSubmitButton>Update status</AdminSubmitButton>
+                </form>
+              )}
+            </section>
+
+            <section aria-labelledby="add-comment-heading">
+              <h3 id="add-comment-heading">Add Comment</h3>
+              <form
+                className="admin-action-form"
+                action={`/admin/requests/${request.publicId}/comments`}
+                method="post"
+              >
+                <label>
+                  Visibility
+                  <select name="visibility" required>
+                    {commentVisibilities.map((visibility) => (
+                      <option key={visibility} value={visibility}>
+                        {visibility}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Body
+                  <textarea name="body" required maxLength={5000} rows={5} />
+                </label>
+                <AdminSubmitButton>Add comment</AdminSubmitButton>
+              </form>
+            </section>
+          </div>
+        )}
       </section>
 
       <section className="admin-card" aria-labelledby="mutable-data-heading">
@@ -291,4 +390,8 @@ function formatBytes(value: number): string {
     unit: "byte",
     unitDisplay: "short",
   }).format(value);
+}
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }

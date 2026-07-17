@@ -384,7 +384,47 @@ GET /admin/requests/:publicId/attachments/:attachmentId/download
 
 Admin downloads stream private storage through MagicTrust, verify that the attachment belongs to the request, and audit successful downloads with `ADMIN_ATTACHMENT_DOWNLOADED` using `actorType: ADMIN_USER`.
 
-This dashboard version is read-only for every role. It does not support request editing, status changes, comment creation, uploads, email sending, analytics, CSV exports, bulk actions, user management, API client management, or requester PII decryption/display.
+The dashboard list and detail views are read-only for `VIEWER` users. This version does not support attachment uploads, email sending, analytics, CSV exports, bulk actions, user management, API client management, or requester PII decryption/display.
+
+## Admin Request Actions
+
+Authenticated `ADMIN` and `OPERATOR` users can manage an individual request from:
+
+```text
+GET /admin/requests/:publicId
+```
+
+`VIEWER` users remain read-only. Mutation controls are hidden for `VIEWER`, and the server still rejects mutation submissions with `403 FORBIDDEN`.
+
+Dashboard request actions use admin-authenticated server-side route handlers:
+
+```text
+POST /admin/requests/:publicId/status
+POST /admin/requests/:publicId/comments
+```
+
+These routes never call `/api/v1`, never use `x-api-key`, and never expose Internal API keys or API client keys to the browser. Actor identity is derived only from the secure admin session:
+
+```text
+actorType: ADMIN_USER
+actorId: authenticated admin user id
+```
+
+Caller-submitted actor fields are ignored. Actions require same-origin POST submissions and the existing secure admin session cookie.
+
+Status updates require a destination status and a trimmed reason of 1-2,000 characters. The dashboard offers transitions only while the request is non-terminal. Terminal statuses are:
+
+```text
+SUCCESS
+REJECTED
+CANCELLED
+```
+
+Status updates use the existing transactional request repository mutation, update `completedAt` consistently for terminal statuses, and create the existing `STATUS_CHANGED` audit event. No consumer email notification is sent automatically.
+
+Comments require a visibility and a trimmed body of 1-5,000 characters. `INTERNAL` comments remain dashboard-only. `PUBLIC` comments appear in public tracking responses and pages. Comment audit events reference the comment id and visibility but do not duplicate the comment body in event data. Adding a comment does not automatically send a consumer email notification.
+
+This version does not add dashboard attachment uploads, email notifications, bulk actions, mutable-data editing, custom event creation, admin user management, API client management, analytics, or requester PII display.
 
 ## `GET /api/v1/requests`
 
