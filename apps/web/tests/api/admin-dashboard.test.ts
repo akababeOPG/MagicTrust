@@ -1117,7 +1117,9 @@ describe("admin dashboard", () => {
     expect(oversized.status).toBe(303);
     expect(dangerous.status).toBe(303);
     expect(dependencies.state.events).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "CUSTOM_EVENT" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ type: "CUSTOM_EVENT" }),
+      ]),
     );
   });
 

@@ -95,6 +95,13 @@ export const adminRoleEnum = pgEnum("admin_role", [
   "VIEWER",
 ]);
 
+export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", [
+  "PENDING",
+  "RETRYING",
+  "DELIVERED",
+  "DEAD",
+]);
+
 export const requesters = pgTable(
   "requesters",
   {
@@ -507,6 +514,90 @@ export const requestEvents = pgTable(
   }),
 );
 
+export const webhookEndpoints = pgTable(
+  "webhook_endpoints",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    urlEncrypted: text("url_encrypted").notNull(),
+    urlHost: varchar("url_host", { length: 255 }).notNull(),
+    signingSecretEncrypted: text("signing_secret_encrypted").notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    activeIdx: index("webhook_endpoints_active_idx").on(table.active),
+    urlHostIdx: index("webhook_endpoints_url_host_idx").on(table.urlHost),
+  }),
+);
+
+export const webhookSubscriptions = pgTable(
+  "webhook_subscriptions",
+  {
+    webhookEndpointId: uuid("webhook_endpoint_id")
+      .notNull()
+      .references(() => webhookEndpoints.id, { onDelete: "cascade" }),
+    eventType: varchar("event_type", { length: 80 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.webhookEndpointId, table.eventType] }),
+    eventTypeIdx: index("webhook_subscriptions_event_type_idx").on(
+      table.eventType,
+    ),
+  }),
+);
+
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    webhookEndpointId: uuid("webhook_endpoint_id")
+      .notNull()
+      .references(() => webhookEndpoints.id, { onDelete: "restrict" }),
+    requestEventId: uuid("request_event_id")
+      .notNull()
+      .references(() => requestEvents.id, { onDelete: "restrict" }),
+    eventType: varchar("event_type", { length: 80 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    status: webhookDeliveryStatusEnum("status").default("PENDING").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    responseStatus: integer("response_status"),
+    lastErrorCode: varchar("last_error_code", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    endpointEventIdx: uniqueIndex("webhook_deliveries_endpoint_event_idx").on(
+      table.webhookEndpointId,
+      table.requestEventId,
+    ),
+    dueIdx: index("webhook_deliveries_due_idx").on(
+      table.status,
+      table.nextAttemptAt,
+    ),
+    endpointIdx: index("webhook_deliveries_endpoint_idx").on(
+      table.webhookEndpointId,
+    ),
+  }),
+);
+
 export const requestersRelations = relations(requesters, ({ many }) => ({
   privacyRequests: many(privacyRequests),
 }));
@@ -638,3 +729,35 @@ export const requestEventsRelations = relations(requestEvents, ({ one }) => ({
     references: [privacyRequests.id],
   }),
 }));
+
+export const webhookEndpointsRelations = relations(
+  webhookEndpoints,
+  ({ many }) => ({
+    subscriptions: many(webhookSubscriptions),
+    deliveries: many(webhookDeliveries),
+  }),
+);
+
+export const webhookSubscriptionsRelations = relations(
+  webhookSubscriptions,
+  ({ one }) => ({
+    endpoint: one(webhookEndpoints, {
+      fields: [webhookSubscriptions.webhookEndpointId],
+      references: [webhookEndpoints.id],
+    }),
+  }),
+);
+
+export const webhookDeliveriesRelations = relations(
+  webhookDeliveries,
+  ({ one }) => ({
+    endpoint: one(webhookEndpoints, {
+      fields: [webhookDeliveries.webhookEndpointId],
+      references: [webhookEndpoints.id],
+    }),
+    requestEvent: one(requestEvents, {
+      fields: [webhookDeliveries.requestEventId],
+      references: [requestEvents.id],
+    }),
+  }),
+);

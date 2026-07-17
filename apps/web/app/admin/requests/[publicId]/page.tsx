@@ -295,12 +295,7 @@ export default async function AdminRequestDetailPage({
                 </label>
                 <label>
                   Reason
-                  <textarea
-                    name="reason"
-                    required
-                    maxLength={2000}
-                    rows={3}
-                  />
+                  <textarea name="reason" required maxLength={2000} rows={3} />
                 </label>
                 <AdminSubmitButton>Update mutable data</AdminSubmitButton>
               </form>

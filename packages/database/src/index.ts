@@ -9,6 +9,7 @@ export * from "./api-idempotency-store";
 export * from "./api-client-store";
 export * from "./admin-auth-store";
 export * from "./pii-backfill";
+export * from "./webhooks";
 export * from "./schema";
 
 export type DatabaseHealth =

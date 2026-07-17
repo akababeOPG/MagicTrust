@@ -238,6 +238,38 @@ describe("admin action routes", () => {
     expect(mocks.updateAdminMutableData).not.toHaveBeenCalled();
   });
 
+  test("mutable data update returns its success response without a 500", async () => {
+    const session = {
+      adminUserId: "admin-user-1",
+      role: "ADMIN",
+      sessionId: "session-1",
+    };
+    mocks.requireAdminRole.mockResolvedValueOnce(session);
+    mocks.updateAdminMutableData.mockResolvedValueOnce(
+      Response.redirect(
+        "https://magictrust.test/admin/requests/req_one?success=updated",
+        303,
+      ),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/data/route");
+
+    const response = await POST(
+      new Request("https://magictrust.test/admin/requests/req_one/data", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(303);
+    expect(mocks.updateAdminMutableData).toHaveBeenCalledWith(
+      expect.any(Request),
+      "req_one",
+      session,
+      { kind: "dependencies" },
+    );
+  });
+
   test("unauthenticated custom event rejected", async () => {
     mocks.requireAdminRole.mockResolvedValueOnce(
       Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),

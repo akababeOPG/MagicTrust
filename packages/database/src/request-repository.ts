@@ -28,6 +28,7 @@ import {
   requestIdentityVerificationTokens,
   requesters,
 } from "./schema";
+import { createRequestEventAndEnqueueWebhooks } from "./webhooks";
 
 type Database = ReturnType<typeof createDatabase>;
 
@@ -630,7 +631,7 @@ export function createRequestRepository(db: Database): RequestRepository {
             updatedAt: privacyRequests.updatedAt,
           });
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type: "STATUS_CHANGED",
           actorType: input.actorType,
@@ -681,7 +682,7 @@ export function createRequestRepository(db: Database): RequestRepository {
             updatedAt: privacyRequests.updatedAt,
           });
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type: "REQUEST_DATA_UPDATED",
           actorType: input.actorType,
@@ -716,19 +717,16 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        const [event] = await tx
-          .insert(requestEvents)
-          .values({
-            privacyRequestId: request.id,
-            type: "CUSTOM_EVENT",
-            category: "CUSTOM",
-            customType: input.customType,
-            visibility: input.visibility,
-            actorType: input.actorType,
-            actorId: input.actorId,
-            data: input.data,
-          })
-          .returning(eventSelection);
+        const event = await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: request.id,
+          type: "CUSTOM_EVENT",
+          category: "CUSTOM",
+          customType: input.customType,
+          visibility: input.visibility,
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: input.data,
+        });
 
         return {
           ...event,
@@ -769,7 +767,7 @@ export function createRequestRepository(db: Database): RequestRepository {
             createdAt: requestComments.createdAt,
           });
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type:
             input.visibility === "PUBLIC"
@@ -833,7 +831,7 @@ export function createRequestRepository(db: Database): RequestRepository {
             createdAt: requestAttachments.createdAt,
           });
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type:
             input.visibility === "PUBLIC"
@@ -861,34 +859,38 @@ export function createRequestRepository(db: Database): RequestRepository {
       });
     },
     async recordAttachmentDownloaded(requestId, input) {
-      await db.insert(requestEvents).values({
-        privacyRequestId: requestId,
-        type: "ATTACHMENT_DOWNLOADED",
-        actorType: "API_CLIENT",
-        actorId: input.actorId,
-        data: {
-          attachmentId: input.attachmentId,
-          fileName: input.fileName,
-          storageProvider: input.storageProvider,
-          actor: {
-            type: "API_CLIENT",
-            id: input.actorId,
+      await db.transaction(async (tx) => {
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: requestId,
+          type: "ATTACHMENT_DOWNLOADED",
+          actorType: "API_CLIENT",
+          actorId: input.actorId,
+          data: {
+            attachmentId: input.attachmentId,
+            fileName: input.fileName,
+            storageProvider: input.storageProvider,
+            actor: {
+              type: "API_CLIENT",
+              id: input.actorId,
+            },
           },
-        },
+        });
       });
     },
     async recordAdminAttachmentDownloaded(requestId, input) {
-      await db.insert(requestEvents).values({
-        privacyRequestId: requestId,
-        type: "ADMIN_ATTACHMENT_DOWNLOADED",
-        actorType: "ADMIN_USER",
-        actorId: input.actorId,
-        data: {
-          attachmentId: input.attachmentId,
-          fileName: input.fileName,
-          mimeType: input.mimeType,
-          sizeBytes: input.sizeBytes,
-        },
+      await db.transaction(async (tx) => {
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: requestId,
+          type: "ADMIN_ATTACHMENT_DOWNLOADED",
+          actorType: "ADMIN_USER",
+          actorId: input.actorId,
+          data: {
+            attachmentId: input.attachmentId,
+            fileName: input.fileName,
+            mimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+          },
+        });
       });
     },
     async createCommunication(id, input) {
@@ -947,7 +949,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: requestId,
           type: "EMAIL_SENT",
           actorType: input.actorType,
@@ -988,7 +990,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: requestId,
           type: "EMAIL_FAILED",
           actorType: input.actorType,
@@ -1077,17 +1079,19 @@ export function createRequestRepository(db: Database): RequestRepository {
       return accessToken;
     },
     async recordConsumerAccessLinkSent(requestId, input) {
-      await db.insert(requestEvents).values({
-        privacyRequestId: requestId,
-        type: "CONSUMER_ACCESS_LINK_SENT",
-        actorType: "SYSTEM",
-        actorId: "consumer-access-link",
-        data: {
-          accessTokenId: input.accessTokenId,
-          communicationId: input.communicationId,
-          provider: input.provider,
-          providerMessageId: input.providerMessageId,
-        },
+      await db.transaction(async (tx) => {
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: requestId,
+          type: "CONSUMER_ACCESS_LINK_SENT",
+          actorType: "SYSTEM",
+          actorId: "consumer-access-link",
+          data: {
+            accessTokenId: input.accessTokenId,
+            communicationId: input.communicationId,
+            provider: input.provider,
+            providerMessageId: input.providerMessageId,
+          },
+        });
       });
     },
     async markConsumerNotificationSent(requestId, communicationId, input) {
@@ -1113,7 +1117,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: requestId,
           type: "CONSUMER_NOTIFICATION_SENT",
           actorType: input.actorType,
@@ -1152,7 +1156,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: requestId,
           type: "CONSUMER_NOTIFICATION_FAILED",
           actorType: input.actorType,
@@ -1201,7 +1205,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type: "CONSUMER_ACCESS_TOKEN_USED",
           actorType: "CONSUMER",
@@ -1221,7 +1225,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           })
           .returning(accessSessionSelection);
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type: "CONSUMER_ACCESS_SESSION_CREATED",
           actorType: "CONSUMER",
@@ -1270,7 +1274,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type: "CONSUMER_ACCESS_SESSION_USED",
           actorType: "CONSUMER",
@@ -1329,17 +1333,19 @@ export function createRequestRepository(db: Database): RequestRepository {
       });
     },
     async recordConsumerAttachmentDownloaded(requestId, input) {
-      await db.insert(requestEvents).values({
-        privacyRequestId: requestId,
-        type: "CONSUMER_ATTACHMENT_DOWNLOADED",
-        actorType: "CONSUMER",
-        actorId: null,
-        data: {
-          attachmentId: input.attachmentId,
-          fileName: input.fileName,
-          mimeType: input.mimeType,
-          sizeBytes: input.sizeBytes,
-        },
+      await db.transaction(async (tx) => {
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: requestId,
+          type: "CONSUMER_ATTACHMENT_DOWNLOADED",
+          actorType: "CONSUMER",
+          actorId: null,
+          data: {
+            attachmentId: input.attachmentId,
+            fileName: input.fileName,
+            mimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+          },
+        });
       });
     },
     async createIdentityVerificationToken(requestId, input) {
@@ -1367,17 +1373,19 @@ export function createRequestRepository(db: Database): RequestRepository {
       return verificationToken;
     },
     async recordIdentityVerificationSent(requestId, input) {
-      await db.insert(requestEvents).values({
-        privacyRequestId: requestId,
-        type: "IDENTITY_VERIFICATION_SENT",
-        actorType: "SYSTEM",
-        actorId: "public-intake",
-        data: {
-          verificationTokenId: input.verificationTokenId,
-          communicationId: input.communicationId,
-          provider: input.provider,
-          providerMessageId: input.providerMessageId,
-        },
+      await db.transaction(async (tx) => {
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: requestId,
+          type: "IDENTITY_VERIFICATION_SENT",
+          actorType: "SYSTEM",
+          actorId: "public-intake",
+          data: {
+            verificationTokenId: input.verificationTokenId,
+            communicationId: input.communicationId,
+            provider: input.provider,
+            providerMessageId: input.providerMessageId,
+          },
+        });
       });
     },
     async verifyIdentityToken(publicId, input) {
@@ -1429,7 +1437,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           return null;
         }
 
-        await tx.insert(requestEvents).values({
+        await createRequestEventAndEnqueueWebhooks(tx, {
           privacyRequestId: request.id,
           type: "IDENTITY_VERIFIED",
           actorType: "CONSUMER",

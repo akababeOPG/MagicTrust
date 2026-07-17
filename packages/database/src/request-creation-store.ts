@@ -9,7 +9,8 @@ import type {
 } from "@magictrust/domain";
 
 import type { createDatabase } from "./index";
-import { privacyRequests, requestEvents, requesters } from "./schema";
+import { privacyRequests, requesters } from "./schema";
+import { createRequestEventAndEnqueueWebhooks } from "./webhooks";
 
 type Database = ReturnType<typeof createDatabase>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -91,30 +92,11 @@ async function insertRequestEvent(
   tx: Transaction,
   data: CreateRequestEventRecord,
 ): Promise<RequestEvent> {
-  const [event] = await tx
-    .insert(requestEvents)
-    .values({
-      privacyRequestId: data.privacyRequestId,
-      type: data.type,
-      actorType: data.actorType,
-      actorId: data.actorId,
-      data: data.data,
-    })
-    .returning({
-      id: requestEvents.id,
-      privacyRequestId: requestEvents.privacyRequestId,
-      type: requestEvents.type,
-      category: requestEvents.category,
-      customType: requestEvents.customType,
-      visibility: requestEvents.visibility,
-      actorType: requestEvents.actorType,
-      actorId: requestEvents.actorId,
-      data: requestEvents.data,
-      createdAt: requestEvents.createdAt,
-    });
-
-  return {
-    ...event,
-    data: event.data as JsonObject,
-  };
+  return createRequestEventAndEnqueueWebhooks(tx, {
+    privacyRequestId: data.privacyRequestId,
+    type: data.type,
+    actorType: data.actorType,
+    actorId: data.actorId,
+    data: data.data,
+  });
 }

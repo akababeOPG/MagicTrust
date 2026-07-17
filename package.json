@@ -16,7 +16,9 @@
     "db:migrate": "turbo db:migrate",
     "api-client:create": "pnpm --filter @magictrust/database api-client:create",
     "admin:user:create": "pnpm --filter @magictrust/database admin:user:create",
-    "pii:backfill": "pnpm --filter @magictrust/database pii:backfill"
+    "pii:backfill": "pnpm --filter @magictrust/database pii:backfill",
+    "webhook:create": "pnpm --filter @magictrust/database webhook:create",
+    "webhook:deliver": "pnpm --filter @magictrust/database webhook:deliver"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.1",

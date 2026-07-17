@@ -134,6 +134,13 @@
       "when": 1784281184153,
       "tag": "0018_busy_gabe_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784312293915,
+      "tag": "0019_glossy_wallop",
+      "breakpoints": true
     }
   ]
 }

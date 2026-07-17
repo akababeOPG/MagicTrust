@@ -628,3 +628,113 @@ If the same `Idempotency-Key` is reused with a different method, route, or paylo
 ```
 
 Idempotency records are retained for 24 hours. For multipart uploads, MagicTrust hashes safe file metadata plus a file checksum for comparison; it does not store file contents in idempotency records.
+
+## Outbound Webhooks
+
+Outbound webhooks notify trusted internal systems when subscribed request events occur. Endpoint URLs and signing secrets are encrypted at rest and are never exposed to browser code, existing APIs, CLI logs, or webhook payloads.
+
+Create an endpoint from the server environment:
+
+```sh
+pnpm webhook:create \
+  --name "Privacy Processor" \
+  --url "https://processor.example.com/webhooks/magictrust" \
+  --events "REQUEST_CREATED,STATUS_CHANGED,REQUEST_DATA_UPDATED"
+```
+
+The URL must use HTTPS, must not include URL credentials, and must not target localhost, loopback, private IP literals, or common local hostnames. The command prints the generated signing secret exactly once and only prints the safe URL hostname afterward.
+
+Subscriptions use the effective event name:
+
+```text
+REQUEST_CREATED
+STATUS_CHANGED
+REQUEST_DATA_UPDATED
+PUBLIC_COMMENT_ADDED
+INTERNAL_COMMENT_ADDED
+PUBLIC_ATTACHMENT_ADDED
+INTERNAL_ATTACHMENT_ADDED
+EMAIL_SENT
+EMAIL_FAILED
+CONSUMER_NOTIFICATION_SENT
+CONSUMER_NOTIFICATION_FAILED
+...
+```
+
+Custom events are subscribed by their custom event type, for example `DATA_EXPORT_GENERATED`, not by `CUSTOM_EVENT`.
+
+Webhook delivery records are enqueued transactionally with request event creation. HTTP delivery happens later, outside the request mutation transaction, so webhook failures never fail the original MagicTrust operation.
+
+Payload schema:
+
+```json
+{
+  "version": "1",
+  "deliveryId": "delivery-id",
+  "event": {
+    "id": "event-id",
+    "type": "STATUS_CHANGED",
+    "occurredAt": "2026-07-17T00:00:00.000Z",
+    "visibility": "INTERNAL"
+  },
+  "request": {
+    "id": "request-id",
+    "publicId": "req_example",
+    "type": "DATA_ACCESS",
+    "status": "PROCESSING",
+    "createdAt": "2026-07-16T00:00:00.000Z",
+    "updatedAt": "2026-07-17T00:00:00.000Z"
+  },
+  "actor": {
+    "type": "ADMIN_USER",
+    "id": "admin-user-id"
+  },
+  "data": {}
+}
+```
+
+Payloads never include requester name, email, phone, address, requester id, encrypted fields, hashes, original submitted payload, mutable data values, comment bodies, communication recipients, storage keys, Blob URLs, checksums, tokens, session identifiers, API keys, encryption keys, or raw database event data. Built-in event payload data is produced from explicit safe allowlists. Custom event data is integration-visible and must never contain requester PII or secrets.
+
+Delivery requests use deterministic JSON serialization and include:
+
+```text
+Content-Type: application/json
+User-Agent: MagicTrust-Webhooks/1.0
+X-MagicTrust-Event: effective event name
+X-MagicTrust-Delivery-Id: delivery id
+X-MagicTrust-Timestamp: Unix timestamp
+X-MagicTrust-Signature: v1=<hex HMAC-SHA256>
+```
+
+Signature input:
+
+```text
+<timestamp>.<raw-request-body>
+```
+
+The same delivery id is reused across retries so consumers can deduplicate.
+
+Run the manual delivery worker:
+
+```sh
+pnpm webhook:deliver --limit 50
+```
+
+The worker claims due `PENDING` and `RETRYING` deliveries with row locking, decrypts endpoint details only immediately before delivery, sends with a 10-second timeout, does not follow redirects, and stores only response status, safe error code, and attempt timestamps. It prints counts only:
+
+```text
+claimed=0
+delivered=0
+retrying=0
+dead=0
+```
+
+Retryable outcomes are network failures, timeouts, `408`, `425`, `429`, and `5xx`. Non-retryable `4xx` responses are marked `DEAD`. MagicTrust makes at most 5 attempts with this schedule:
+
+```text
+1 minute
+5 minutes
+30 minutes
+2 hours
+12 hours
+```
