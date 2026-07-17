@@ -132,6 +132,32 @@ const notificationTypes = [
   "REQUEST_REJECTED",
   "FILE_AVAILABLE",
 ] as const;
+const builtInEventTypes = new Set([
+  "CUSTOM_EVENT",
+  "REQUEST_CREATED",
+  "STATUS_CHANGED",
+  "PUBLIC_COMMENT_ADDED",
+  "INTERNAL_COMMENT_ADDED",
+  "PUBLIC_ATTACHMENT_ADDED",
+  "INTERNAL_ATTACHMENT_ADDED",
+  "ATTACHMENT_DOWNLOADED",
+  "ADMIN_ATTACHMENT_DOWNLOADED",
+  "EMAIL_SENT",
+  "EMAIL_FAILED",
+  "CONSUMER_ACCESS_LINK_SENT",
+  "CONSUMER_ACCESS_TOKEN_USED",
+  "CONSUMER_ACCESS_SESSION_CREATED",
+  "CONSUMER_ACCESS_SESSION_USED",
+  "CONSUMER_ATTACHMENT_DOWNLOADED",
+  "IDENTITY_VERIFICATION_SENT",
+  "IDENTITY_VERIFIED",
+  "CONSUMER_NOTIFICATION_SENT",
+  "CONSUMER_NOTIFICATION_FAILED",
+  "REQUEST_DATA_UPDATED",
+]);
+const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;
+const maxAdminMutableDataBytes = 32 * 1024;
+const maxCustomEventDataBytes = 16 * 1024;
 const terminalStatuses = new Set<RequestStatus>([
   "SUCCESS",
   "REJECTED",
@@ -695,6 +721,207 @@ export async function sendAdminConsumerNotification(
   }
 }
 
+export async function updateAdminMutableData(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const reason = formData.get("reason");
+  const data = formData.get("data");
+  const parsedReason = z.string().trim().min(1).max(2_000).safeParse(reason);
+
+  if (!parsedReason.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Mutable data update reason is required.",
+    });
+  }
+
+  if (typeof data !== "string") {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Mutable data must be a JSON object.",
+    });
+  }
+
+  const parsedData = parseJsonObject(data);
+
+  if (!parsedData.ok) {
+    return redirectToRequestDetail(request, publicId, {
+      error: parsedData.message,
+    });
+  }
+
+  if (serializedJsonByteLength(parsedData.value) > maxAdminMutableDataBytes) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Mutable data is too large.",
+    });
+  }
+
+  if (hasDangerousKeyInUnknown(parsedData.value)) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Mutable data contains unsafe keys.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const changedKeys = Object.keys(parsedData.value);
+  const existingValuesMatch = Object.entries(parsedData.value).every(
+    ([key, value]) =>
+      stableStringify(existing.mutableData[key]) === stableStringify(value),
+  );
+  const duplicate =
+    existingValuesMatch &&
+    existing.events.some((event) => {
+      const eventData = event.data as Record<string, unknown>;
+      return (
+        event.type === "REQUEST_DATA_UPDATED" &&
+        event.actorType === "ADMIN_USER" &&
+        event.actorId === adminSession.adminUserId &&
+        eventData.reason === parsedReason.data &&
+        stableStringify(eventData.changedKeys) === stableStringify(changedKeys)
+      );
+    });
+
+  if (duplicate) {
+    return redirectToRequestDetail(request, publicId, {
+      success: "Mutable data already recorded.",
+    });
+  }
+
+  const updated = await dependencies.requestRepository.updateMutableData(
+    existing.id,
+    {
+      data: parsedData.value,
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+      reason: parsedReason.data,
+    },
+  );
+
+  if (!updated) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Mutable data updated.",
+  });
+}
+
+export async function createAdminCustomEvent(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const type = formData.get("type");
+  const visibility = formData.get("visibility");
+  const data = formData.get("data");
+  const parsed = z
+    .object({
+      type: z
+        .string()
+        .trim()
+        .regex(customEventNamePattern)
+        .refine((value) => !builtInEventTypes.has(value)),
+      visibility: z.enum(commentVisibilities),
+    })
+    .safeParse({ type, visibility });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Custom event type or visibility is invalid.",
+    });
+  }
+
+  const parsedData = parseJsonObject(
+    typeof data === "string" && data.trim() ? data : "{}",
+  );
+
+  if (!parsedData.ok) {
+    return redirectToRequestDetail(request, publicId, {
+      error: parsedData.message,
+    });
+  }
+
+  if (serializedJsonByteLength(parsedData.value) > maxCustomEventDataBytes) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Custom event data is too large.",
+    });
+  }
+
+  if (hasDangerousKeyInUnknown(parsedData.value)) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Custom event data contains unsafe keys.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const duplicate = existing.events.some(
+    (event) =>
+      event.category === "CUSTOM" &&
+      event.customType === parsed.data.type &&
+      event.visibility === parsed.data.visibility &&
+      event.actorType === "ADMIN_USER" &&
+      event.actorId === adminSession.adminUserId &&
+      stableStringify(event.data) === stableStringify(parsedData.value),
+  );
+
+  if (!duplicate) {
+    const event = await dependencies.requestRepository.addCustomEvent(
+      existing.id,
+      {
+        customType: parsed.data.type,
+        visibility: parsed.data.visibility,
+        data: parsedData.value,
+        actorType: "ADMIN_USER",
+        actorId: adminSession.adminUserId,
+      },
+    );
+
+    if (!event) {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: duplicate
+      ? "Custom event already recorded."
+      : "Custom event recorded.",
+  });
+}
+
 export function getValidAdminStatusDestinations(
   status: RequestStatus,
 ): RequestStatus[] {
@@ -1148,6 +1375,61 @@ function notificationBody(input: {
   }
 
   return lines.join("\n");
+}
+
+function parseJsonObject(
+  value: string,
+): { ok: true; value: JsonObject } | { ok: false; message: string } {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { ok: false, message: "JSON is invalid." };
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, message: "JSON must be an object." };
+  }
+
+  return { ok: true, value: parsed as JsonObject };
+}
+
+function hasDangerousKeyInUnknown(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => hasDangerousKeyInUnknown(item));
+  }
+
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, child]) =>
+      key === "__proto__" ||
+      key === "prototype" ||
+      key === "constructor" ||
+      hasDangerousKeyInUnknown(child),
+  );
+}
+
+function serializedJsonByteLength(value: JsonObject): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
 }
 
 async function safeFormData(request: Request): Promise<FormData | null> {

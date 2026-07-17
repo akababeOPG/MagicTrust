@@ -403,6 +403,8 @@ POST /admin/requests/:publicId/status
 POST /admin/requests/:publicId/comments
 POST /admin/requests/:publicId/attachments
 POST /admin/requests/:publicId/notifications
+POST /admin/requests/:publicId/data
+POST /admin/requests/:publicId/events
 ```
 
 These routes never call `/api/v1`, never use `x-api-key`, and never expose Internal API keys or API client keys to the browser. Actor identity is derived only from the secure admin session:
@@ -453,7 +455,17 @@ Sending a notification creates an encrypted-recipient communication record and e
 
 Upload and notification are separate actions: uploading a file does not notify the consumer, and sending a notification does not change request status or add comments automatically.
 
-This version does not add attachment deletion, bulk uploads, SMS, automatic notifications, email template UI, request status automation, mutable-data editing, custom event creation, admin user management, API client management, analytics, or requester PII display.
+Mutable data updates require a JSON object and a trimmed reason of 1-2,000 characters. The operation merges incoming keys into `mutable_data` and preserves omitted keys. It does not replace the entire object and does not delete keys. The original submitted request payload remains immutable; the admin dashboard never edits or exposes `submitted_data_encrypted`, requester PII, hashes, ciphertext, or decrypted original submissions.
+
+Mutable data JSON must be an object, not an array, cannot contain `__proto__`, `prototype`, or `constructor` anywhere in the structure, and is limited to 32 KB when serialized. The `REQUEST_DATA_UPDATED` audit event contains only `changedKeys`, the safe reason, and `ADMIN_USER` actor metadata. It does not store previous values, new values, requester PII, encrypted values, tokens, cookies, hashes, or API keys.
+
+Custom events require an event type, visibility, and optional JSON object data. Event names must start with a letter, contain only uppercase letters, numbers, and underscores, be 3-80 characters long, and cannot use built-in MagicTrust event names. Event data defaults to `{}`, must be a JSON object, cannot contain dangerous keys, and is limited to 16 KB.
+
+`INTERNAL` custom events are visible only in internal/admin timelines. `PUBLIC` custom events may appear in public tracking and secure consumer pages, but public output includes only `type`, `data`, and `createdAt`; it never includes admin user ids, actor metadata, encrypted data, hashes, tokens, or internal metadata.
+
+Mutable data updates and custom events use minimal duplicate-submission protection for identical browser retries. They do not change request status, create comments, or send consumer email notifications automatically.
+
+This version does not add deleting mutable data keys, replacing the full mutable data object, submitted data editing, attachment deletion, bulk uploads, SMS, automatic workflows, webhooks, email template UI, admin user management, API client management, analytics, or requester PII display.
 
 ## `GET /api/v1/requests`
 

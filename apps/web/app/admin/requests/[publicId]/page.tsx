@@ -133,8 +133,9 @@ export default async function AdminRequestDetailPage({
         </div>
         {!canMutate ? (
           <p>
-            Your role is read-only. ADMIN and OPERATOR users can update status
-            and add comments.
+            Your role is read-only. ADMIN and OPERATOR users can manage request
+            status, comments, attachments, notifications, mutable data, and
+            custom events.
           </p>
         ) : (
           <div className="admin-actions-grid">
@@ -269,6 +270,78 @@ export default async function AdminRequestDetailPage({
                   </select>
                 </label>
                 <AdminSubmitButton>Send notification</AdminSubmitButton>
+              </form>
+            </section>
+
+            <section aria-labelledby="edit-mutable-data-heading">
+              <h3 id="edit-mutable-data-heading">Edit Mutable Data</h3>
+              <p>
+                Submitted request data is immutable. This merges the JSON object
+                below into mutable data and preserves omitted keys.
+              </p>
+              <form
+                className="admin-action-form"
+                action={`/admin/requests/${request.publicId}/data`}
+                method="post"
+              >
+                <label>
+                  Mutable data JSON
+                  <textarea
+                    name="data"
+                    required
+                    rows={10}
+                    defaultValue={JSON.stringify(request.mutableData, null, 2)}
+                  />
+                </label>
+                <label>
+                  Reason
+                  <textarea
+                    name="reason"
+                    required
+                    maxLength={2000}
+                    rows={3}
+                  />
+                </label>
+                <AdminSubmitButton>Update mutable data</AdminSubmitButton>
+              </form>
+            </section>
+
+            <section aria-labelledby="custom-event-heading">
+              <h3 id="custom-event-heading">Register Custom Event</h3>
+              <p>
+                PUBLIC custom events appear in consumer tracking. INTERNAL
+                custom events remain dashboard-only.
+              </p>
+              <form
+                className="admin-action-form"
+                action={`/admin/requests/${request.publicId}/events`}
+                method="post"
+              >
+                <label>
+                  Event type
+                  <input
+                    name="type"
+                    required
+                    pattern="[A-Z][A-Z0-9_]{2,79}"
+                    maxLength={80}
+                    autoComplete="off"
+                  />
+                </label>
+                <label>
+                  Visibility
+                  <select name="visibility" required defaultValue="INTERNAL">
+                    {commentVisibilities.map((visibility) => (
+                      <option key={visibility} value={visibility}>
+                        {visibility}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Event data JSON
+                  <textarea name="data" rows={6} placeholder="{}" />
+                </label>
+                <AdminSubmitButton>Record custom event</AdminSubmitButton>
               </form>
             </section>
           </div>

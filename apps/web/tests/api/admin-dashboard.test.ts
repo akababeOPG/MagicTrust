@@ -21,12 +21,14 @@ vi.mock("server-only", () => ({}));
 
 import {
   createAdminRequestComment,
+  createAdminCustomEvent,
   downloadAdminAttachment,
   getAdminRequestDetail,
   getValidAdminStatusDestinations,
   listAdminRequests,
   parseAdminRequestListSearchParams,
   sendAdminConsumerNotification,
+  updateAdminMutableData,
   updateAdminRequestStatus,
   uploadAdminRequestAttachment,
 } from "../../lib/admin-dashboard";
@@ -844,6 +846,452 @@ describe("admin dashboard", () => {
     expect(response.status).toBe(403);
     expect(dependencies.state.sentEmails).toEqual([]);
   });
+
+  test("ADMIN and OPERATOR can update mutable data with session actor identity", async () => {
+    const adminDependencies = createInMemoryDependencies();
+    const operatorDependencies = createInMemoryDependencies();
+
+    const adminResponse = await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: "Admin added resolution metadata.",
+        actorId: "spoofed-user",
+      }),
+      "req_one",
+      adminSession({ adminUserId: "admin-data", role: "ADMIN" }),
+      adminDependencies,
+    );
+    const operatorResponse = await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { matchedSystems: ["Vector"] },
+        reason: "Operator added matched systems.",
+      }),
+      "req_one",
+      adminSession({ adminUserId: "operator-data", role: "OPERATOR" }),
+      operatorDependencies,
+    );
+
+    expect(adminResponse.status).toBe(303);
+    expect(operatorResponse.status).toBe(303);
+    expect(adminDependencies.state.requests[0]?.mutableData).toEqual({
+      processorReference: "job-12345",
+      resolutionCode: "DATA_EXPORT_READY",
+    });
+    expect(operatorDependencies.state.requests[0]?.mutableData).toEqual({
+      processorReference: "job-12345",
+      matchedSystems: ["Vector"],
+    });
+    expect(adminDependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "REQUEST_DATA_UPDATED",
+          actorType: "ADMIN_USER",
+          actorId: "admin-data",
+          data: {
+            changedKeys: ["resolutionCode"],
+            reason: "Admin added resolution metadata.",
+            actor: {
+              type: "ADMIN_USER",
+              id: "admin-data",
+            },
+          },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(adminDependencies.state.events)).not.toContain(
+      "spoofed-user",
+    );
+  });
+
+  test("mutable update preserves submitted data and does not send email or change status", async () => {
+    const dependencies = createInMemoryDependencies();
+    const submittedDataBefore = JSON.stringify(
+      dependencies.state.requests[0]?.submittedData,
+    );
+    const submittedDataEncryptedBefore =
+      dependencies.state.requests[0]?.submittedDataEncrypted;
+
+    await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: "Admin added resolution metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(JSON.stringify(dependencies.state.requests[0]?.submittedData)).toBe(
+      submittedDataBefore,
+    );
+    expect(dependencies.state.requests[0]?.submittedDataEncrypted).toBe(
+      submittedDataEncryptedBefore,
+    );
+    expect(dependencies.state.requests[0]?.status).toBe("SUBMITTED");
+    expect(dependencies.state.sentEmails).toEqual([]);
+  });
+
+  test("mutable data validation rejects invalid JSON, dangerous keys, and bad reason", async () => {
+    const dependencies = createInMemoryDependencies();
+    const invalidJson = await updateAdminMutableData(
+      adminMutableDataRequest({
+        dataText: "{",
+        reason: "Admin added resolution metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const dangerous = await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { constructor: { polluted: true } },
+        reason: "Admin added resolution metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const missingReason = await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: " ",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const longReason = await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: "a".repeat(2_001),
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const arrayRoot = await updateAdminMutableData(
+      adminMutableDataRequest({
+        dataText: "[]",
+        reason: "Admin added resolution metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const oversized = await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { value: "a".repeat(32 * 1024 + 1) },
+        reason: "Admin added resolution metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(invalidJson.status).toBe(303);
+    expect(dangerous.status).toBe(303);
+    expect(missingReason.status).toBe(303);
+    expect(longReason.status).toBe(303);
+    expect(arrayRoot.status).toBe(303);
+    expect(oversized.status).toBe(303);
+    expect(dependencies.state.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "REQUEST_DATA_UPDATED" }),
+      ]),
+    );
+  });
+
+  test("mutable audit contains changed keys but not mutable values", async () => {
+    const dependencies = createInMemoryDependencies();
+    await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: "Admin added resolution metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    const event = dependencies.state.events.find(
+      (item) => item.type === "REQUEST_DATA_UPDATED",
+    );
+
+    expect(event?.data).toEqual({
+      changedKeys: ["resolutionCode"],
+      reason: "Admin added resolution metadata.",
+      actor: {
+        type: "ADMIN_USER",
+        id: "admin-user-1",
+      },
+    });
+    expect(JSON.stringify(event?.data)).not.toContain("DATA_EXPORT_READY");
+  });
+
+  test("ADMIN and OPERATOR can create custom events", async () => {
+    const adminDependencies = createInMemoryDependencies();
+    const operatorDependencies = createInMemoryDependencies();
+
+    const adminResponse = await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        visibility: "INTERNAL",
+        data: { system: "Vector" },
+      }),
+      "req_one",
+      adminSession({ adminUserId: "admin-event", role: "ADMIN" }),
+      adminDependencies,
+    );
+    const operatorResponse = await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_READY",
+        visibility: "PUBLIC",
+        data: { message: "Ready" },
+      }),
+      "req_one",
+      adminSession({ adminUserId: "operator-event", role: "OPERATOR" }),
+      operatorDependencies,
+    );
+
+    expect(adminResponse.status).toBe(303);
+    expect(operatorResponse.status).toBe(303);
+    expect(adminDependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "CUSTOM_EVENT",
+          category: "CUSTOM",
+          customType: "DATA_EXPORT_GENERATED",
+          visibility: "INTERNAL",
+          actorType: "ADMIN_USER",
+          actorId: "admin-event",
+          data: { system: "Vector" },
+        }),
+      ]),
+    );
+    expect(operatorDependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          customType: "DATA_EXPORT_READY",
+          visibility: "PUBLIC",
+          actorId: "operator-event",
+        }),
+      ]),
+    );
+  });
+
+  test("custom event validation rejects reserved, invalid, oversized, and dangerous data", async () => {
+    const dependencies = createInMemoryDependencies();
+    const reserved = await createAdminCustomEvent(
+      adminCustomEventRequest({ type: "STATUS_CHANGED" }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const invalidName = await createAdminCustomEvent(
+      adminCustomEventRequest({ type: "bad-name" }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const oversized = await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        data: { value: "a".repeat(16 * 1024 + 1) },
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const dangerous = await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        data: { prototype: { polluted: true } },
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(reserved.status).toBe(303);
+    expect(invalidName.status).toBe(303);
+    expect(oversized.status).toBe(303);
+    expect(dangerous.status).toBe(303);
+    expect(dependencies.state.events).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "CUSTOM_EVENT" })]),
+    );
+  });
+
+  test("custom event visibility remains public-safe", async () => {
+    const dependencies = createInMemoryDependencies();
+    await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        visibility: "INTERNAL",
+        data: { system: "Vector" },
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_READY",
+        visibility: "PUBLIC",
+        data: { message: "Ready" },
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    const publicEvents = dependencies.state.events
+      .filter(
+        (event) => event.category === "CUSTOM" && event.visibility === "PUBLIC",
+      )
+      .map((event) => ({
+        type: event.customType,
+        data: event.data,
+        createdAt: event.createdAt.toISOString(),
+      }));
+
+    expect(publicEvents).toEqual([
+      {
+        type: "DATA_EXPORT_READY",
+        data: { message: "Ready" },
+        createdAt: "2026-07-03T00:00:00.000Z",
+      },
+    ]);
+    expect(JSON.stringify(publicEvents)).not.toContain("admin-user-1");
+    expect(JSON.stringify(publicEvents)).not.toContain("ADMIN_USER");
+    expect(JSON.stringify(publicEvents)).not.toContain("Vector");
+  });
+
+  test("custom event does not change status or send email", async () => {
+    const dependencies = createInMemoryDependencies();
+    await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        data: { system: "Vector" },
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.requests[0]?.status).toBe("SUBMITTED");
+    expect(dependencies.state.sentEmails).toEqual([]);
+  });
+
+  test("mutable data and custom event duplicate submissions do not create duplicate records", async () => {
+    const dependencies = createInMemoryDependencies();
+    const mutableRequest = () =>
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: "Admin added resolution metadata.",
+      });
+    const eventRequest = () =>
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        data: { system: "Vector" },
+      });
+
+    await updateAdminMutableData(
+      mutableRequest(),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await updateAdminMutableData(
+      mutableRequest(),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await createAdminCustomEvent(
+      eventRequest(),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await createAdminCustomEvent(
+      eventRequest(),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_DATA_UPDATED",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "CUSTOM_EVENT",
+      ),
+    ).toHaveLength(1);
+
+    await updateAdminMutableData(
+      adminMutableDataRequest({
+        data: { resolutionCode: "DATA_EXPORT_READY" },
+        reason: "Admin confirmed the same metadata.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await createAdminCustomEvent(
+      adminCustomEventRequest({
+        type: "DATA_EXPORT_GENERATED",
+        data: { system: "Console" },
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_DATA_UPDATED",
+      ),
+    ).toHaveLength(2);
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "CUSTOM_EVENT",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("mutable data and custom event cross-origin submissions rejected", async () => {
+    const dependencies = createInMemoryDependencies();
+    const mutable = await updateAdminMutableData(
+      adminMutableDataRequest(
+        {
+          data: { resolutionCode: "DATA_EXPORT_READY" },
+          reason: "Admin added resolution metadata.",
+        },
+        "https://attacker.test",
+      ),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const event = await createAdminCustomEvent(
+      adminCustomEventRequest(
+        {
+          type: "DATA_EXPORT_GENERATED",
+          data: { system: "Vector" },
+        },
+        "https://attacker.test",
+      ),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(mutable.status).toBe(403);
+    expect(event.status).toBe(403);
+  });
 });
 
 function adminSession(
@@ -1203,6 +1651,78 @@ function createInMemoryDependencies(
 
       return comment;
     },
+    async updateMutableData(id, input) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      request.mutableData = {
+        ...request.mutableData,
+        ...input.data,
+      };
+      request.updatedAt = new Date("2026-07-03T00:00:00.000Z");
+      events.push({
+        id: `event-data-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: "REQUEST_DATA_UPDATED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          changedKeys: Object.keys(input.data),
+          reason: input.reason,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+
+      return {
+        mutableData: request.mutableData,
+        updatedAt: request.updatedAt,
+      };
+    },
+    async addCustomEvent(id, input) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const event: RequestEvent = {
+        id: `event-custom-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: "CUSTOM_EVENT",
+        category: "CUSTOM",
+        customType: input.customType,
+        visibility: input.visibility,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: input.data,
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      };
+      events.push(event);
+
+      return {
+        id: event.id,
+        privacyRequestId: event.privacyRequestId,
+        type: event.type,
+        category: event.category ?? "BUILT_IN",
+        customType: event.customType ?? null,
+        visibility: event.visibility ?? "INTERNAL",
+        actorType: event.actorType,
+        actorId: event.actorId,
+        data: event.data,
+        createdAt: event.createdAt,
+      };
+    },
     async addAttachment(id, input) {
       const request = requests.find(
         (item) => item.id === id || item.publicId === id,
@@ -1394,8 +1914,6 @@ function createInMemoryDependencies(
       return communication;
     },
     findConsumerAccessLinkTarget: notImplemented,
-    updateMutableData: notImplemented,
-    addCustomEvent: notImplemented,
     recordAttachmentDownloaded: notImplemented,
     markCommunicationSent: notImplemented,
     markCommunicationFailed: notImplemented,
@@ -1561,6 +2079,64 @@ function adminNotificationRequest(
       body,
     },
   );
+}
+
+function adminMutableDataRequest(
+  fields: {
+    data?: Record<string, unknown>;
+    dataText?: string;
+    reason: string;
+    actorId?: string;
+  },
+  origin = "https://magictrust.test",
+) {
+  const body = new FormData();
+  body.set("data", fields.dataText ?? JSON.stringify(fields.data ?? {}));
+  body.set("reason", fields.reason);
+
+  if (fields.actorId !== undefined) {
+    body.set("actorId", fields.actorId);
+  }
+
+  return new Request("https://magictrust.test/admin/requests/req_one/data", {
+    method: "POST",
+    headers: {
+      origin,
+    },
+    body,
+  });
+}
+
+function adminCustomEventRequest(
+  fields: {
+    type?: string;
+    visibility?: string;
+    data?: Record<string, unknown>;
+    dataText?: string;
+  },
+  origin = "https://magictrust.test",
+) {
+  const body = new FormData();
+
+  if (fields.type !== undefined) {
+    body.set("type", fields.type);
+  }
+
+  body.set("visibility", fields.visibility ?? "INTERNAL");
+
+  if (fields.dataText !== undefined) {
+    body.set("data", fields.dataText);
+  } else if (fields.data !== undefined) {
+    body.set("data", JSON.stringify(fields.data));
+  }
+
+  return new Request("https://magictrust.test/admin/requests/req_one/events", {
+    method: "POST",
+    headers: {
+      origin,
+    },
+    body,
+  });
 }
 
 function isTerminalStatus(status: string): boolean {
