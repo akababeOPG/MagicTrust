@@ -87,6 +87,12 @@ const updateStatusSchema = z.object({
   reason: z.string().min(1).nullable().optional(),
 });
 
+const updateMutableDataSchema = z.object({
+  data: jsonObjectSchema,
+  actor: actorSchema,
+  reason: z.string().min(1).nullable().optional(),
+});
+
 const addCommentSchema = z.object({
   visibility: z.enum(commentVisibilities),
   body: z.string().min(1),
@@ -214,6 +220,7 @@ export function createInternalRequestApi(
       return Response.json({
         request: {
           ...normalizeRequestSummary(result),
+          mutableData: result.mutableData,
           events: result.events.map((event) => ({
             id: event.id,
             type: event.type,
@@ -322,6 +329,53 @@ export function createInternalRequestApi(
           request: normalizeRequestSummary(updatedRequest, {
             includeCompletedAt: true,
           }),
+        });
+      } catch {
+        return serverError();
+      }
+    },
+
+    async updateMutableData(request: Request, id: string): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      if (hasDangerousKeyInUnknown(body)) {
+        return validationError();
+      }
+
+      const parsed = updateMutableDataSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      try {
+        const updated = await dependencies.requestRepository.updateMutableData(
+          id,
+          {
+            data: parsed.data.data,
+            actorType: parsed.data.actor.type,
+            actorId: parsed.data.actor.id ?? null,
+            reason: parsed.data.reason ?? null,
+          },
+        );
+
+        if (!updated) {
+          return notFound();
+        }
+
+        return Response.json({
+          request: {
+            mutableData: updated.mutableData,
+            updatedAt: updated.updatedAt.toISOString(),
+          },
         });
       } catch {
         return serverError();
@@ -1068,6 +1122,24 @@ function contentDispositionAttachment(fileName: string): string {
 
 function escapeHeaderValue(value: string): string {
   return value.replace(/["\\\r\n]/g, "_");
+}
+
+function hasDangerousKeyInUnknown(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => hasDangerousKeyInUnknown(item));
+  }
+
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, child]) =>
+      key === "__proto__" ||
+      key === "prototype" ||
+      key === "constructor" ||
+      hasDangerousKeyInUnknown(child),
+  );
 }
 
 function generateSecureToken(): string {

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."request_event_type" ADD VALUE 'REQUEST_DATA_UPDATED';

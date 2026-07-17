@@ -75,6 +75,16 @@ describe("internal request API", () => {
       ),
       created.publicId,
     );
+    const dataResponse = await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(validMutableDataBody()),
+        },
+      ),
+      created.publicId,
+    );
     const commentResponse = await api.addComment(
       authenticatedRequest(
         `https://magictrust.test/api/v1/requests/${created.publicId}/comments`,
@@ -145,6 +155,7 @@ describe("internal request API", () => {
     expect(listResponse.status).toBe(200);
     expect(getResponse.status).toBe(200);
     expect(statusResponse.status).toBe(200);
+    expect(dataResponse.status).toBe(200);
     expect(commentResponse.status).toBe(201);
     expect(attachmentResponse.status).toBe(201);
     expect(uploadResponse.status).toBe(201);
@@ -348,6 +359,174 @@ describe("internal request API", () => {
 
     expect(response.status).toBe(200);
     expect(body.request.completedAt).toEqual(expect.any(String));
+  });
+
+  test("returns 401 for unauthorized mutable data update", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.updateMutableData(
+      new Request("https://magictrust.test/api/v1/requests/req_test/data", {
+        method: "PATCH",
+        body: JSON.stringify(validMutableDataBody()),
+      }),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("returns 404 when updating mutable data for a missing request", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.updateMutableData(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_missing/data",
+        {
+          method: "PATCH",
+          body: JSON.stringify(validMutableDataBody()),
+        },
+      ),
+      "req_missing",
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("merges mutable data and preserves existing keys", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(
+            validMutableDataBody({
+              data: {
+                processorReference: "job-12345",
+                matchedSystems: ["Vector"],
+              },
+            }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+    const response = await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(
+            validMutableDataBody({
+              data: {
+                resolutionCode: "DATA_EXPORT_READY",
+              },
+            }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(200);
+    expect(body.request.mutableData).toEqual({
+      processorReference: "job-12345",
+      matchedSystems: ["Vector"],
+      resolutionCode: "DATA_EXPORT_READY",
+    });
+    expect(body.request.updatedAt).toEqual(expect.any(String));
+    expect(detail.mutableData).toEqual(body.request.mutableData);
+    expect(detail.submittedData).toBeUndefined();
+  });
+
+  test("mutable data update never modifies submitted data", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const originalSubmittedData = structuredClone(
+      dependencies.state.requests[0]!.submittedData,
+    );
+
+    await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(validMutableDataBody()),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(dependencies.state.requests[0]!.submittedData).toEqual(
+      originalSubmittedData,
+    );
+  });
+
+  test("rejects dangerous mutable data keys", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: '{"data":{"safe":{"__proto__":{"polluted":true}}},"actor":{"type":"API_CLIENT","id":"privacy-processor"}}',
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(dependencies.state.requests[0]!.mutableData).toEqual({});
+  });
+
+  test("creates a REQUEST_DATA_UPDATED event", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.updateMutableData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(validMutableDataBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(200);
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "REQUEST_DATA_UPDATED",
+          actorType: "API_CLIENT",
+          actorId: "privacy-processor",
+          data: {
+            changedKeys: [
+              "processorReference",
+              "matchedSystems",
+              "resolutionCode",
+            ],
+            reason: "Processor added resolution metadata",
+            actor: {
+              type: "API_CLIENT",
+              id: "privacy-processor",
+            },
+          },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(detail.events)).not.toContain("job-12345");
+    expect(JSON.stringify(detail.events)).not.toContain("DATA_EXPORT_READY");
   });
 
   test("creates a public comment and event", async () => {
@@ -1426,6 +1605,25 @@ function validStatusUpdateBody(overrides: { status?: string } = {}) {
   };
 }
 
+function validMutableDataBody(
+  overrides: {
+    data?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    data: overrides.data ?? {
+      processorReference: "job-12345",
+      matchedSystems: ["Vector", "Console"],
+      resolutionCode: "DATA_EXPORT_READY",
+    },
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+    reason: "Processor added resolution metadata",
+  };
+}
+
 function validCommentBody(overrides: { visibility?: string } = {}) {
   return {
     visibility: overrides.visibility ?? "PUBLIC",
@@ -1635,6 +1833,7 @@ function createInMemoryDependencies(
 
       return {
         ...summaryFromRequest(request),
+        mutableData: request.mutableData,
         events: state.events
           .filter((event) => event.privacyRequestId === request.id)
           .map((event) => ({
@@ -1722,6 +1921,43 @@ function createInMemoryDependencies(
       });
 
       return summaryFromRequest(request);
+    },
+    async updateMutableData(id, input) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const now = new Date(Date.UTC(2026, 0, state.nextId++));
+      request.mutableData = {
+        ...request.mutableData,
+        ...input.data,
+      };
+      request.updatedAt = now;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: request.id,
+        type: "REQUEST_DATA_UPDATED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          changedKeys: Object.keys(input.data),
+          reason: input.reason,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return {
+        mutableData: request.mutableData,
+        updatedAt: request.updatedAt,
+      };
     },
     async addComment(id, input) {
       const request = state.requests.find(

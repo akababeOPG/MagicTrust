@@ -140,6 +140,26 @@ describe("public request API", () => {
     expect(serialized).not.toContain("providerMessageId");
   });
 
+  test("public APIs do not expose mutable data", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createPublicRequestApi(dependencies);
+
+    const createResponse = await api.create(publicRequest());
+    const createBody = await createResponse.json();
+    dependencies.state.requests[0]!.mutableData = {
+      processorReference: "job-12345",
+      resolutionCode: "DATA_EXPORT_READY",
+    };
+
+    const trackingResponse = await api.get(createBody.request.publicId);
+    const trackingBody = await trackingResponse.json();
+
+    expect(JSON.stringify(createBody)).not.toContain("mutableData");
+    expect(JSON.stringify(trackingBody)).not.toContain("mutableData");
+    expect(JSON.stringify(trackingBody)).not.toContain("job-12345");
+    expect(JSON.stringify(trackingBody)).not.toContain("DATA_EXPORT_READY");
+  });
+
   test("rejects honeypot submissions", async () => {
     const dependencies = createInMemoryDependencies();
     const api = createPublicRequestApi(dependencies);
@@ -1281,6 +1301,7 @@ function createInMemoryDependencies(
 
       return {
         ...summaryFromRequest(request),
+        mutableData: request.mutableData,
         events: state.events
           .filter((event) => event.privacyRequestId === request.id)
           .map((event) => ({
@@ -1334,6 +1355,9 @@ function createInMemoryDependencies(
         .map(summaryFromRequest);
     },
     async updateStatus() {
+      throw new Error("Not implemented in public intake tests.");
+    },
+    async updateMutableData() {
       throw new Error("Not implemented in public intake tests.");
     },
     async addComment() {

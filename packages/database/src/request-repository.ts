@@ -51,6 +51,7 @@ export type RequestEventSummary = {
 };
 
 export type RequestDetails = RequestSummary & {
+  mutableData: JsonObject;
   events: RequestEventSummary[];
   comments: RequestComment[];
   attachments: RequestAttachment[];
@@ -89,6 +90,10 @@ export type RequestRepository = {
     id: string,
     input: UpdateRequestStatusInput,
   ): Promise<RequestSummary | null>;
+  updateMutableData(
+    id: string,
+    input: UpdateMutableDataInput,
+  ): Promise<MutableDataUpdateResult | null>;
   addComment(
     id: string,
     input: AddRequestCommentInput,
@@ -168,6 +173,18 @@ export type UpdateRequestStatusInput = {
   actorType: ActorType;
   actorId: string | null;
   reason: string | null;
+};
+
+export type UpdateMutableDataInput = {
+  data: JsonObject;
+  actorType: ActorType;
+  actorId: string | null;
+  reason: string | null;
+};
+
+export type MutableDataUpdateResult = {
+  mutableData: JsonObject;
+  updatedAt: Date;
 };
 
 export type AddRequestCommentInput = {
@@ -322,6 +339,7 @@ export function createRequestRepository(db: Database): RequestRepository {
           completedAt: privacyRequests.completedAt,
           createdAt: privacyRequests.createdAt,
           updatedAt: privacyRequests.updatedAt,
+          mutableData: privacyRequests.mutableData,
         })
         .from(privacyRequests)
         .where(
@@ -397,6 +415,7 @@ export function createRequestRepository(db: Database): RequestRepository {
         comments,
         attachments,
         communications,
+        mutableData: request.mutableData as JsonObject,
       };
     },
     async findConsumerAccessLinkTarget(publicId) {
@@ -520,6 +539,59 @@ export function createRequestRepository(db: Database): RequestRepository {
         });
 
         return updatedRequest;
+      });
+    },
+    async updateMutableData(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            id: privacyRequests.id,
+            mutableData: privacyRequests.mutableData,
+          })
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1);
+
+        if (!request) {
+          return null;
+        }
+
+        const now = new Date();
+        const mutableData = {
+          ...(request.mutableData as JsonObject),
+          ...input.data,
+        };
+        const [updatedRequest] = await tx
+          .update(privacyRequests)
+          .set({
+            mutableData,
+            updatedAt: now,
+          })
+          .where(eq(privacyRequests.id, request.id))
+          .returning({
+            mutableData: privacyRequests.mutableData,
+            updatedAt: privacyRequests.updatedAt,
+          });
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: request.id,
+          type: "REQUEST_DATA_UPDATED",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            changedKeys: Object.keys(input.data),
+            reason: input.reason,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return {
+          mutableData: updatedRequest.mutableData as JsonObject,
+          updatedAt: updatedRequest.updatedAt,
+        };
       });
     },
     async addComment(id, input) {

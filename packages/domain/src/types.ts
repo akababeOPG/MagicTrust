@@ -64,7 +64,8 @@ export type RequestEventType =
   | "IDENTITY_VERIFICATION_SENT"
   | "IDENTITY_VERIFIED"
   | "CONSUMER_NOTIFICATION_SENT"
-  | "CONSUMER_NOTIFICATION_FAILED";
+  | "CONSUMER_NOTIFICATION_FAILED"
+  | "REQUEST_DATA_UPDATED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];

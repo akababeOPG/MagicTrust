@@ -57,6 +57,7 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "IDENTITY_VERIFIED",
   "CONSUMER_NOTIFICATION_SENT",
   "CONSUMER_NOTIFICATION_FAILED",
+  "REQUEST_DATA_UPDATED",
 ]);
 
 export const commentVisibilityEnum = pgEnum("comment_visibility", [
