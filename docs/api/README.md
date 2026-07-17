@@ -471,6 +471,32 @@ Mutable data updates and custom events use minimal duplicate-submission protecti
 
 This version does not add deleting mutable data keys, replacing the full mutable data object, submitted data editing, requester data editing or exports, attachment deletion, bulk uploads, SMS, automatic workflows, email template UI, admin user management, API client management, or analytics.
 
+## Guided DATA_ACCESS Workflow
+
+The admin request list uses one exact-match search field for request ID, email, or phone. Values beginning with `req_` are matched to `publicId`; values containing `@` use the normalized requester email hash; other values use the normalized phone hash. `ADMIN` and `OPERATOR` may use all three forms. `VIEWER` may search by request ID only. Email and phone values, normalized values, and hashes are never logged or audited.
+
+Authorized list rows show the requester name with a masked email or phone. `VIEWER` rows show `Restricted` and do not decrypt requester data. DATA_ACCESS rows derive their next step from current request state, public response attachments, and response-delivery events:
+
+- Waiting for verification
+- Start processing
+- Upload response file
+- Send response
+- Retry sending response
+- Waiting for requester
+- Completed, rejected, or cancelled
+
+DATA_ACCESS detail pages use natural-language statuses and a guided sequence: request header, progress, one next action, requester/original request, processing workspace, secure response delivery, collapsed activity history, and exceptional actions. The normal workflow hides generic status, comment visibility, attachment visibility, notification type, mutable-data JSON, custom-event, and raw event controls. Their existing backend routes and services remain available for other internal integrations.
+
+While waiting for verification, `ADMIN` or `OPERATOR` can resend a verification email. This supersedes prior unused verification tokens, creates a new single-use token valid for 24 hours, stores it hashed, records encrypted-recipient communication metadata, and creates the existing verification-sent audit event. Resending does not change request status.
+
+After verification, Start processing changes `VERIFIED` to `PROCESSING` with the authenticated admin user as actor. Internal notes always create `INTERNAL` comments. Guided response uploads always create `PUBLIC` attachments and do not send email or change status.
+
+Sending a response creates a temporary secure consumer link and sends the selected public file through the existing secure-access email flow; the file is never attached directly. MagicTrust changes the request to `SUCCESS` only after successful email delivery. A failed delivery leaves the request in `PROCESSING` and presents a safe retry action.
+
+Reject request is for invalid, duplicate, fraudulent, unsupported, or unfulfillable requests. Cancel request is for administrative closure, requester withdrawal, or abandonment without a fulfillment decision. Both require an explicit reason and confirmation. Neither occurs automatically based on age.
+
+`VIEWER` remains read-only, cannot perform PII search, does not trigger requester decryption, and receives no guided mutation controls.
+
 ## `GET /api/v1/requests`
 
 Lists Internal API request summaries. Requires `x-api-key` with `requests:read`.

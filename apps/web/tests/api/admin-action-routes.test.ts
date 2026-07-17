@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   sendAdminConsumerNotification: vi.fn(),
   updateAdminMutableData: vi.fn(),
   createAdminCustomEvent: vi.fn(),
+  resendAdminIdentityVerification: vi.fn(),
+  sendAdminDataAccessResponse: vi.fn(),
 }));
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -24,6 +26,8 @@ vi.mock("@/lib/admin-dashboard", () => ({
   sendAdminConsumerNotification: mocks.sendAdminConsumerNotification,
   updateAdminMutableData: mocks.updateAdminMutableData,
   createAdminCustomEvent: mocks.createAdminCustomEvent,
+  resendAdminIdentityVerification: mocks.resendAdminIdentityVerification,
+  sendAdminDataAccessResponse: mocks.sendAdminDataAccessResponse,
 }));
 
 describe("admin action routes", () => {
@@ -304,5 +308,43 @@ describe("admin action routes", () => {
 
     expect(response.status).toBe(403);
     expect(mocks.createAdminCustomEvent).not.toHaveBeenCalled();
+  });
+
+  test("guided verification resend requires an admin session", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/resend-verification/route");
+
+    const response = await POST(
+      new Request(
+        "https://magictrust.test/admin/requests/req_one/resend-verification",
+        { method: "POST" },
+      ),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(401);
+    expect(mocks.resendAdminIdentityVerification).not.toHaveBeenCalled();
+  });
+
+  test("VIEWER cannot send a guided response", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/send-response/route");
+
+    const response = await POST(
+      new Request(
+        "https://magictrust.test/admin/requests/req_one/send-response",
+        { method: "POST" },
+      ),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.sendAdminDataAccessResponse).not.toHaveBeenCalled();
   });
 });

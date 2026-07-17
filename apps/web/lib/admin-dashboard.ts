@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import {
   createDatabase,
   createRequestRepository,
+  type AdminRequestListWorkflowData,
   type AdminRequestSensitiveData,
   type ConsumerNotificationType,
   type RequestDetails,
@@ -25,7 +26,14 @@ import {
 import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
 import type { EmailProvider } from "@magictrust/email";
 import { createResendEmailProvider } from "@magictrust/email";
-import { decryptPii, hashAccessToken } from "@magictrust/privacy";
+import {
+  decryptPii,
+  hashAccessToken,
+  hashIdentityVerificationToken,
+  hashPii,
+  normalizeEmailForHash,
+  normalizePhoneForHash,
+} from "@magictrust/privacy";
 import {
   createVercelBlobPrivateStorageProvider,
   type PrivateFileStorageProvider,
@@ -64,6 +72,12 @@ export type AdminRequestListItem = {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  requesterSummary?: {
+    name: string;
+    contact: string | null;
+  };
+  ageDays?: number;
+  nextStep?: string;
 };
 
 export type AdminRequestDetailView = AdminRequestListItem & {
@@ -265,20 +279,35 @@ export function createAdminDashboardDependencies(): AdminDashboardDependencies {
 export async function listAdminRequests(
   searchParams: URLSearchParams,
   dependencies: AdminDashboardDependencies,
+  role: AdminSession["role"] = "VIEWER",
 ): Promise<
   { ok: true; data: AdminRequestListView } | { ok: false; message: string }
 > {
-  const parsed = parseAdminRequestListSearchParams(searchParams);
+  const parsed = parseAdminRequestListSearchParams(searchParams, role);
 
   if (!parsed.ok) {
     return parsed;
   }
 
   const result = await dependencies.requestRepository.list(parsed.filters);
+  const workflowRows = dependencies.requestRepository.findAdminListWorkflowData
+    ? await dependencies.requestRepository.findAdminListWorkflowData(
+        result.requests.map((request) => request.id),
+      )
+    : [];
+  const workflowByRequest = new Map(
+    workflowRows.map((row) => [row.requestId, row]),
+  );
 
   return {
     ok: true,
-    data: normalizeAdminRequestList(result, parsed.filters.limit),
+    data: normalizeAdminRequestList(
+      result,
+      parsed.filters.limit,
+      role,
+      workflowByRequest,
+      dependencies.now(),
+    ),
   };
 }
 
@@ -509,6 +538,246 @@ export async function createAdminRequestComment(
   });
 }
 
+export async function addAdminInternalNote(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+  const parsed = z
+    .object({ body: z.string().trim().min(1).max(5_000) })
+    .safeParse({ body: formData?.get("body") });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Internal note is required.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const duplicate = existing.comments.some(
+    (comment) =>
+      comment.visibility === "INTERNAL" &&
+      comment.body === parsed.data.body &&
+      comment.actorType === "ADMIN_USER" &&
+      comment.actorId === adminSession.adminUserId,
+  );
+
+  if (!duplicate) {
+    await dependencies.requestRepository.addComment(existing.id, {
+      visibility: "INTERNAL",
+      body: parsed.data.body,
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+    });
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: duplicate
+      ? "Internal note already recorded."
+      : "Internal note added.",
+  });
+}
+
+export async function startAdminRequestProcessing(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (existing.type !== "DATA_ACCESS") {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This guided action is available for data access requests only.",
+    });
+  }
+
+  if (existing.status === "PROCESSING") {
+    return redirectToRequestDetail(request, publicId, {
+      success: "Processing has already started.",
+    });
+  }
+
+  if (existing.status !== "VERIFIED") {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This request is not ready to process.",
+    });
+  }
+
+  await dependencies.requestRepository.updateStatus(existing.id, {
+    status: "PROCESSING",
+    actorType: "ADMIN_USER",
+    actorId: adminSession.adminUserId,
+    reason: "Processing started from admin dashboard",
+  });
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Processing started.",
+  });
+}
+
+export async function resendAdminIdentityVerification(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (
+    (existing.type !== "DATA_ACCESS" && existing.type !== "DATA_DELETION") ||
+    existing.status !== "PENDING_VERIFICATION"
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Verification cannot be resent for this request.",
+    });
+  }
+
+  const latestSent = existing.events.find(
+    (event) => event.type === "IDENTITY_VERIFICATION_SENT",
+  );
+
+  if (
+    latestSent &&
+    dependencies.now().getTime() - latestSent.createdAt.getTime() < 10_000
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      success: "Verification email was already sent.",
+    });
+  }
+
+  const target =
+    await dependencies.requestRepository.findConsumerNotificationTarget(
+      existing.id,
+    );
+
+  if (!target?.requesterEmailEncrypted) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Requester email is unavailable.",
+    });
+  }
+
+  const recipient = safelyDecryptPii(target.requesterEmailEncrypted);
+
+  if (!recipient) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Requester email is unavailable.",
+    });
+  }
+
+  const token = dependencies.generateToken();
+  const verification =
+    await dependencies.requestRepository.createIdentityVerificationToken(
+      existing.id,
+      {
+        tokenHash: hashIdentityVerificationToken(token),
+        expiresAt: new Date(dependencies.now().getTime() + 24 * 60 * 60 * 1000),
+      },
+    );
+
+  if (!verification) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const verificationUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existing.publicId}/verify?token=${encodeURIComponent(token)}`;
+  const subject = `Verify your MagicTrust request: ${existing.publicId}`;
+  const body = [
+    "Verify your email to continue your privacy request.",
+    "",
+    `Reference number: ${existing.publicId}`,
+    `Verification link: ${verificationUrl}`,
+    "",
+    "This link expires in 24 hours and can be used once.",
+  ].join("\n");
+  const communication =
+    await dependencies.requestRepository.createCommunication(existing.id, {
+      recipient,
+      subject,
+      body,
+      provider: dependencies.emailProvider.provider,
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+    });
+
+  if (!communication) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  try {
+    const sent = await dependencies.emailProvider.sendEmail({
+      to: recipient,
+      subject,
+      body,
+    });
+    await dependencies.requestRepository.markCommunicationSent(
+      existing.id,
+      communication.id,
+      {
+        providerMessageId: sent.providerMessageId,
+        actorType: "ADMIN_USER",
+        actorId: adminSession.adminUserId,
+      },
+    );
+    await dependencies.requestRepository.recordIdentityVerificationSent(
+      existing.id,
+      {
+        verificationTokenId: verification.id,
+        communicationId: communication.id,
+        provider: sent.provider,
+        providerMessageId: sent.providerMessageId,
+      },
+    );
+
+    return redirectToRequestDetail(request, publicId, {
+      success: "Verification email sent.",
+    });
+  } catch {
+    await dependencies.requestRepository.markCommunicationFailed(
+      existing.id,
+      communication.id,
+      {
+        errorMessage: "Email provider failed to send the message.",
+        actorType: "ADMIN_USER",
+        actorId: adminSession.adminUserId,
+      },
+    );
+
+    return redirectToRequestDetail(request, publicId, {
+      error: "Verification email could not be sent.",
+    });
+  }
+}
+
 export async function uploadAdminRequestAttachment(
   request: Request,
   publicId: string,
@@ -610,6 +879,37 @@ export async function uploadAdminRequestAttachment(
   return redirectToRequestDetail(request, publicId, {
     success: "Attachment uploaded.",
   });
+}
+
+export async function uploadAdminResponseFile(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  formData.set("visibility", "PUBLIC");
+  const guidedRequest = new Request(request.url, {
+    method: "POST",
+    headers: { origin: new URL(request.url).origin },
+    body: formData,
+  });
+
+  return uploadAdminRequestAttachment(
+    guidedRequest,
+    publicId,
+    adminSession,
+    dependencies,
+  );
 }
 
 export async function sendAdminConsumerNotification(
@@ -798,6 +1098,129 @@ export async function sendAdminConsumerNotification(
       error: "Consumer notification could not be sent.",
     });
   }
+}
+
+export async function sendAdminDataAccessResponse(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+  const parsed = z
+    .object({
+      attachmentId: z.string().trim().min(1),
+      message: z.string().trim().max(2_000).optional(),
+    })
+    .safeParse({
+      attachmentId: formData?.get("attachmentId"),
+      message: emptyToUndefined(formData?.get("message")?.toString() ?? null),
+    });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Select a response file before sending.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (existing.type !== "DATA_ACCESS") {
+    return redirectToRequestDetail(request, publicId, {
+      error:
+        "Secure response delivery is available for data access requests only.",
+    });
+  }
+
+  if (existing.status === "SUCCESS") {
+    return redirectToRequestDetail(request, publicId, {
+      success: "This request is already completed.",
+    });
+  }
+
+  if (existing.status !== "PROCESSING") {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This request is not ready for response delivery.",
+    });
+  }
+
+  const attachment = existing.attachments.find(
+    (item) =>
+      item.id === parsed.data.attachmentId && item.visibility === "PUBLIC",
+  );
+
+  if (!attachment) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Select a valid response file.",
+    });
+  }
+
+  const alreadyDelivered = existing.events.some(
+    (event) =>
+      event.type === "CONSUMER_NOTIFICATION_SENT" &&
+      event.data.notificationType === "FILE_AVAILABLE",
+  );
+
+  if (!alreadyDelivered) {
+    const notificationForm = new FormData();
+    notificationForm.set("type", "FILE_AVAILABLE");
+    notificationForm.set("attachmentId", attachment.id);
+
+    if (parsed.data.message) {
+      notificationForm.set("message", parsed.data.message);
+    }
+
+    const notificationRequest = new Request(request.url, {
+      method: "POST",
+      headers: { origin: new URL(request.url).origin },
+      body: notificationForm,
+    });
+    const delivery = await sendAdminConsumerNotification(
+      notificationRequest,
+      publicId,
+      adminSession,
+      dependencies,
+    );
+    const location = delivery.headers.get("location");
+    const delivered =
+      delivery.status === 303 &&
+      location !== null &&
+      new URL(location).searchParams.has("success");
+
+    if (!delivered) {
+      return redirectToRequestDetail(request, publicId, {
+        error:
+          "Response could not be sent. Review the delivery status and try again.",
+      });
+    }
+  }
+
+  const updated = await dependencies.requestRepository.updateStatus(
+    existing.id,
+    {
+      status: "SUCCESS",
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+      reason: "Response delivered securely from admin dashboard",
+    },
+  );
+
+  if (!updated) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Response sent and request completed.",
+  });
 }
 
 export async function updateAdminMutableData(
@@ -1013,6 +1436,7 @@ export function getValidAdminStatusDestinations(
 
 export function parseAdminRequestListSearchParams(
   searchParams: URLSearchParams,
+  role: AdminSession["role"] = "VIEWER",
 ): AdminListParseResult {
   const limit = parseLimit(searchParams.get("limit"));
 
@@ -1067,10 +1491,50 @@ export function parseAdminRequestListSearchParams(
     return cursor;
   }
 
+  const rawSearch = emptyToUndefined(
+    searchParams.get("search") ?? searchParams.get("publicId"),
+  );
+  const search = rawSearch?.trim() || undefined;
+  const searchFilters: Pick<
+    RequestListFilters,
+    "publicId" | "emailHash" | "phoneHash"
+  > = {};
+
+  if (search) {
+    if (search.startsWith("req_")) {
+      if (!/^req_[A-Za-z0-9_-]+$/.test(search)) {
+        return { ok: false, message: "Request search value is invalid." };
+      }
+
+      searchFilters.publicId = search;
+    } else if (role === "VIEWER") {
+      return {
+        ok: false,
+        message: "VIEWER users may search by request ID only.",
+      };
+    } else if (search.includes("@")) {
+      const normalized = normalizeEmailForHash(search);
+
+      if (!z.string().email().safeParse(normalized).success) {
+        return { ok: false, message: "Email search value is invalid." };
+      }
+
+      searchFilters.emailHash = hashPii(normalized);
+    } else {
+      const normalized = normalizePhoneForHash(search);
+
+      if (!/^\+?[0-9]{7,20}$/.test(normalized)) {
+        return { ok: false, message: "Phone search value is invalid." };
+      }
+
+      searchFilters.phoneHash = hashPii(normalized);
+    }
+  }
+
   return {
     ok: true,
     filters: {
-      publicId: emptyToUndefined(searchParams.get("publicId")),
+      ...searchFilters,
       types: type.value ? [type.value] : undefined,
       statuses: status.value ? [status.value] : undefined,
       createdFrom: createdFrom.value,
@@ -1349,11 +1813,27 @@ function stringValue(value: JsonValue | undefined): string | null {
 function normalizeAdminRequestList(
   result: RequestListResult,
   limit: number,
+  role: AdminSession["role"],
+  workflowByRequest: Map<string, AdminRequestListWorkflowData>,
+  now: Date,
 ): AdminRequestListView {
   const response: AdminRequestListView = {
-    requests: result.requests.map((request) =>
-      normalizeAdminRequestListItem(request),
-    ),
+    requests: result.requests.map((request) => {
+      const workflow = workflowByRequest.get(request.id);
+
+      return {
+        ...normalizeAdminRequestListItem(request),
+        requesterSummary: normalizeRequesterSummary(workflow, role),
+        ageDays: Math.max(
+          0,
+          Math.floor(
+            (now.getTime() - request.createdAt.getTime()) /
+              (24 * 60 * 60 * 1000),
+          ),
+        ),
+        nextStep: deriveDataAccessNextStep(request, workflow),
+      };
+    }),
     pagination: {
       limit,
     },
@@ -1366,6 +1846,108 @@ function normalizeAdminRequestList(
   }
 
   return response;
+}
+
+export function deriveDataAccessNextStep(
+  request: Pick<RequestListResult["requests"][number], "type" | "status">,
+  workflow?: Pick<
+    AdminRequestListWorkflowData,
+    "hasPublicAttachment" | "latestResponseDeliveryStatus"
+  >,
+): string {
+  if (request.type !== "DATA_ACCESS") {
+    return naturalStatusLabel(request.status);
+  }
+
+  switch (request.status) {
+    case "PENDING_VERIFICATION":
+      return "Waiting for verification";
+    case "VERIFIED":
+      return "Start processing";
+    case "PROCESSING":
+      if (!workflow?.hasPublicAttachment) {
+        return "Upload response file";
+      }
+
+      if (workflow.latestResponseDeliveryStatus === "FAILED") {
+        return "Retry sending response";
+      }
+
+      return workflow.latestResponseDeliveryStatus === "SENT"
+        ? "Complete request"
+        : "Send response";
+    case "WAITING_FOR_REQUESTER":
+      return "Waiting for requester";
+    case "SUCCESS":
+      return "Completed";
+    case "REJECTED":
+      return "Rejected";
+    case "CANCELLED":
+      return "Cancelled";
+    case "SUBMITTED":
+      return "Review request";
+  }
+}
+
+function normalizeRequesterSummary(
+  workflow: AdminRequestListWorkflowData | undefined,
+  role: AdminSession["role"],
+): { name: string; contact: string | null } {
+  if (role === "VIEWER" || !workflow) {
+    return { name: "Restricted", contact: null };
+  }
+
+  const original = safelyDecryptOriginalSubmission(
+    workflow.submittedDataEncrypted,
+  );
+  const requester = jsonObjectValue(original?.requester);
+  const encryptedName = safelyDecryptRequesterName(
+    workflow.requesterNameEncrypted,
+  );
+  const firstName =
+    stringValue(requester?.firstName) ?? encryptedName?.firstName;
+  const lastName = stringValue(requester?.lastName) ?? encryptedName?.lastName;
+  const name =
+    [firstName, lastName].filter(Boolean).join(" ") || "Name unavailable";
+  const email = safelyDecryptPii(workflow.requesterEmailEncrypted);
+  const phone = safelyDecryptPii(workflow.requesterPhoneEncrypted);
+
+  return {
+    name,
+    contact: email
+      ? maskEmailAddress(email)
+      : phone
+        ? maskPhoneNumber(phone)
+        : null,
+  };
+}
+
+function maskPhoneNumber(value: string): string {
+  const normalized = normalizePhoneForHash(value);
+  const suffix = normalized.replace(/\D/g, "").slice(-4);
+
+  return suffix ? `${"*".repeat(6)}${suffix}` : "Phone provided";
+}
+
+function naturalStatusLabel(status: RequestStatus): string {
+  switch (status) {
+    case "PENDING_VERIFICATION":
+      return "Waiting for verification";
+    case "VERIFIED":
+      return "Ready to process";
+    case "PROCESSING":
+      return "In progress";
+    case "WAITING_FOR_REQUESTER":
+      return "Waiting for requester";
+    case "SUCCESS":
+      return "Completed";
+    case "REJECTED":
+      return "Rejected";
+    case "CANCELLED":
+      return "Cancelled";
+    case "SUBMITTED":
+      return "Submitted";
+  }
 }
 
 function normalizeAdminRequestListItem(request: {

@@ -17,6 +17,7 @@ import {
   encryptPii,
   encryptSubmittedPayload,
   hashAccessToken,
+  hashPii,
 } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test, vi } from "vitest";
@@ -24,22 +25,98 @@ import { describe, expect, test, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import {
+  addAdminInternalNote,
   createAdminRequestComment,
   createAdminCustomEvent,
+  deriveDataAccessNextStep,
   downloadAdminAttachment,
   getAdminRequestDetail,
   getValidAdminStatusDestinations,
   listAdminRequests,
   parseAdminRequestListSearchParams,
+  resendAdminIdentityVerification,
+  sendAdminDataAccessResponse,
   sendAdminConsumerNotification,
+  startAdminRequestProcessing,
   updateAdminMutableData,
   updateAdminRequestStatus,
   uploadAdminRequestAttachment,
+  uploadAdminResponseFile,
 } from "../../lib/admin-dashboard";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-admin-dashboard";
 
 describe("admin dashboard", () => {
+  test("unified search supports authorized exact email, phone, and public ID", () => {
+    const email = parseAdminRequestListSearchParams(
+      new URLSearchParams({ search: " John@Example.com " }),
+      "ADMIN",
+    );
+    const phone = parseAdminRequestListSearchParams(
+      new URLSearchParams({ search: "+1 (305) 555-1234" }),
+      "OPERATOR",
+    );
+    const publicId = parseAdminRequestListSearchParams(
+      new URLSearchParams({ search: "req_one" }),
+      "VIEWER",
+    );
+
+    expect(email.ok && email.filters.emailHash).toBe(
+      hashPii("john@example.com"),
+    );
+    expect(phone.ok && phone.filters.phoneHash).toBe(hashPii("+13055551234"));
+    expect(publicId.ok && publicId.filters.publicId).toBe("req_one");
+  });
+
+  test("VIEWER cannot search by PII", () => {
+    const result = parseAdminRequestListSearchParams(
+      new URLSearchParams({ search: "john@example.com" }),
+      "VIEWER",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: "VIEWER users may search by request ID only.",
+    });
+  });
+
+  test("derives every guided DATA_ACCESS next step", () => {
+    const request = (status: PrivacyRequest["status"]) => ({
+      type: "DATA_ACCESS" as const,
+      status,
+    });
+
+    expect(deriveDataAccessNextStep(request("PENDING_VERIFICATION"))).toBe(
+      "Waiting for verification",
+    );
+    expect(deriveDataAccessNextStep(request("VERIFIED"))).toBe(
+      "Start processing",
+    );
+    expect(deriveDataAccessNextStep(request("PROCESSING"))).toBe(
+      "Upload response file",
+    );
+    expect(
+      deriveDataAccessNextStep(request("PROCESSING"), {
+        hasPublicAttachment: true,
+        latestResponseDeliveryStatus: null,
+      }),
+    ).toBe("Send response");
+    expect(
+      deriveDataAccessNextStep(request("PROCESSING"), {
+        hasPublicAttachment: true,
+        latestResponseDeliveryStatus: "FAILED",
+      }),
+    ).toBe("Retry sending response");
+    expect(deriveDataAccessNextStep(request("WAITING_FOR_REQUESTER"))).toBe(
+      "Waiting for requester",
+    );
+    expect(deriveDataAccessNextStep(request("SUCCESS"))).toBe("Completed");
+    expect(deriveDataAccessNextStep(request("REJECTED"))).toBe("Rejected");
+    expect(deriveDataAccessNextStep(request("CANCELLED"))).toBe("Cancelled");
+    expect(deriveDataAccessNextStep(request("SUBMITTED"))).toBe(
+      "Review request",
+    );
+  });
   test("filters work correctly", async () => {
     const dependencies = createInMemoryDependencies();
     const params = new URLSearchParams({
@@ -65,6 +142,29 @@ describe("admin dashboard", () => {
         },
       }),
     ]);
+  });
+
+  test("authorized list rows show masked requester summary while VIEWER is restricted", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = await listAdminRequests(
+      new URLSearchParams({ search: "john@example.com" }),
+      dependencies,
+      "ADMIN",
+    );
+    const viewer = await listAdminRequests(
+      new URLSearchParams({ search: "req_one" }),
+      dependencies,
+      "VIEWER",
+    );
+
+    expect(admin.ok && admin.data.requests[0]?.requesterSummary).toEqual({
+      name: "John Doe",
+      contact: "j***n@example.com",
+    });
+    expect(viewer.ok && viewer.data.requests[0]?.requesterSummary).toEqual({
+      name: "Restricted",
+      contact: null,
+    });
   });
 
   test("pagination has no duplicates", async () => {
@@ -1371,6 +1471,151 @@ describe("admin dashboard", () => {
     expect(mutable.status).toBe(403);
     expect(event.status).toBe(403);
   });
+
+  test("guided start processing uses the existing audited status update", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "VERIFIED";
+
+    const response = await startAdminRequestProcessing(
+      guidedRequest("start-processing"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "STATUS_CHANGED",
+          actorType: "ADMIN_USER",
+          data: expect.objectContaining({
+            newStatus: "PROCESSING",
+            reason: "Processing started from admin dashboard",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("guided internal note is always INTERNAL", async () => {
+    const dependencies = createInMemoryDependencies();
+    const body = new FormData();
+    body.set("body", "Checked Vector and Console.");
+    body.set("visibility", "PUBLIC");
+
+    await addAdminInternalNote(
+      guidedRequest("internal-notes", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.comments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          visibility: "INTERNAL",
+          body: "Checked Vector and Console.",
+        }),
+      ]),
+    );
+  });
+
+  test("guided response upload is PUBLIC and does not email or change status", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    const statusBefore = dependencies.state.requests[0]!.status;
+
+    await uploadAdminResponseFile(
+      adminUploadRequest({
+        file: new File(["response"], "response.txt", { type: "text/plain" }),
+        visibility: "INTERNAL",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.attachments.at(-1)?.visibility).toBe("PUBLIC");
+    expect(dependencies.state.sentEmails).toEqual([]);
+    expect(dependencies.state.requests[0]?.status).toBe(statusBefore);
+  });
+
+  test("successful guided response sends once and completes the request", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    const body = new FormData();
+    body.set("attachmentId", "attachment-one");
+    body.set("message", "Your response is ready.");
+
+    await sendAdminDataAccessResponse(
+      guidedRequest("send-response", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await sendAdminDataAccessResponse(
+      guidedRequest("send-response", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.sentEmails).toHaveLength(1);
+    expect(dependencies.state.requests[0]?.status).toBe("SUCCESS");
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("failed guided response remains PROCESSING and cross-origin is rejected", async () => {
+    const dependencies = createInMemoryDependencies({ emailShouldFail: true });
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    const body = new FormData();
+    body.set("attachmentId", "attachment-one");
+
+    const failed = await sendAdminDataAccessResponse(
+      guidedRequest("send-response", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const crossOrigin = await sendAdminDataAccessResponse(
+      guidedRequest("send-response", body, "https://attacker.test"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(failed.status).toBe(303);
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(crossOrigin.status).toBe(403);
+  });
+
+  test("resend verification creates a token and email without changing status", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "PENDING_VERIFICATION";
+
+    await resendAdminIdentityVerification(
+      guidedRequest("resend-verification"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.identityTokens).toHaveLength(1);
+    expect(dependencies.state.sentEmails[0]?.body).toContain("/verify?token=");
+    expect(dependencies.state.requests[0]?.status).toBe("PENDING_VERIFICATION");
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "IDENTITY_VERIFICATION_SENT" }),
+      ]),
+    );
+  });
 });
 
 function adminSession(
@@ -1517,6 +1762,14 @@ function createInMemoryDependencies(
     },
   ];
   const accessTokens: RequestAccessToken[] = [];
+  const identityTokens: Array<{
+    id: string;
+    requestId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    usedAt: Date | null;
+    createdAt: Date;
+  }> = [];
   const communications: RequestCommunication[] = [
     {
       id: "communication-one",
@@ -1546,6 +1799,7 @@ function createInMemoryDependencies(
     attachments,
     communications,
     accessTokens,
+    identityTokens,
     sensitiveReads: 0,
     uploadedFiles: [] as Array<{
       storageKey: string;
@@ -1616,6 +1870,23 @@ function createInMemoryDependencies(
         submittedDataEncrypted: request.submittedDataEncrypted,
       };
     },
+    async findAdminListWorkflowData(requestIds) {
+      return requests
+        .filter((request) => requestIds.includes(request.id))
+        .map((request) => ({
+          requestId: request.id,
+          requesterEmailEncrypted: encryptPii("john@example.com"),
+          requesterPhoneEncrypted: encryptPii("+13055551234"),
+          requesterNameEncrypted: null,
+          submittedDataEncrypted: request.submittedDataEncrypted,
+          hasPublicAttachment: attachments.some(
+            (attachment) =>
+              attachment.requestId === request.id &&
+              attachment.visibility === "PUBLIC",
+          ),
+          latestResponseDeliveryStatus: null,
+        }));
+    },
     async list(filters: RequestListFilters) {
       const rows = requests
         .filter((request) =>
@@ -1626,6 +1897,18 @@ function createInMemoryDependencies(
         )
         .filter((request) =>
           filters.statuses ? filters.statuses.includes(request.status) : true,
+        )
+        .filter((request) =>
+          filters.emailHash
+            ? request.requesterId === "requester-one" &&
+              filters.emailHash === hashPii("john@example.com")
+            : true,
+        )
+        .filter((request) =>
+          filters.phoneHash
+            ? request.requesterId === "requester-one" &&
+              filters.phoneHash === hashPii("+13055551234")
+            : true,
         )
         .filter((request) =>
           filters.createdFrom ? request.createdAt >= filters.createdFrom : true,
@@ -2035,15 +2318,61 @@ function createInMemoryDependencies(
     },
     findConsumerAccessLinkTarget: notImplemented,
     recordAttachmentDownloaded: notImplemented,
-    markCommunicationSent: notImplemented,
-    markCommunicationFailed: notImplemented,
+    async markCommunicationSent(requestId, communicationId, input) {
+      const communication = communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+      if (!communication) return null;
+      communication.status = "SENT";
+      communication.providerMessageId = input.providerMessageId;
+      communication.sentAt = new Date("2026-07-03T00:00:00.000Z");
+      return communication;
+    },
+    async markCommunicationFailed(requestId, communicationId, input) {
+      const communication = communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+      if (!communication) return null;
+      communication.status = "FAILED";
+      communication.errorMessage = input.errorMessage;
+      return communication;
+    },
     createConsumerAccessToken: notImplemented,
     recordConsumerAccessLinkSent: notImplemented,
     consumeConsumerAccessToken: notImplemented,
     validateConsumerAccessSession: notImplemented,
     recordConsumerAttachmentDownloaded: notImplemented,
-    createIdentityVerificationToken: notImplemented,
-    recordIdentityVerificationSent: notImplemented,
+    async createIdentityVerificationToken(requestId, input) {
+      for (const token of identityTokens) {
+        if (token.requestId === requestId && !token.usedAt) {
+          token.usedAt = new Date("2026-07-03T00:00:00.000Z");
+        }
+      }
+      const token = {
+        id: `identity-token-${identityTokens.length + 1}`,
+        requestId,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+        usedAt: null,
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      };
+      identityTokens.push(token);
+      return token;
+    },
+    async recordIdentityVerificationSent(requestId, input) {
+      events.push({
+        id: `event-verification-${events.length + 1}`,
+        privacyRequestId: requestId,
+        type: "IDENTITY_VERIFICATION_SENT",
+        actorType: "SYSTEM",
+        actorId: "public-intake",
+        data: {
+          verificationTokenId: input.verificationTokenId,
+          communicationId: input.communicationId,
+        },
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+    },
     verifyIdentityToken: notImplemented,
   };
   const storageProvider: PrivateFileStorageProvider = {
@@ -2132,6 +2461,21 @@ function adminFormRequest(
       headers: {
         origin,
       },
+      body,
+    },
+  );
+}
+
+function guidedRequest(
+  action: string,
+  body?: FormData,
+  origin = "https://magictrust.test",
+) {
+  return new Request(
+    `https://magictrust.test/admin/requests/req_one/${action}`,
+    {
+      method: "POST",
+      headers: { origin },
       body,
     },
   );

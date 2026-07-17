@@ -79,6 +79,11 @@ export type AdminRequestSensitiveData = {
   submittedDataEncrypted: string | null;
 };
 
+export type AdminRequestListWorkflowData = AdminRequestSensitiveData & {
+  hasPublicAttachment: boolean;
+  latestResponseDeliveryStatus: "SENT" | "FAILED" | null;
+};
+
 export type ConsumerAccessLinkTarget = RequestSummary & {
   requesterEmailEncrypted: string | null;
 };
@@ -123,6 +128,9 @@ export type RequestRepository = {
   findAdminSensitiveData(
     publicId: string,
   ): Promise<AdminRequestSensitiveData | null>;
+  findAdminListWorkflowData?(
+    requestIds: string[],
+  ): Promise<AdminRequestListWorkflowData[]>;
   findConsumerAccessLinkTarget(
     publicId: string,
   ): Promise<ConsumerAccessLinkTarget | null>;
@@ -493,6 +501,75 @@ export function createRequestRepository(db: Database): RequestRepository {
         .limit(1);
 
       return request ?? null;
+    },
+    async findAdminListWorkflowData(requestIds) {
+      if (requestIds.length === 0) {
+        return [];
+      }
+
+      const sensitiveRows = await db
+        .select({
+          requestId: privacyRequests.id,
+          requesterEmailEncrypted: requesters.emailEncrypted,
+          requesterPhoneEncrypted: requesters.phoneEncrypted,
+          requesterNameEncrypted: requesters.nameEncrypted,
+          submittedDataEncrypted: privacyRequests.submittedDataEncrypted,
+        })
+        .from(privacyRequests)
+        .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
+        .where(inArray(privacyRequests.id, requestIds));
+      const publicAttachments = await db
+        .select({ requestId: requestAttachments.requestId })
+        .from(requestAttachments)
+        .where(
+          and(
+            inArray(requestAttachments.requestId, requestIds),
+            eq(requestAttachments.visibility, "PUBLIC"),
+          ),
+        );
+      const deliveryEvents = await db
+        .select({
+          requestId: requestEvents.privacyRequestId,
+          type: requestEvents.type,
+          data: requestEvents.data,
+          createdAt: requestEvents.createdAt,
+        })
+        .from(requestEvents)
+        .where(
+          and(
+            inArray(requestEvents.privacyRequestId, requestIds),
+            inArray(requestEvents.type, [
+              "CONSUMER_NOTIFICATION_SENT",
+              "CONSUMER_NOTIFICATION_FAILED",
+            ]),
+          ),
+        )
+        .orderBy(desc(requestEvents.createdAt));
+      const attachmentRequestIds = new Set(
+        publicAttachments.map((row) => row.requestId),
+      );
+      const latestDeliveryByRequest = new Map<string, "SENT" | "FAILED">();
+
+      for (const event of deliveryEvents) {
+        const data = event.data as JsonObject;
+
+        if (
+          data.notificationType === "FILE_AVAILABLE" &&
+          !latestDeliveryByRequest.has(event.requestId)
+        ) {
+          latestDeliveryByRequest.set(
+            event.requestId,
+            event.type === "CONSUMER_NOTIFICATION_SENT" ? "SENT" : "FAILED",
+          );
+        }
+      }
+
+      return sensitiveRows.map((row) => ({
+        ...row,
+        hasPublicAttachment: attachmentRequestIds.has(row.requestId),
+        latestResponseDeliveryStatus:
+          latestDeliveryByRequest.get(row.requestId) ?? null,
+      }));
     },
     async findConsumerAccessLinkTarget(publicId) {
       const [request] = await db
@@ -1376,28 +1453,38 @@ export function createRequestRepository(db: Database): RequestRepository {
       });
     },
     async createIdentityVerificationToken(requestId, input) {
-      const [request] = await db
-        .select({
-          id: privacyRequests.id,
-        })
-        .from(privacyRequests)
-        .where(eq(privacyRequests.id, requestId))
-        .limit(1);
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({ id: privacyRequests.id })
+          .from(privacyRequests)
+          .where(eq(privacyRequests.id, requestId))
+          .limit(1);
 
-      if (!request) {
-        return null;
-      }
+        if (!request) {
+          return null;
+        }
 
-      const [verificationToken] = await db
-        .insert(requestIdentityVerificationTokens)
-        .values({
-          requestId,
-          tokenHash: input.tokenHash,
-          expiresAt: input.expiresAt,
-        })
-        .returning(identityVerificationTokenSelection);
+        await tx
+          .update(requestIdentityVerificationTokens)
+          .set({ usedAt: new Date() })
+          .where(
+            and(
+              eq(requestIdentityVerificationTokens.requestId, requestId),
+              isNull(requestIdentityVerificationTokens.usedAt),
+            ),
+          );
 
-      return verificationToken;
+        const [verificationToken] = await tx
+          .insert(requestIdentityVerificationTokens)
+          .values({
+            requestId,
+            tokenHash: input.tokenHash,
+            expiresAt: input.expiresAt,
+          })
+          .returning(identityVerificationTokenSelection);
+
+        return verificationToken;
+      });
     },
     async recordIdentityVerificationSent(requestId, input) {
       await db.transaction(async (tx) => {
