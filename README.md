@@ -117,6 +117,36 @@ notifications:write
 events:write
 ```
 
+## Internal Admin Access
+
+Create the first admin user after applying migrations:
+
+```sh
+pnpm admin:user:create --email "user@onpointglobal.com" --role ADMIN
+```
+
+Admin email addresses are encrypted and hashed before storage. The command rejects duplicate normalized emails and never prints ciphertext, hashes, or keys.
+
+Admin login is passwordless:
+
+```text
+http://localhost:3000/admin/login
+```
+
+Submitting an email always returns the same generic response. Active admin users receive a Resend magic link that expires after 15 minutes and can only be used once. A valid link creates an `httpOnly`, `sameSite=lax` admin session cookie for 8 hours and redirects to `/admin/requests`.
+
+Production requirements:
+
+```text
+APP_ENV=production
+APP_BASE_URL=https://your-production-domain.example
+RESEND_API_KEY=...
+EMAIL_FROM=...
+ENCRYPTION_KEY=...
+```
+
+In production, admin session cookies are marked `secure`.
+
 ## Public Intake
 
 The hosted public privacy request form runs at:

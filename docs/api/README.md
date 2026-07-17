@@ -292,6 +292,48 @@ If a valid API client key lacks the required scope, MagicTrust returns `403` wit
 
 Key rotation expectation: create a replacement client/key or key row, update the caller to use the new secret, then deactivate the old key. Raw keys are not recoverable from MagicTrust after creation.
 
+## Internal Admin Authentication
+
+Create the first admin user from the server environment:
+
+```sh
+pnpm admin:user:create --email "user@onpointglobal.com" --role ADMIN
+```
+
+Allowed roles are `ADMIN`, `OPERATOR`, and `VIEWER`. Admin email addresses are normalized, encrypted, and hashed before storage. The CLI rejects duplicate normalized emails and never prints plaintext email, ciphertext, hashes, or keys.
+
+Admin login page:
+
+```text
+GET /admin/login
+```
+
+Request a passwordless login link:
+
+```sh
+curl -X POST "http://localhost:3000/api/admin/auth/request-link" \
+  -H "content-type: application/json" \
+  -d '{"email":"user@onpointglobal.com"}'
+```
+
+The response is always generic and does not reveal whether an admin user exists. Active admin users receive a Resend email with:
+
+```text
+/admin/auth/verify?token=...
+```
+
+Login tokens expire after 15 minutes, are single-use, and are stored only as hashes. A valid token creates an 8-hour admin session, stores only the session token hash, sets an `httpOnly`, `sameSite=lax` cookie, and redirects to `/admin/requests`.
+
+Logout:
+
+```text
+POST /api/admin/auth/logout
+```
+
+Logout revokes the current admin session, clears the cookie, and redirects to `/admin/login`.
+
+Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `ENCRYPTION_KEY`, and serve over HTTPS so secure cookies work correctly.
+
 ## `GET /api/v1/requests`
 
 Lists Internal API request summaries. Requires `x-api-key` with `requests:read`.

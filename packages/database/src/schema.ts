@@ -87,6 +87,12 @@ export const communicationStatusEnum = pgEnum("communication_status", [
   "FAILED",
 ]);
 
+export const adminRoleEnum = pgEnum("admin_role", [
+  "ADMIN",
+  "OPERATOR",
+  "VIEWER",
+]);
+
 export const requesters = pgTable(
   "requesters",
   {
@@ -236,6 +242,77 @@ export const apiClientScopes = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.apiClientId, table.scope] }),
+  }),
+);
+
+export const adminUsers = pgTable(
+  "admin_users",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    emailEncrypted: text("email_encrypted").notNull(),
+    emailHash: text("email_hash").notNull(),
+    role: adminRoleEnum("role").notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  },
+  (table) => ({
+    emailHashIdx: uniqueIndex("admin_users_email_hash_idx").on(table.emailHash),
+    activeIdx: index("admin_users_active_idx").on(table.active),
+  }),
+);
+
+export const adminLoginTokens = pgTable(
+  "admin_login_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    adminUserId: uuid("admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "restrict" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tokenHashIdx: uniqueIndex("admin_login_tokens_token_hash_idx").on(
+      table.tokenHash,
+    ),
+    adminUserIdIdx: index("admin_login_tokens_admin_user_id_idx").on(
+      table.adminUserId,
+    ),
+  }),
+);
+
+export const adminSessions = pgTable(
+  "admin_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    adminUserId: uuid("admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "restrict" }),
+    sessionTokenHash: text("session_token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (table) => ({
+    sessionTokenHashIdx: uniqueIndex("admin_sessions_token_hash_idx").on(
+      table.sessionTokenHash,
+    ),
+    adminUserIdIdx: index("admin_sessions_admin_user_id_idx").on(
+      table.adminUserId,
+    ),
   }),
 );
 
@@ -453,6 +530,28 @@ export const apiClientScopesRelations = relations(
     }),
   }),
 );
+
+export const adminUsersRelations = relations(adminUsers, ({ many }) => ({
+  loginTokens: many(adminLoginTokens),
+  sessions: many(adminSessions),
+}));
+
+export const adminLoginTokensRelations = relations(
+  adminLoginTokens,
+  ({ one }) => ({
+    adminUser: one(adminUsers, {
+      fields: [adminLoginTokens.adminUserId],
+      references: [adminUsers.id],
+    }),
+  }),
+);
+
+export const adminSessionsRelations = relations(adminSessions, ({ one }) => ({
+  adminUser: one(adminUsers, {
+    fields: [adminSessions.adminUserId],
+    references: [adminUsers.id],
+  }),
+}));
 
 export const privacyRequestsRelations = relations(
   privacyRequests,

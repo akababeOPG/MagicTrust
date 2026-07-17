@@ -86,6 +86,18 @@ export function hashIdentityVerificationToken(value: string): string {
     .digest("hex");
 }
 
+export function hashAdminLoginToken(value: string): string {
+  return createHmac("sha256", deriveKey("admin-login"))
+    .update(value)
+    .digest("hex");
+}
+
+export function hashAdminSessionToken(value: string): string {
+  return createHmac("sha256", deriveKey("admin-session"))
+    .update(value)
+    .digest("hex");
+}
+
 export function normalizeEmailForHash(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -122,7 +134,9 @@ function deriveKey(
     | "submitted-payload"
     | "access-token"
     | "access-session"
-    | "identity-verification",
+    | "identity-verification"
+    | "admin-login"
+    | "admin-session",
 ): Buffer {
   const encryptionKey = getEncryptionKey();
 
