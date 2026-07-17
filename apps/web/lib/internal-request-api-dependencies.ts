@@ -5,6 +5,7 @@ import {
 } from "@magictrust/config";
 import {
   createDatabase,
+  createApiIdempotencyStore,
   createRequestCreationStore,
   createRequestRepository,
 } from "@magictrust/database";
@@ -148,6 +149,18 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
           );
         },
       },
+      idempotencyStore: {
+        findActive() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        create() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+      },
       storageProvider: createVercelBlobPrivateStorageProvider(),
       emailProvider: createResendEmailProvider(),
       appBaseUrl: getAppBaseUrl(),
@@ -160,6 +173,7 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
     apiKey: getInternalApiKey(),
     requestCreationStore: createRequestCreationStore(db),
     requestRepository: createRequestRepository(db),
+    idempotencyStore: createApiIdempotencyStore(db),
     storageProvider: createVercelBlobPrivateStorageProvider(),
     emailProvider: createResendEmailProvider(),
     appBaseUrl: getAppBaseUrl(),

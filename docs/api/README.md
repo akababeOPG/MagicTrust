@@ -165,6 +165,7 @@ API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
 
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/attachments/upload" \
   -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: upload-data-export-req_example" \
   -F "file=@./data-export.json;type=application/json" \
   -F "visibility=PUBLIC" \
   -F "actorType=API_CLIENT" \
@@ -195,6 +196,7 @@ API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/communications/email" \
   -H "content-type: application/json" \
   -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: email-update-req_example-001" \
   -d '{
     "to": "john@example.com",
     "subject": "Your MagicTrust request was updated",
@@ -222,6 +224,7 @@ API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/notifications" \
   -H "content-type: application/json" \
   -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: notify-update-req_example-001" \
   -d '{
     "type": "REQUEST_UPDATED",
     "message": "Your request is currently being processed.",
@@ -240,6 +243,7 @@ API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/notifications" \
   -H "content-type: application/json" \
   -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: notify-file-req_example-001" \
   -d '{
     "type": "FILE_AVAILABLE",
     "message": "A file is available for your request.",
@@ -266,6 +270,7 @@ API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/events" \
   -H "content-type: application/json" \
   -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: event-export-generated-req_example-001" \
   -d '{
     "type": "DATA_EXPORT_GENERATED",
     "visibility": "INTERNAL",
@@ -288,6 +293,7 @@ API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
 curl -X POST "http://localhost:3000/api/v1/requests/req_example/events" \
   -H "content-type: application/json" \
   -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: event-export-ready-req_example-001" \
   -d '{
     "type": "DATA_EXPORT_READY",
     "visibility": "PUBLIC",
@@ -302,3 +308,45 @@ curl -X POST "http://localhost:3000/api/v1/requests/req_example/events" \
 ```
 
 Internal request detail includes all custom events. Public tracking and secure consumer pages expose only `PUBLIC` custom events, and never include actor identifiers.
+
+## Internal API Idempotency
+
+Mutating Internal API v1 routes require an `Idempotency-Key` header. This applies to request creation, status updates, comments, attachment metadata, attachment upload, email communications, consumer notifications, mutable request data updates, and custom events. GET routes and public APIs do not require this header.
+
+Use a stable unique key for each operation:
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
+curl -X POST "http://localhost:3000/api/v1/requests/req_example/status" \
+  -H "content-type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: status-processing-req_example-001" \
+  -d '{
+    "status": "PROCESSING",
+    "actor": {
+      "type": "API_CLIENT",
+      "id": "privacy-processor"
+    },
+    "reason": "Request picked up for processing"
+  }'
+```
+
+Retry the exact same request with the same `Idempotency-Key` to receive the original stored response without creating duplicate records or audit events. Replayed responses include:
+
+```text
+Idempotency-Replayed: true
+```
+
+If the same `Idempotency-Key` is reused with a different method, route, or payload, MagicTrust returns:
+
+```json
+{
+  "error": {
+    "code": "IDEMPOTENCY_KEY_REUSED",
+    "message": "Idempotency-Key was already used for a different request."
+  }
+}
+```
+
+Idempotency records are retained for 24 hours. For multipart uploads, MagicTrust hashes safe file metadata plus a file checksum for comparison; it does not store file contents in idempotency records.

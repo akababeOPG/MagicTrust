@@ -140,6 +140,33 @@ export const privacyRequests = pgTable(
   }),
 );
 
+export const apiIdempotencyRecords = pgTable(
+  "api_idempotency_records",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    apiClientId: varchar("api_client_id", { length: 128 }).notNull(),
+    method: varchar("method", { length: 16 }).notNull(),
+    route: text("route").notNull(),
+    requestHash: text("request_hash").notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: jsonb("response_body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    keyIdx: uniqueIndex("api_idempotency_records_client_key_idx").on(
+      table.apiClientId,
+      table.idempotencyKey,
+    ),
+    expiresAtIdx: index("api_idempotency_records_expires_at_idx").on(
+      table.expiresAt,
+    ),
+  }),
+);
+
 export const requestComments = pgTable(
   "request_comments",
   {

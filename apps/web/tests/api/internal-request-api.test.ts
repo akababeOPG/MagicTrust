@@ -12,6 +12,8 @@ import type {
   Requester,
 } from "@magictrust/domain";
 import type {
+  ApiIdempotencyRecord,
+  ApiIdempotencyStore,
   RequestDetails,
   RequestListFilters,
   RequestRepository,
@@ -25,6 +27,7 @@ import { describe, expect, test } from "vitest";
 import { createInternalRequestApi } from "../../lib/internal-request-api";
 
 const apiKey = "test-internal-api-key";
+let idempotencyCounter = 1;
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-web-api";
 
 describe("internal request API", () => {
@@ -43,6 +46,178 @@ describe("internal request API", () => {
 
     expect(missing.status).toBe(401);
     expect(invalid.status).toBe(401);
+  });
+
+  test("requires Idempotency-Key on protected mutations", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.create(
+      new Request("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(validCreateRequestBody()),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+  });
+
+  test("first idempotent request executes normally", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+
+    const response = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "create-once",
+        },
+        body: JSON.stringify(validCreateRequestBody()),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("Idempotency-Replayed")).toBeNull();
+    expect(dependencies.state.requests).toHaveLength(1);
+    expect(dependencies.state.idempotencyRecords).toHaveLength(1);
+  });
+
+  test("same idempotency key and payload replays original response", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const requestBody = validCreateRequestBody();
+
+    const first = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "same-create",
+        },
+        body: JSON.stringify(requestBody),
+      }),
+    );
+    const firstBody = await first.json();
+    const second = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "same-create",
+        },
+        body: JSON.stringify(requestBody),
+      }),
+    );
+    const secondBody = await second.json();
+
+    expect(second.status).toBe(201);
+    expect(second.headers.get("Idempotency-Replayed")).toBe("true");
+    expect(secondBody).toEqual(firstBody);
+    expect(dependencies.state.requests).toHaveLength(1);
+    expect(dependencies.state.events).toHaveLength(1);
+  });
+
+  test("same idempotency key with different payload returns 409", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+
+    await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "conflicting-create",
+        },
+        body: JSON.stringify(validCreateRequestBody()),
+      }),
+    );
+    const response = await api.create(
+      authenticatedRequest("https://magictrust.test/api/v1/requests", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "conflicting-create",
+        },
+        body: JSON.stringify(validCreateRequestBody({ type: "DATA_DELETION" })),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(dependencies.state.requests).toHaveLength(1);
+  });
+
+  test("GET endpoints do not require Idempotency-Key", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.get(
+      new Request(
+        `https://magictrust.test/api/v1/requests/${created.publicId}`,
+        {
+          headers: {
+            "x-api-key": apiKey,
+          },
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  test("file upload retries do not create duplicate storage or attachments", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const first = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": "same-upload",
+          },
+          body: validUploadFormData(),
+        },
+      ),
+      created.publicId,
+    );
+    const firstBody = await first.json();
+    const second = await api.uploadAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments/upload`,
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": "same-upload",
+          },
+          body: validUploadFormData(),
+        },
+      ),
+      created.publicId,
+    );
+    const secondBody = await second.json();
+
+    expect(second.status).toBe(201);
+    expect(second.headers.get("Idempotency-Replayed")).toBe("true");
+    expect(secondBody).toEqual(firstBody);
+    expect(dependencies.state.attachments).toHaveLength(1);
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "PUBLIC_ATTACHMENT_ADDED",
+        }),
+      ]),
+    );
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "PUBLIC_ATTACHMENT_ADDED",
+      ),
+    ).toHaveLength(1);
   });
 
   test("accepts the same valid API key across all Internal API v1 operations", async () => {
@@ -1791,6 +1966,10 @@ function authenticatedRequest(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("x-api-key", apiKey);
 
+  if (init.method && init.method !== "GET" && !headers.has("Idempotency-Key")) {
+    headers.set("Idempotency-Key", `test-idempotency-${idempotencyCounter++}`);
+  }
+
   if (!(init.body instanceof FormData)) {
     headers.set("content-type", "application/json");
   }
@@ -2024,6 +2203,7 @@ function createInMemoryDependencies(
     attachments: [] as RequestAttachment[],
     communications: [] as RequestCommunication[],
     accessTokens: [] as RequestAccessToken[],
+    idempotencyRecords: [] as ApiIdempotencyRecord[],
     sentEmails: [] as Array<{ to: string; subject: string; body: string }>,
   };
 
@@ -2601,6 +2781,28 @@ function createInMemoryDependencies(
     apiKey,
     requestCreationStore: creationStore,
     requestRepository,
+    idempotencyStore: {
+      async findActive(apiClientId, idempotencyKey, now) {
+        return (
+          state.idempotencyRecords.find(
+            (record) =>
+              record.apiClientId === apiClientId &&
+              record.idempotencyKey === idempotencyKey &&
+              record.expiresAt > now,
+          ) ?? null
+        );
+      },
+      async create(input) {
+        const record = {
+          id: `idempotency-${state.nextId++}`,
+          ...input,
+          createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+        };
+        state.idempotencyRecords.push(record);
+
+        return record;
+      },
+    } satisfies ApiIdempotencyStore,
     storageProvider,
     emailProvider,
     appBaseUrl: "https://magictrust.test",
