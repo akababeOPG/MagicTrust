@@ -384,7 +384,7 @@ GET /admin/requests/:publicId/attachments/:attachmentId/download
 
 Admin downloads stream private storage through MagicTrust, verify that the attachment belongs to the request, and audit successful downloads with `ADMIN_ATTACHMENT_DOWNLOADED` using `actorType: ADMIN_USER`.
 
-The dashboard list and detail views are read-only for `VIEWER` users. This version does not support attachment uploads, email sending, analytics, CSV exports, bulk actions, user management, API client management, or requester PII decryption/display.
+The dashboard list and detail views are read-only for `VIEWER` users. This version does not support attachment deletion, bulk uploads, analytics, CSV exports, bulk actions, user management, API client management, or requester PII decryption/display.
 
 ## Admin Request Actions
 
@@ -401,6 +401,8 @@ Dashboard request actions use admin-authenticated server-side route handlers:
 ```text
 POST /admin/requests/:publicId/status
 POST /admin/requests/:publicId/comments
+POST /admin/requests/:publicId/attachments
+POST /admin/requests/:publicId/notifications
 ```
 
 These routes never call `/api/v1`, never use `x-api-key`, and never expose Internal API keys or API client keys to the browser. Actor identity is derived only from the secure admin session:
@@ -424,7 +426,34 @@ Status updates use the existing transactional request repository mutation, updat
 
 Comments require a visibility and a trimmed body of 1-5,000 characters. `INTERNAL` comments remain dashboard-only. `PUBLIC` comments appear in public tracking responses and pages. Comment audit events reference the comment id and visibility but do not duplicate the comment body in event data. Adding a comment does not automatically send a consumer email notification.
 
-This version does not add dashboard attachment uploads, email notifications, bulk actions, mutable-data editing, custom event creation, admin user management, API client management, analytics, or requester PII display.
+Attachment uploads store private files through Vercel Blob and create attachment metadata. Visibility may be `INTERNAL` or `PUBLIC`. Uploads are limited to 10 MB and these MIME types:
+
+```text
+application/json
+text/csv
+application/pdf
+text/plain
+application/zip
+```
+
+Uploading an attachment creates the existing attachment audit event with `ADMIN_USER` actor identity. Uploading a file never sends an email and never changes request status. Blob tokens, storage credentials, storage keys, checksums, and Blob URLs are not exposed in the dashboard.
+
+Consumer notifications are explicit email actions. Supported types are:
+
+```text
+REQUEST_UPDATED
+REQUEST_COMPLETED
+REQUEST_REJECTED
+FILE_AVAILABLE
+```
+
+Sending a notification creates an encrypted-recipient communication record and either `CONSUMER_NOTIFICATION_SENT` or `CONSUMER_NOTIFICATION_FAILED`. Notification events include safe metadata such as notification type and communication id; they do not include email addresses, message bodies, tokens, storage keys, or provider secrets.
+
+`FILE_AVAILABLE` requires selecting a `PUBLIC` attachment that belongs to the request. MagicTrust creates a new secure consumer access link and includes that link in the email. The file is not attached to the email, and Blob URLs or storage keys are never exposed.
+
+Upload and notification are separate actions: uploading a file does not notify the consumer, and sending a notification does not change request status or add comments automatically.
+
+This version does not add attachment deletion, bulk uploads, SMS, automatic notifications, email template UI, request status automation, mutable-data editing, custom event creation, admin user management, API client management, analytics, or requester PII display.
 
 ## `GET /api/v1/requests`
 

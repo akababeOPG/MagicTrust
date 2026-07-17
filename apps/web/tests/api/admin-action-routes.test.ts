@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   requireAdminRole: vi.fn(),
   updateAdminRequestStatus: vi.fn(),
   createAdminRequestComment: vi.fn(),
+  uploadAdminRequestAttachment: vi.fn(),
+  sendAdminConsumerNotification: vi.fn(),
 }));
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -16,6 +18,8 @@ vi.mock("@/lib/admin-dashboard", () => ({
   createAdminDashboardDependencies: vi.fn(() => ({ kind: "dependencies" })),
   updateAdminRequestStatus: mocks.updateAdminRequestStatus,
   createAdminRequestComment: mocks.createAdminRequestComment,
+  uploadAdminRequestAttachment: mocks.uploadAdminRequestAttachment,
+  sendAdminConsumerNotification: mocks.sendAdminConsumerNotification,
 }));
 
 describe("admin action routes", () => {
@@ -108,5 +112,89 @@ describe("admin action routes", () => {
       session,
       { kind: "dependencies" },
     );
+  });
+
+  test("unauthenticated upload rejected", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/attachments/route");
+
+    const response = await POST(
+      new Request(
+        "https://magictrust.test/admin/requests/req_one/attachments",
+        {
+          method: "POST",
+        },
+      ),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(401);
+    expect(mocks.uploadAdminRequestAttachment).not.toHaveBeenCalled();
+  });
+
+  test("VIEWER upload rejected", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/attachments/route");
+
+    const response = await POST(
+      new Request(
+        "https://magictrust.test/admin/requests/req_one/attachments",
+        {
+          method: "POST",
+        },
+      ),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.uploadAdminRequestAttachment).not.toHaveBeenCalled();
+  });
+
+  test("unauthenticated notification rejected", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/notifications/route");
+
+    const response = await POST(
+      new Request(
+        "https://magictrust.test/admin/requests/req_one/notifications",
+        {
+          method: "POST",
+        },
+      ),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(401);
+    expect(mocks.sendAdminConsumerNotification).not.toHaveBeenCalled();
+  });
+
+  test("VIEWER notification rejected", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/notifications/route");
+
+    const response = await POST(
+      new Request(
+        "https://magictrust.test/admin/requests/req_one/notifications",
+        {
+          method: "POST",
+        },
+      ),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.sendAdminConsumerNotification).not.toHaveBeenCalled();
   });
 });

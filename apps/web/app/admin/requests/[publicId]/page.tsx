@@ -196,6 +196,81 @@ export default async function AdminRequestDetailPage({
                 <AdminSubmitButton>Add comment</AdminSubmitButton>
               </form>
             </section>
+
+            <section aria-labelledby="upload-attachment-heading">
+              <h3 id="upload-attachment-heading">Upload Attachment</h3>
+              <p>
+                Accepted: JSON, CSV, PDF, plain text, ZIP. Maximum size: 10 MB.
+              </p>
+              <form
+                className="admin-action-form"
+                action={`/admin/requests/${request.publicId}/attachments`}
+                method="post"
+                encType="multipart/form-data"
+              >
+                <label>
+                  File
+                  <input
+                    name="file"
+                    type="file"
+                    required
+                    accept="application/json,text/csv,application/pdf,text/plain,application/zip"
+                  />
+                </label>
+                <label>
+                  Visibility
+                  <select name="visibility" required>
+                    {commentVisibilities.map((visibility) => (
+                      <option key={visibility} value={visibility}>
+                        {visibility}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <AdminSubmitButton>Upload attachment</AdminSubmitButton>
+              </form>
+            </section>
+
+            <section aria-labelledby="notify-consumer-heading">
+              <h3 id="notify-consumer-heading">Notify Consumer</h3>
+              <p>This sends an email to the requester.</p>
+              <form
+                className="admin-action-form"
+                action={`/admin/requests/${request.publicId}/notifications`}
+                method="post"
+              >
+                <label>
+                  Notification type
+                  <select name="type" required>
+                    <option value="">Choose notification</option>
+                    <option value="REQUEST_UPDATED">Request updated</option>
+                    <option value="REQUEST_COMPLETED">Request completed</option>
+                    <option value="REQUEST_REJECTED">Request rejected</option>
+                    <option value="FILE_AVAILABLE">File available</option>
+                  </select>
+                </label>
+                <label>
+                  Message
+                  <textarea name="message" maxLength={2000} rows={4} />
+                </label>
+                <label>
+                  Public attachment for file notifications
+                  <select name="attachmentId">
+                    <option value="">No attachment selected</option>
+                    {request.attachments
+                      .filter(
+                        (attachment) => attachment.visibility === "PUBLIC",
+                      )
+                      .map((attachment) => (
+                        <option key={attachment.id} value={attachment.id}>
+                          {attachment.fileName}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <AdminSubmitButton>Send notification</AdminSubmitButton>
+              </form>
+            </section>
           </div>
         )}
       </section>

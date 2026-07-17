@@ -4,6 +4,7 @@ import type {
   RequestComment,
   RequestCommunication,
   RequestEvent,
+  RequestAccessToken,
   PrivacyRequest,
 } from "@magictrust/domain";
 import type {
@@ -11,7 +12,8 @@ import type {
   RequestListFilters,
   RequestRepository,
 } from "@magictrust/database";
-import { encryptPii } from "@magictrust/privacy";
+import type { EmailProvider } from "@magictrust/email";
+import { encryptPii, hashAccessToken } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test, vi } from "vitest";
 
@@ -24,7 +26,9 @@ import {
   getValidAdminStatusDestinations,
   listAdminRequests,
   parseAdminRequestListSearchParams,
+  sendAdminConsumerNotification,
   updateAdminRequestStatus,
+  uploadAdminRequestAttachment,
 } from "../../lib/admin-dashboard";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-admin-dashboard";
@@ -523,6 +527,323 @@ describe("admin dashboard", () => {
       ),
     ).toHaveLength(1);
   });
+
+  test("ADMIN and OPERATOR can upload attachments with session actor identity", async () => {
+    const adminDependencies = createInMemoryDependencies();
+    const operatorDependencies = createInMemoryDependencies();
+
+    const adminResponse = await uploadAdminRequestAttachment(
+      adminUploadRequest(),
+      "req_one",
+      adminSession({ adminUserId: "admin-upload", role: "ADMIN" }),
+      adminDependencies,
+    );
+    const operatorResponse = await uploadAdminRequestAttachment(
+      adminUploadRequest({ fileName: "operator.txt", visibility: "INTERNAL" }),
+      "req_one",
+      adminSession({ adminUserId: "operator-upload", role: "OPERATOR" }),
+      operatorDependencies,
+    );
+
+    expect(adminResponse.status).toBe(303);
+    expect(operatorResponse.status).toBe(303);
+    expect(adminDependencies.state.attachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fileName: "admin-upload.txt",
+          visibility: "PUBLIC",
+          storageProvider: "vercel-blob",
+          checksum: "sha256-uploaded",
+          actorType: "ADMIN_USER",
+          actorId: "admin-upload",
+        }),
+      ]),
+    );
+    expect(operatorDependencies.state.attachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fileName: "operator.txt",
+          visibility: "INTERNAL",
+          actorType: "ADMIN_USER",
+          actorId: "operator-upload",
+        }),
+      ]),
+    );
+  });
+
+  test("file size and MIME validation", async () => {
+    const dependencies = createInMemoryDependencies();
+    const tooLarge = await uploadAdminRequestAttachment(
+      adminUploadRequest({
+        file: new File(["x".repeat(10 * 1024 * 1024 + 1)], "large.txt", {
+          type: "text/plain",
+        }),
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const badMime = await uploadAdminRequestAttachment(
+      adminUploadRequest({
+        file: new File(["x"], "image.png", { type: "image/png" }),
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(tooLarge.status).toBe(303);
+    expect(badMime.status).toBe(303);
+    expect(dependencies.state.uploadedFiles).toEqual([]);
+  });
+
+  test("upload does not send email or change status and duplicate retry is rejected", async () => {
+    const dependencies = createInMemoryDependencies();
+    const first = await uploadAdminRequestAttachment(
+      adminUploadRequest(),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const duplicate = await uploadAdminRequestAttachment(
+      adminUploadRequest(),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(first.status).toBe(303);
+    expect(duplicate.status).toBe(303);
+    expect(dependencies.state.sentEmails).toEqual([]);
+    expect(dependencies.state.requests[0]?.status).toBe("SUBMITTED");
+    expect(
+      dependencies.state.attachments.filter(
+        (attachment) => attachment.fileName === "admin-upload.txt",
+      ),
+    ).toHaveLength(1);
+    expect(dependencies.state.uploadedFiles).toHaveLength(1);
+  });
+
+  test("cross-origin upload rejected", async () => {
+    const dependencies = createInMemoryDependencies();
+    const response = await uploadAdminRequestAttachment(
+      adminUploadRequest({}, "https://attacker.test"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(403);
+    expect(dependencies.state.uploadedFiles).toEqual([]);
+  });
+
+  test("standard notification sends email without changing status", async () => {
+    const dependencies = createInMemoryDependencies();
+    const response = await sendAdminConsumerNotification(
+      adminNotificationRequest({
+        type: "REQUEST_UPDATED",
+        message: "Your request is being reviewed.",
+      }),
+      "req_one",
+      adminSession({ adminUserId: "admin-notify" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.sentEmails).toEqual([
+      expect.objectContaining({
+        to: "john@example.com",
+        subject: "MagicTrust request updated: req_one",
+        body: expect.stringContaining("Your request is being reviewed."),
+      }),
+    ]);
+    expect(dependencies.state.requests[0]?.status).toBe("SUBMITTED");
+    expect(dependencies.state.communications.at(-1)).toMatchObject({
+      recipient: null,
+      recipientEncrypted: expect.any(String),
+      status: "SENT",
+      actorType: "ADMIN_USER",
+      actorId: "admin-notify",
+    });
+  });
+
+  test("FILE_AVAILABLE requires a public attachment and creates secure access link", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.attachments.push({
+      id: "attachment-internal",
+      requestId: "request-one",
+      visibility: "INTERNAL",
+      fileName: "internal.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+      storageProvider: "vercel-blob",
+      storageKey: "hidden",
+      checksum: "hidden",
+      actorType: "ADMIN_USER",
+      actorId: "admin-user-1",
+      createdAt: new Date("2026-07-03T00:00:00.000Z"),
+    });
+
+    const missing = await sendAdminConsumerNotification(
+      adminNotificationRequest({ type: "FILE_AVAILABLE" }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const internal = await sendAdminConsumerNotification(
+      adminNotificationRequest({
+        type: "FILE_AVAILABLE",
+        attachmentId: "attachment-internal",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    const publicResponse = await sendAdminConsumerNotification(
+      adminNotificationRequest({
+        type: "FILE_AVAILABLE",
+        attachmentId: "attachment-one",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(missing.status).toBe(303);
+    expect(internal.status).toBe(303);
+    expect(publicResponse.status).toBe(303);
+    expect(dependencies.state.accessTokens).toEqual([
+      expect.objectContaining({
+        tokenHash: hashAccessToken("secure-token"),
+        usedAt: null,
+      }),
+    ]);
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      "Secure access link: https://magictrust.test/requests/req_one/access?token=secure-token",
+    );
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      "data-export.json",
+    );
+    expect(JSON.stringify(dependencies.state.sentEmails.at(-1))).not.toContain(
+      "storageKey",
+    );
+  });
+
+  test("attachment must belong to request for FILE_AVAILABLE", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.attachments.push({
+      id: "attachment-other-request",
+      requestId: "request-two",
+      visibility: "PUBLIC",
+      fileName: "other.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+      storageProvider: "vercel-blob",
+      storageKey: "hidden",
+      checksum: "hidden",
+      actorType: "ADMIN_USER",
+      actorId: "admin-user-1",
+      createdAt: new Date("2026-07-03T00:00:00.000Z"),
+    });
+
+    const response = await sendAdminConsumerNotification(
+      adminNotificationRequest({
+        type: "FILE_AVAILABLE",
+        attachmentId: "attachment-other-request",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.accessTokens).toEqual([]);
+    expect(dependencies.state.sentEmails).toEqual([]);
+  });
+
+  test("requester without usable email returns safe error", async () => {
+    const dependencies = createInMemoryDependencies({
+      requesterEmailEncrypted: null,
+    });
+    const response = await sendAdminConsumerNotification(
+      adminNotificationRequest({ type: "REQUEST_UPDATED" }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "Requester+email+is+unavailable.",
+    );
+    expect(dependencies.state.sentEmails).toEqual([]);
+  });
+
+  test("provider failure records failed communication and event", async () => {
+    const dependencies = createInMemoryDependencies({ emailShouldFail: true });
+    const response = await sendAdminConsumerNotification(
+      adminNotificationRequest({ type: "REQUEST_UPDATED" }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.communications.at(-1)).toMatchObject({
+      status: "FAILED",
+      errorMessage: "Email provider failed to send the notification.",
+      recipient: null,
+      recipientEncrypted: expect.any(String),
+    });
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "CONSUMER_NOTIFICATION_FAILED",
+          actorType: "ADMIN_USER",
+        }),
+      ]),
+    );
+  });
+
+  test("plaintext email and message body are absent from notification audit events", async () => {
+    const dependencies = createInMemoryDependencies();
+    await sendAdminConsumerNotification(
+      adminNotificationRequest({
+        type: "REQUEST_UPDATED",
+        message: "Sensitive public message body.",
+      }),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    const notificationEvent = dependencies.state.events.find(
+      (event) => event.type === "CONSUMER_NOTIFICATION_SENT",
+    );
+
+    expect(JSON.stringify(notificationEvent?.data)).not.toContain(
+      "john@example.com",
+    );
+    expect(JSON.stringify(notificationEvent?.data)).not.toContain(
+      "Sensitive public message body.",
+    );
+  });
+
+  test("cross-origin notification rejected", async () => {
+    const dependencies = createInMemoryDependencies();
+    const response = await sendAdminConsumerNotification(
+      adminNotificationRequest(
+        { type: "REQUEST_UPDATED" },
+        "https://attacker.test",
+      ),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(403);
+    expect(dependencies.state.sentEmails).toEqual([]);
+  });
 });
 
 function adminSession(
@@ -538,7 +859,12 @@ function adminSession(
   };
 }
 
-function createInMemoryDependencies() {
+function createInMemoryDependencies(
+  options: {
+    emailShouldFail?: boolean;
+    requesterEmailEncrypted?: string | null;
+  } = {},
+) {
   const createdAtOne = new Date("2026-07-01T00:00:00.000Z");
   const createdAtTwo = new Date("2026-07-02T00:00:00.000Z");
   const requests: PrivacyRequest[] = [
@@ -639,6 +965,7 @@ function createInMemoryDependencies() {
       createdAt: createdAtOne,
     },
   ];
+  const accessTokens: RequestAccessToken[] = [];
   const communications: RequestCommunication[] = [
     {
       id: "communication-one",
@@ -665,6 +992,14 @@ function createInMemoryDependencies() {
     requests,
     events,
     comments,
+    attachments,
+    communications,
+    accessTokens,
+    uploadedFiles: [] as Array<{
+      storageKey: string;
+      contentType: string;
+      sizeBytes: number;
+    }>,
     sentEmails: [] as Array<{ to: string; subject: string; body: string }>,
   };
   const requestRepository: RequestRepository = {
@@ -868,20 +1203,204 @@ function createInMemoryDependencies() {
 
       return comment;
     },
+    async addAttachment(id, input) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const attachment: RequestAttachment = {
+        id: `attachment-${attachments.length + 1}`,
+        requestId: request.id,
+        visibility: input.visibility,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        storageProvider: input.storageProvider,
+        storageKey: input.storageKey,
+        checksum: input.checksum,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      };
+      attachments.push(attachment);
+      events.push({
+        id: `event-attachment-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type:
+          input.visibility === "PUBLIC"
+            ? "PUBLIC_ATTACHMENT_ADDED"
+            : "INTERNAL_ATTACHMENT_ADDED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          attachmentId: attachment.id,
+          visibility: input.visibility,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+
+      return attachment;
+    },
+    async findConsumerNotificationTarget(id) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      return {
+        id: request.id,
+        publicId: request.publicId,
+        requesterId: request.requesterId,
+        type: request.type,
+        status: request.status,
+        source: sourceFromSubmittedData(request.submittedData),
+        completedAt: request.completedAt,
+        createdAt: request.createdAt,
+        updatedAt: request.updatedAt,
+        requesterEmailEncrypted:
+          options.requesterEmailEncrypted === undefined
+            ? encryptPii("john@example.com")
+            : options.requesterEmailEncrypted,
+      };
+    },
+    async createConsumerNotificationAccessToken(requestId, input) {
+      const request = requests.find((item) => item.id === requestId);
+
+      if (!request) {
+        return null;
+      }
+
+      const accessToken: RequestAccessToken = {
+        id: `access-token-${accessTokens.length + 1}`,
+        requestId,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+        usedAt: null,
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      };
+      accessTokens.push(accessToken);
+
+      return accessToken;
+    },
+    async createCommunication(id, input) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      const communication: RequestCommunication = {
+        id: `communication-${communications.length + 1}`,
+        requestId: request.id,
+        channel: "EMAIL",
+        direction: "OUTBOUND",
+        recipient: null,
+        recipientEncrypted: encryptPii(input.recipient),
+        recipientHash: "recipient-hash",
+        encryptionVersion: 1,
+        subject: input.subject,
+        body: input.body,
+        provider: input.provider,
+        providerMessageId: null,
+        status: "PENDING",
+        errorMessage: null,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+        sentAt: null,
+      };
+      communications.push(communication);
+
+      return communication;
+    },
+    async markConsumerNotificationSent(requestId, communicationId, input) {
+      const communication = communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+
+      if (!communication) {
+        return null;
+      }
+
+      communication.status = "SENT";
+      communication.providerMessageId = input.providerMessageId;
+      communication.sentAt = new Date("2026-07-03T00:00:00.000Z");
+      communication.errorMessage = null;
+      events.push({
+        id: `event-notification-${events.length + 1}`,
+        privacyRequestId: requestId,
+        type: "CONSUMER_NOTIFICATION_SENT",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          notificationType: input.notificationType,
+          communicationId: communication.id,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+
+      return communication;
+    },
+    async markConsumerNotificationFailed(requestId, communicationId, input) {
+      const communication = communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+
+      if (!communication) {
+        return null;
+      }
+
+      communication.status = "FAILED";
+      communication.errorMessage = input.errorMessage;
+      communication.providerMessageId = null;
+      communication.sentAt = null;
+      events.push({
+        id: `event-notification-${events.length + 1}`,
+        privacyRequestId: requestId,
+        type: "CONSUMER_NOTIFICATION_FAILED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          notificationType: input.notificationType,
+          communicationId: communication.id,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+
+      return communication;
+    },
     findConsumerAccessLinkTarget: notImplemented,
-    findConsumerNotificationTarget: notImplemented,
     updateMutableData: notImplemented,
     addCustomEvent: notImplemented,
-    addAttachment: notImplemented,
     recordAttachmentDownloaded: notImplemented,
-    createCommunication: notImplemented,
     markCommunicationSent: notImplemented,
     markCommunicationFailed: notImplemented,
     createConsumerAccessToken: notImplemented,
-    createConsumerNotificationAccessToken: notImplemented,
     recordConsumerAccessLinkSent: notImplemented,
-    markConsumerNotificationSent: notImplemented,
-    markConsumerNotificationFailed: notImplemented,
     consumeConsumerAccessToken: notImplemented,
     validateConsumerAccessSession: notImplemented,
     recordConsumerAttachmentDownloaded: notImplemented,
@@ -891,8 +1410,18 @@ function createInMemoryDependencies() {
   };
   const storageProvider: PrivateFileStorageProvider = {
     provider: "vercel-blob",
-    async uploadPrivateFile() {
-      throw new Error("Not implemented in admin dashboard tests.");
+    async uploadPrivateFile(input) {
+      state.uploadedFiles.push({
+        storageKey: input.storageKey,
+        contentType: input.contentType,
+        sizeBytes: input.body.size,
+      });
+
+      return {
+        provider: "vercel-blob",
+        storageKey: input.storageKey,
+        checksum: "sha256-uploaded",
+      };
     },
     async downloadPrivateFile() {
       return {
@@ -909,6 +1438,24 @@ function createInMemoryDependencies() {
     state,
     requestRepository,
     storageProvider,
+    emailProvider: {
+      provider: "resend",
+      async sendEmail(input) {
+        if (options.emailShouldFail) {
+          throw new Error("Email provider failed.");
+        }
+
+        state.sentEmails.push(input);
+
+        return {
+          provider: "resend",
+          providerMessageId: "email-message-1",
+        };
+      },
+    } satisfies EmailProvider,
+    appBaseUrl: "https://magictrust.test",
+    now: () => new Date("2026-07-03T00:00:00.000Z"),
+    generateToken: () => "secure-token",
   };
 }
 
@@ -942,6 +1489,70 @@ function adminFormRequest(
 
   return new Request(
     `https://magictrust.test/admin/requests/req_one/${action}`,
+    {
+      method: "POST",
+      headers: {
+        origin,
+      },
+      body,
+    },
+  );
+}
+
+function adminUploadRequest(
+  overrides: {
+    fileName?: string;
+    file?: File;
+    visibility?: string;
+  } = {},
+  origin = "https://magictrust.test",
+) {
+  const body = new FormData();
+  body.set(
+    "file",
+    overrides.file ??
+      new File(["uploaded"], overrides.fileName ?? "admin upload.txt", {
+        type: "text/plain",
+      }),
+  );
+  body.set("visibility", overrides.visibility ?? "PUBLIC");
+
+  return new Request(
+    "https://magictrust.test/admin/requests/req_one/attachments",
+    {
+      method: "POST",
+      headers: {
+        origin,
+      },
+      body,
+    },
+  );
+}
+
+function adminNotificationRequest(
+  fields: {
+    type?: string;
+    message?: string;
+    attachmentId?: string;
+  },
+  origin = "https://magictrust.test",
+) {
+  const body = new FormData();
+
+  if (fields.type !== undefined) {
+    body.set("type", fields.type);
+  }
+
+  if (fields.message !== undefined) {
+    body.set("message", fields.message);
+  }
+
+  if (fields.attachmentId !== undefined) {
+    body.set("attachmentId", fields.attachmentId);
+  }
+
+  return new Request(
+    "https://magictrust.test/admin/requests/req_one/notifications",
     {
       method: "POST",
       headers: {

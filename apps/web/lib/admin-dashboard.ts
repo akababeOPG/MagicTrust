@@ -1,8 +1,11 @@
 import "server-only";
 
+import { randomBytes } from "node:crypto";
+
 import {
   createDatabase,
   createRequestRepository,
+  type ConsumerNotificationType,
   type RequestDetails,
   type RequestListFilters,
   type RequestListResult,
@@ -17,8 +20,10 @@ import {
   type RequestStatus,
   type RequestType,
 } from "@magictrust/domain";
-import { getRequiredDatabaseUrl } from "@magictrust/config";
-import { decryptPii } from "@magictrust/privacy";
+import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
+import type { EmailProvider } from "@magictrust/email";
+import { createResendEmailProvider } from "@magictrust/email";
+import { decryptPii, hashAccessToken } from "@magictrust/privacy";
 import {
   createVercelBlobPrivateStorageProvider,
   type PrivateFileStorageProvider,
@@ -30,6 +35,10 @@ import type { AdminSession } from "./admin-auth";
 export type AdminDashboardDependencies = {
   requestRepository: RequestRepository;
   storageProvider: PrivateFileStorageProvider;
+  emailProvider: EmailProvider;
+  appBaseUrl: string;
+  now: () => Date;
+  generateToken: () => string;
 };
 
 export type AdminRequestListView = {
@@ -109,6 +118,20 @@ type AdminListParseResult =
 
 const defaultAdminPageSize = 25;
 const maxAdminPageSize = 100;
+const maxUploadSizeBytes = 10 * 1024 * 1024;
+const allowedUploadMimeTypes = new Set([
+  "application/json",
+  "text/csv",
+  "application/pdf",
+  "text/plain",
+  "application/zip",
+]);
+const notificationTypes = [
+  "REQUEST_UPDATED",
+  "REQUEST_COMPLETED",
+  "REQUEST_REJECTED",
+  "FILE_AVAILABLE",
+] as const;
 const terminalStatuses = new Set<RequestStatus>([
   "SUCCESS",
   "REJECTED",
@@ -136,6 +159,10 @@ export function createAdminDashboardDependencies(): AdminDashboardDependencies {
     return {
       requestRepository: missingDatabaseRequestRepository(),
       storageProvider: createVercelBlobPrivateStorageProvider(),
+      emailProvider: createResendEmailProvider(),
+      appBaseUrl: getAppBaseUrl(),
+      now: () => new Date(),
+      generateToken: generateSecureToken,
     };
   }
 
@@ -144,6 +171,10 @@ export function createAdminDashboardDependencies(): AdminDashboardDependencies {
   return {
     requestRepository: createRequestRepository(db),
     storageProvider: createVercelBlobPrivateStorageProvider(),
+    emailProvider: createResendEmailProvider(),
+    appBaseUrl: getAppBaseUrl(),
+    now: () => new Date(),
+    generateToken: generateSecureToken,
   };
 }
 
@@ -371,6 +402,297 @@ export async function createAdminRequestComment(
   return redirectToRequestDetail(request, publicId, {
     success: duplicate ? "Comment already recorded." : "Comment added.",
   });
+}
+
+export async function uploadAdminRequestAttachment(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const file = formData.get("file");
+  const visibility = formData.get("visibility");
+
+  if (!(file instanceof File)) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "File is required.",
+    });
+  }
+
+  if (file.size > maxUploadSizeBytes) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "File is too large.",
+    });
+  }
+
+  if (!allowedUploadMimeTypes.has(file.type)) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "File MIME type is not supported.",
+    });
+  }
+
+  const parsed = z
+    .object({
+      visibility: z.enum(commentVisibilities),
+    })
+    .safeParse({ visibility });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Attachment visibility is invalid.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const safeFileName = sanitizeFileName(file.name);
+  const duplicate = existing.attachments.some(
+    (attachment) =>
+      attachment.visibility === parsed.data.visibility &&
+      attachment.fileName === safeFileName &&
+      attachment.mimeType === file.type &&
+      attachment.sizeBytes === file.size &&
+      attachment.actorType === "ADMIN_USER" &&
+      attachment.actorId === adminSession.adminUserId,
+  );
+
+  if (duplicate) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Attachment upload was already recorded.",
+    });
+  }
+
+  const storageKey = `requests/${existing.publicId}/attachments/${crypto.randomUUID()}-${safeFileName}`;
+  const upload = await dependencies.storageProvider.uploadPrivateFile({
+    body: file,
+    storageKey,
+    contentType: file.type,
+  });
+  const attachment = await dependencies.requestRepository.addAttachment(
+    existing.id,
+    {
+      visibility: parsed.data.visibility,
+      fileName: safeFileName,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      storageProvider: upload.provider,
+      storageKey: upload.storageKey,
+      checksum: upload.checksum,
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+    },
+  );
+
+  if (!attachment) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Attachment uploaded.",
+  });
+}
+
+export async function sendAdminConsumerNotification(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const parsed = z
+    .object({
+      type: z.enum(notificationTypes),
+      message: z.string().trim().max(2_000).optional(),
+      attachmentId: z.string().trim().optional(),
+    })
+    .safeParse({
+      type: formData.get("type"),
+      message: emptyToUndefined(formData.get("message")?.toString() ?? null),
+      attachmentId: emptyToUndefined(
+        formData.get("attachmentId")?.toString() ?? null,
+      ),
+    });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Notification payload is invalid.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const target =
+    await dependencies.requestRepository.findConsumerNotificationTarget(
+      existing.id,
+    );
+
+  if (!target) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (!target.requesterEmailEncrypted) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Requester email is unavailable.",
+    });
+  }
+
+  let recipient: string;
+
+  try {
+    recipient = decryptPii(target.requesterEmailEncrypted);
+  } catch {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Requester email is unavailable.",
+    });
+  }
+
+  let selectedAttachment: {
+    id: string;
+    fileName: string;
+  } | null = null;
+  let secureAccessUrl: string | null = null;
+
+  if (parsed.data.type === "FILE_AVAILABLE") {
+    if (!parsed.data.attachmentId) {
+      return redirectToRequestDetail(request, publicId, {
+        error: "A public attachment is required.",
+      });
+    }
+
+    const attachment = existing.attachments.find(
+      (item) => item.id === parsed.data.attachmentId,
+    );
+
+    if (!attachment || attachment.visibility !== "PUBLIC") {
+      return redirectToRequestDetail(request, publicId, {
+        error: "A valid public attachment is required.",
+      });
+    }
+
+    selectedAttachment = {
+      id: attachment.id,
+      fileName: attachment.fileName,
+    };
+    const token = dependencies.generateToken();
+    const accessToken =
+      await dependencies.requestRepository.createConsumerNotificationAccessToken(
+        existing.id,
+        {
+          tokenHash: hashAccessToken(token),
+          expiresAt: new Date(dependencies.now().getTime() + 30 * 60 * 1000),
+        },
+      );
+
+    if (!accessToken) {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+
+    secureAccessUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existing.publicId}/access?token=${encodeURIComponent(token)}`;
+  }
+
+  const trackingUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existing.publicId}`;
+  const message = notificationMessage(parsed.data.type, {
+    customMessage: parsed.data.message,
+    attachmentFileName: selectedAttachment?.fileName ?? null,
+  });
+  const subject = notificationSubject(parsed.data.type, existing);
+  const body = notificationBody({
+    publicId: existing.publicId,
+    status: existing.status,
+    message,
+    trackingUrl,
+    secureAccessUrl,
+  });
+
+  const communication =
+    await dependencies.requestRepository.createCommunication(existing.id, {
+      recipient,
+      subject,
+      body,
+      provider: dependencies.emailProvider.provider,
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+    });
+
+  if (!communication) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  try {
+    const sent = await dependencies.emailProvider.sendEmail({
+      to: recipient,
+      subject,
+      body,
+    });
+    const updated =
+      await dependencies.requestRepository.markConsumerNotificationSent(
+        existing.id,
+        communication.id,
+        {
+          notificationType: parsed.data.type,
+          providerMessageId: sent.providerMessageId,
+          actorType: "ADMIN_USER",
+          actorId: adminSession.adminUserId,
+        },
+      );
+
+    if (!updated) {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+
+    return redirectToRequestDetail(request, publicId, {
+      success: "Consumer notification sent.",
+    });
+  } catch {
+    const failed =
+      await dependencies.requestRepository.markConsumerNotificationFailed(
+        existing.id,
+        communication.id,
+        {
+          notificationType: parsed.data.type,
+          errorMessage: "Email provider failed to send the notification.",
+          actorType: "ADMIN_USER",
+          actorId: adminSession.adminUserId,
+        },
+      );
+
+    if (!failed) {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+
+    return redirectToRequestDetail(request, publicId, {
+      error: "Consumer notification could not be sent.",
+    });
+  }
 }
 
 export function getValidAdminStatusDestinations(
@@ -751,6 +1073,81 @@ function contentDispositionAttachment(fileName: string): string {
 
 function escapeHeaderValue(value: string): string {
   return value.replace(/["\\\r\n]/g, "_");
+}
+
+function generateSecureToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+function sanitizeFileName(fileName: string): string {
+  const sanitized = fileName
+    .normalize("NFKD")
+    .replace(/[^\w. -]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 160);
+
+  return sanitized || "attachment";
+}
+
+function notificationSubject(
+  type: ConsumerNotificationType,
+  request: { publicId: string },
+): string {
+  switch (type) {
+    case "REQUEST_COMPLETED":
+      return `MagicTrust request completed: ${request.publicId}`;
+    case "REQUEST_REJECTED":
+      return `MagicTrust request rejected: ${request.publicId}`;
+    case "FILE_AVAILABLE":
+      return `MagicTrust file available: ${request.publicId}`;
+    case "REQUEST_UPDATED":
+      return `MagicTrust request updated: ${request.publicId}`;
+  }
+}
+
+function notificationMessage(
+  type: ConsumerNotificationType,
+  input: {
+    customMessage: string | undefined;
+    attachmentFileName: string | null;
+  },
+): string {
+  if (input.customMessage) {
+    return input.customMessage;
+  }
+
+  if (type === "FILE_AVAILABLE" && input.attachmentFileName) {
+    return `A file is available for your request: ${input.attachmentFileName}`;
+  }
+
+  return "Your request has been updated.";
+}
+
+function notificationBody(input: {
+  publicId: string;
+  status: RequestStatus;
+  message: string;
+  trackingUrl: string;
+  secureAccessUrl: string | null;
+}): string {
+  const lines = [
+    "Your MagicTrust request has an update.",
+    "",
+    `Reference number: ${input.publicId}`,
+    `Current status: ${input.status}`,
+    "",
+    input.message,
+    "",
+    `Track your request: ${input.trackingUrl}`,
+  ];
+
+  if (input.secureAccessUrl) {
+    lines.push("", `Secure access link: ${input.secureAccessUrl}`);
+  }
+
+  return lines.join("\n");
 }
 
 async function safeFormData(request: Request): Promise<FormData | null> {
