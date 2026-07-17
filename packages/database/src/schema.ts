@@ -142,6 +142,18 @@ export const privacyRequests = pgTable(
       table.requesterId,
     ),
     statusIdx: index("privacy_requests_status_idx").on(table.status),
+    createdAtIdIdx: index("privacy_requests_created_at_id_idx").on(
+      table.createdAt,
+      table.id,
+    ),
+    statusCreatedAtIdx: index("privacy_requests_status_created_at_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+    typeCreatedAtIdx: index("privacy_requests_type_created_at_idx").on(
+      table.type,
+      table.createdAt,
+    ),
   }),
 );
 

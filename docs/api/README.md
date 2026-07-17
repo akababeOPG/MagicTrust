@@ -292,6 +292,73 @@ If a valid API client key lacks the required scope, MagicTrust returns `403` wit
 
 Key rotation expectation: create a replacement client/key or key row, update the caller to use the new secret, then deactivate the old key. Raw keys are not recoverable from MagicTrust after creation.
 
+## `GET /api/v1/requests`
+
+Lists Internal API request summaries. Requires `x-api-key` with `requests:read`.
+
+Supported filters combine with `AND`:
+
+```text
+publicId      exact public reference
+type          comma-separated request types
+status        comma-separated request statuses
+email         exact email lookup using requester email_hash
+phone         exact phone lookup using requester phone_hash
+createdFrom   inclusive ISO-8601 datetime
+createdTo     exclusive ISO-8601 datetime
+updatedFrom   inclusive ISO-8601 datetime
+updatedTo     exclusive ISO-8601 datetime
+limit         1-100, default 25
+cursor        opaque pagination cursor from the previous response
+```
+
+Examples:
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
+curl -X GET "http://localhost:3000/api/v1/requests?status=VERIFIED,PROCESSING&type=DATA_ACCESS" \
+  -H "x-api-key: $API_KEY"
+
+curl -X GET "http://localhost:3000/api/v1/requests?email=user@example.com" \
+  -H "x-api-key: $API_KEY"
+
+curl -X GET "http://localhost:3000/api/v1/requests?createdFrom=2026-07-01T00:00:00Z&limit=25" \
+  -H "x-api-key: $API_KEY"
+```
+
+Response:
+
+```json
+{
+  "requests": [
+    {
+      "id": "...",
+      "publicId": "req_example",
+      "type": "DATA_ACCESS",
+      "status": "VERIFIED",
+      "requesterId": "...",
+      "createdAt": "2026-07-16T00:00:00.000Z",
+      "updatedAt": "2026-07-16T00:05:00.000Z",
+      "completedAt": null,
+      "source": {
+        "channel": "FORM",
+        "siteKey": "magictrust-hosted",
+        "formKey": "privacy-request"
+      }
+    }
+  ],
+  "pagination": {
+    "limit": 25,
+    "nextCursor": "..."
+  }
+}
+```
+
+`nextCursor` is omitted when there are no more records. Pagination is ordered by `createdAt DESC, id DESC`.
+
+Email and phone filters are normalized and searched through deterministic HMAC hashes. MagicTrust does not decrypt requester records for list searches and never returns requester email, phone, encrypted values, hash values, full submitted payloads, or mutable data in this response. The `source` object contains only safe metadata from sanitized `submitted_data`.
+
 ## `POST /api/v1/requests/:id/events`
 
 Records a custom business event for an existing request. The request id may be the internal id or `publicId`.

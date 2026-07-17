@@ -14,7 +14,7 @@ import type {
   RequestType,
 } from "@magictrust/domain";
 import { encryptPii, hashPii } from "@magictrust/privacy";
-import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, lt, or } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
 import {
@@ -37,9 +37,16 @@ export type RequestSummary = {
   requesterId: string;
   type: RequestType;
   status: RequestStatus;
+  source?: SafeRequestSource | null;
   completedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type SafeRequestSource = {
+  channel: string | null;
+  siteKey: string | null;
+  formKey: string | null;
 };
 
 export type RequestEventSummary = {
@@ -78,9 +85,28 @@ export type ConsumerSecureRequestDetails = RequestSummary & {
 };
 
 export type RequestListFilters = {
-  status?: RequestStatus;
-  type?: RequestType;
+  publicId?: string;
+  statuses?: RequestStatus[];
+  types?: RequestType[];
+  emailHash?: string;
+  phoneHash?: string;
+  createdFrom?: Date;
+  createdTo?: Date;
+  updatedFrom?: Date;
+  updatedTo?: Date;
+  cursor?: {
+    createdAt: Date;
+    id: string;
+  };
   limit: number;
+};
+
+export type RequestListResult = {
+  requests: RequestSummary[];
+  nextCursor: {
+    createdAt: Date;
+    id: string;
+  } | null;
 };
 
 export type RequestRepository = {
@@ -91,7 +117,7 @@ export type RequestRepository = {
   findConsumerNotificationTarget(
     id: string,
   ): Promise<ConsumerNotificationTarget | null>;
-  list(filters: RequestListFilters): Promise<RequestSummary[]>;
+  list(filters: RequestListFilters): Promise<RequestListResult>;
   updateStatus(
     id: string,
     input: UpdateRequestStatusInput,
@@ -470,25 +496,85 @@ export function createRequestRepository(db: Database): RequestRepository {
     },
     async list(filters) {
       const conditions = [
-        filters.status ? eq(privacyRequests.status, filters.status) : undefined,
-        filters.type ? eq(privacyRequests.type, filters.type) : undefined,
+        filters.publicId
+          ? eq(privacyRequests.publicId, filters.publicId)
+          : undefined,
+        filters.statuses && filters.statuses.length > 0
+          ? inArray(privacyRequests.status, filters.statuses)
+          : undefined,
+        filters.types && filters.types.length > 0
+          ? inArray(privacyRequests.type, filters.types)
+          : undefined,
+        filters.emailHash
+          ? eq(requesters.emailHash, filters.emailHash)
+          : undefined,
+        filters.phoneHash
+          ? eq(requesters.phoneHash, filters.phoneHash)
+          : undefined,
+        filters.createdFrom
+          ? gte(privacyRequests.createdAt, filters.createdFrom)
+          : undefined,
+        filters.createdTo
+          ? lt(privacyRequests.createdAt, filters.createdTo)
+          : undefined,
+        filters.updatedFrom
+          ? gte(privacyRequests.updatedAt, filters.updatedFrom)
+          : undefined,
+        filters.updatedTo
+          ? lt(privacyRequests.updatedAt, filters.updatedTo)
+          : undefined,
+        filters.cursor
+          ? or(
+              lt(privacyRequests.createdAt, filters.cursor.createdAt),
+              and(
+                eq(privacyRequests.createdAt, filters.cursor.createdAt),
+                lt(privacyRequests.id, filters.cursor.id),
+              ),
+            )
+          : undefined,
       ].filter((condition) => condition !== undefined);
 
-      return db
+      const rows = await db
         .select({
           id: privacyRequests.id,
           publicId: privacyRequests.publicId,
           requesterId: privacyRequests.requesterId,
           type: privacyRequests.type,
           status: privacyRequests.status,
+          submittedData: privacyRequests.submittedData,
           completedAt: privacyRequests.completedAt,
           createdAt: privacyRequests.createdAt,
           updatedAt: privacyRequests.updatedAt,
         })
         .from(privacyRequests)
+        .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(privacyRequests.createdAt))
-        .limit(filters.limit);
+        .orderBy(desc(privacyRequests.createdAt), desc(privacyRequests.id))
+        .limit(filters.limit + 1);
+      const hasMore = rows.length > filters.limit;
+      const pageRows = hasMore ? rows.slice(0, filters.limit) : rows;
+      const last = pageRows.at(-1);
+
+      return {
+        requests: pageRows.map((row) => ({
+          id: row.id,
+          publicId: row.publicId,
+          requesterId: row.requesterId,
+          type: row.type,
+          status: row.status,
+          source: safeSourceFromSubmittedData(row.submittedData as JsonObject),
+          completedAt: row.completedAt,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        })),
+        nextCursor:
+          hasMore && last
+            ? {
+                createdAt: last.createdAt,
+                id: last.id,
+              }
+            : null,
+      };
     },
     async updateStatus(id, input) {
       return db.transaction(async (tx) => {
@@ -1434,6 +1520,31 @@ function protectedRecipientValues(recipient: string) {
     recipientHash: hashPii(recipient),
     encryptionVersion: 1,
   };
+}
+
+function safeSourceFromSubmittedData(
+  submittedData: JsonObject,
+): SafeRequestSource | null {
+  const source =
+    submittedData.source &&
+    typeof submittedData.source === "object" &&
+    !Array.isArray(submittedData.source)
+      ? (submittedData.source as JsonObject)
+      : null;
+
+  if (!source) {
+    return null;
+  }
+
+  return {
+    channel: safeString(source.channel),
+    siteKey: safeString(source.siteKey),
+    formKey: safeString(source.formKey),
+  };
+}
+
+function safeString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function isTerminalStatus(status: RequestStatus): boolean {

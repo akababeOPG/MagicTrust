@@ -20,10 +20,11 @@ import type {
   ApiClientStore,
   AuthenticatedApiClient,
   ApiIdempotencyStore,
+  RequestListFilters,
   RequestRepository,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { decryptPii, hashAccessToken } from "@magictrust/privacy";
+import { decryptPii, hashAccessToken, hashPii } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
 
@@ -78,12 +79,6 @@ const createRequestSchema = z.object({
     sourceUrl: z.string().url(),
   }),
   submittedData: jsonObjectSchema,
-});
-
-const listRequestsQuerySchema = z.object({
-  status: z.enum(requestStatuses).optional(),
-  type: z.enum(requestTypes).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
 const actorSchema = z.object({
@@ -284,29 +279,40 @@ export function createInternalRequestApi(
       }
 
       const url = new URL(request.url);
-      const parsed = listRequestsQuerySchema.safeParse({
-        status: emptyToUndefined(url.searchParams.get("status")),
-        type: emptyToUndefined(url.searchParams.get("type")),
-        limit: emptyToUndefined(url.searchParams.get("limit")),
-      });
+      const parsed = parseListRequestsQuery(url.searchParams);
 
-      if (!parsed.success) {
-        return validationError();
+      if (!parsed.ok) {
+        return validationError(parsed.message);
       }
 
-      let requests;
+      let result;
 
       try {
-        requests = await dependencies.requestRepository.list(parsed.data);
+        result = await dependencies.requestRepository.list(parsed.filters);
       } catch {
         return serverError();
       }
 
-      return Response.json({
-        requests: requests.map((requestSummary) =>
-          normalizeRequestSummary(requestSummary),
+      const response: {
+        requests: ReturnType<typeof normalizeRequestListItem>[];
+        pagination: {
+          limit: number;
+          nextCursor?: string;
+        };
+      } = {
+        requests: result.requests.map((requestSummary) =>
+          normalizeRequestListItem(requestSummary),
         ),
-      });
+        pagination: {
+          limit: parsed.filters.limit,
+        },
+      };
+
+      if (result.nextCursor) {
+        response.pagination.nextCursor = encodeListCursor(result.nextCursor);
+      }
+
+      return Response.json(response);
     },
 
     async updateStatus(request: Request, id: string): Promise<Response> {
@@ -1391,6 +1397,225 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
+type ListQueryParseResult =
+  | {
+      ok: true;
+      filters: RequestListFilters;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+function parseListRequestsQuery(
+  searchParams: URLSearchParams,
+): ListQueryParseResult {
+  const limit = parseLimit(searchParams.get("limit"));
+
+  if (!limit.ok) {
+    return limit;
+  }
+
+  const types = parseEnumList(searchParams.get("type"), requestTypes, "type");
+
+  if (!types.ok) {
+    return types;
+  }
+
+  const statuses = parseEnumList(
+    searchParams.get("status"),
+    requestStatuses,
+    "status",
+  );
+
+  if (!statuses.ok) {
+    return statuses;
+  }
+
+  const createdFrom = parseDateFilter(searchParams.get("createdFrom"));
+  const createdTo = parseDateFilter(searchParams.get("createdTo"));
+  const updatedFrom = parseDateFilter(searchParams.get("updatedFrom"));
+  const updatedTo = parseDateFilter(searchParams.get("updatedTo"));
+
+  if (!createdFrom.ok) {
+    return {
+      ok: false,
+      message: "createdFrom must be a valid ISO-8601 datetime.",
+    };
+  }
+
+  if (!createdTo.ok) {
+    return {
+      ok: false,
+      message: "createdTo must be a valid ISO-8601 datetime.",
+    };
+  }
+
+  if (!updatedFrom.ok) {
+    return {
+      ok: false,
+      message: "updatedFrom must be a valid ISO-8601 datetime.",
+    };
+  }
+
+  if (!updatedTo.ok) {
+    return {
+      ok: false,
+      message: "updatedTo must be a valid ISO-8601 datetime.",
+    };
+  }
+
+  if (
+    createdFrom.value &&
+    createdTo.value &&
+    createdFrom.value >= createdTo.value
+  ) {
+    return { ok: false, message: "createdFrom must be before createdTo." };
+  }
+
+  if (
+    updatedFrom.value &&
+    updatedTo.value &&
+    updatedFrom.value >= updatedTo.value
+  ) {
+    return { ok: false, message: "updatedFrom must be before updatedTo." };
+  }
+
+  const cursor = parseListCursor(searchParams.get("cursor"));
+
+  if (!cursor.ok) {
+    return cursor;
+  }
+
+  return {
+    ok: true,
+    filters: {
+      publicId: emptyToUndefined(searchParams.get("publicId")),
+      types: types.values,
+      statuses: statuses.values,
+      emailHash: hashOptionalPiiSearchValue(searchParams.get("email")),
+      phoneHash: hashOptionalPiiSearchValue(searchParams.get("phone")),
+      createdFrom: createdFrom.value,
+      createdTo: createdTo.value,
+      updatedFrom: updatedFrom.value,
+      updatedTo: updatedTo.value,
+      cursor: cursor.value,
+      limit: limit.value,
+    },
+  };
+}
+
+function parseLimit(
+  value: string | null,
+): { ok: true; value: number } | { ok: false; message: string } {
+  if (value === null || value === "") {
+    return { ok: true, value: 25 };
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+    return { ok: false, message: "limit must be an integer from 1 to 100." };
+  }
+
+  return { ok: true, value: parsed };
+}
+
+function parseEnumList<const T extends readonly string[]>(
+  value: string | null,
+  allowedValues: T,
+  name: string,
+):
+  | { ok: true; values: T[number][] | undefined }
+  | { ok: false; message: string } {
+  if (value === null || value === "") {
+    return { ok: true, values: undefined };
+  }
+
+  const values = value.split(",").map((item) => item.trim());
+  const allowed = new Set<string>(allowedValues);
+
+  if (values.length === 0 || values.some((item) => !allowed.has(item))) {
+    return { ok: false, message: `${name} contains an invalid value.` };
+  }
+
+  return { ok: true, values: [...new Set(values)] as T[number][] };
+}
+
+function parseDateFilter(
+  value: string | null,
+): { ok: true; value: Date | undefined } | { ok: false } {
+  if (value === null || value === "") {
+    return { ok: true, value: undefined };
+  }
+
+  const parsed = z.string().datetime({ offset: true }).safeParse(value);
+
+  if (!parsed.success) {
+    return { ok: false };
+  }
+
+  const date = new Date(parsed.data);
+
+  return Number.isNaN(date.getTime())
+    ? { ok: false }
+    : { ok: true, value: date };
+}
+
+function hashOptionalPiiSearchValue(value: string | null): string | undefined {
+  const normalized = emptyToUndefined(value);
+
+  return normalized ? hashPii(normalized) : undefined;
+}
+
+function encodeListCursor(cursor: { createdAt: Date; id: string }): string {
+  return Buffer.from(
+    JSON.stringify({
+      createdAt: cursor.createdAt.toISOString(),
+      id: cursor.id,
+    }),
+  ).toString("base64url");
+}
+
+function parseListCursor(
+  value: string | null,
+):
+  | { ok: true; value: RequestListFilters["cursor"] | undefined }
+  | { ok: false; message: string } {
+  if (value === null || value === "") {
+    return { ok: true, value: undefined };
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.createdAt !== "string" ||
+      typeof parsed.id !== "string"
+    ) {
+      return { ok: false, message: "cursor is invalid." };
+    }
+
+    const createdAt = new Date(parsed.createdAt);
+
+    if (Number.isNaN(createdAt.getTime()) || !parsed.id.trim()) {
+      return { ok: false, message: "cursor is invalid." };
+    }
+
+    return {
+      ok: true,
+      value: {
+        createdAt,
+        id: parsed.id,
+      },
+    };
+  } catch {
+    return { ok: false, message: "cursor is invalid." };
+  }
+}
+
 function normalizeRequestEvent(event: {
   id: string;
   privacyRequestId: string;
@@ -1509,6 +1734,34 @@ function normalizeRequestSummary(
   return {
     ...summary,
     completedAt: request.completedAt?.toISOString() ?? null,
+  };
+}
+
+function normalizeRequestListItem(request: {
+  id: string;
+  publicId: string;
+  type: RequestType;
+  status: RequestStatus;
+  requesterId: string;
+  source?: {
+    channel: string | null;
+    siteKey: string | null;
+    formKey: string | null;
+  } | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}) {
+  return {
+    id: request.id,
+    publicId: request.publicId,
+    type: request.type,
+    status: request.status,
+    requesterId: request.requesterId,
+    createdAt: request.createdAt.toISOString(),
+    updatedAt: request.updatedAt.toISOString(),
+    completedAt: request.completedAt?.toISOString() ?? null,
+    source: request.source ?? null,
   };
 }
 

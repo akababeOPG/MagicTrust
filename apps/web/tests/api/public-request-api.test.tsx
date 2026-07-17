@@ -1457,16 +1457,19 @@ function createInMemoryDependencies(
     async findConsumerNotificationTarget() {
       throw new Error("Not implemented in public intake tests.");
     },
-    async list(filters: RequestListFilters): Promise<RequestSummary[]> {
-      return state.requests
-        .filter((request) =>
-          filters.status ? request.status === filters.status : true,
-        )
-        .filter((request) =>
-          filters.type ? request.type === filters.type : true,
-        )
-        .slice(0, filters.limit)
-        .map(summaryFromRequest);
+    async list(filters: RequestListFilters) {
+      return {
+        requests: state.requests
+          .filter((request) =>
+            filters.statuses ? filters.statuses.includes(request.status) : true,
+          )
+          .filter((request) =>
+            filters.types ? filters.types.includes(request.type) : true,
+          )
+          .slice(0, filters.limit)
+          .map(summaryFromRequest),
+        nextCursor: null,
+      };
     },
     async updateStatus() {
       throw new Error("Not implemented in public intake tests.");

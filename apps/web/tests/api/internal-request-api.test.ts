@@ -2,6 +2,7 @@ import type {
   CreatePrivacyRequestRecord,
   CreateRequestEventRecord,
   CreateRequesterRecord,
+  JsonObject,
   PrivacyRequest,
   RequestAccessToken,
   RequestAttachment,
@@ -659,6 +660,333 @@ describe("internal request API", () => {
     expect(response.status).toBe(200);
     expect(body.requests).toHaveLength(1);
     expect(body.requests[0].type).toBe("GENERAL_INQUIRY");
+    expect(body.pagination).toEqual({
+      limit: 10,
+    });
+  });
+
+  test("returns 403 when listing without requests:read scope", async () => {
+    const api = createInternalRequestApi(
+      createInMemoryDependencies({ scopes: ["requests:create"] }),
+    );
+
+    const response = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  test("lists requests with exact publicId filter", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const first = await createRequest(api);
+    await createRequest(api);
+
+    const response = await api.list(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests?publicId=${first.publicId}`,
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].publicId).toBe(first.publicId);
+  });
+
+  test("lists requests with multiple status values", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const first = await createRequest(api);
+    const second = await createRequest(api);
+    const third = await createRequest(api);
+    dependencies.state.requests.find((item) => item.id === first.id)!.status =
+      "VERIFIED";
+    dependencies.state.requests.find((item) => item.id === second.id)!.status =
+      "PROCESSING";
+    dependencies.state.requests.find((item) => item.id === third.id)!.status =
+      "REJECTED";
+
+    const response = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?status=VERIFIED,PROCESSING",
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(
+      body.requests.map((request: { status: string }) => request.status),
+    ).toEqual(expect.arrayContaining(["VERIFIED", "PROCESSING"]));
+    expect(body.requests).toHaveLength(2);
+  });
+
+  test("lists requests with multiple type values", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+
+    await createRequest(api, validCreateRequestBody({ type: "DATA_ACCESS" }));
+    await createRequest(api, validCreateRequestBody({ type: "DATA_DELETION" }));
+    await createRequest(
+      api,
+      validCreateRequestBody({ type: "GENERAL_INQUIRY" }),
+    );
+
+    const response = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?type=DATA_ACCESS,DATA_DELETION",
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(
+      body.requests.map((request: { type: string }) => request.type),
+    ).toEqual(expect.arrayContaining(["DATA_ACCESS", "DATA_DELETION"]));
+    expect(body.requests).toHaveLength(2);
+  });
+
+  test("lists requests by exact email hash lookup", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const first = await createRequest(
+      api,
+      validCreateRequestBody({
+        requester: { email: "User@Example.com", phone: "+13055550000" },
+      }),
+    );
+    await createRequest(
+      api,
+      validCreateRequestBody({
+        requester: { email: "other@example.com", phone: "+13055551111" },
+      }),
+    );
+
+    const response = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?email=user@example.com",
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].publicId).toBe(first.publicId);
+    expect(dependencies.state.requesterEmailHash.get(first.requesterId)).toBe(
+      hashPii("user@example.com"),
+    );
+  });
+
+  test("lists requests by exact phone hash lookup", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const first = await createRequest(
+      api,
+      validCreateRequestBody({
+        requester: { email: "phone@example.com", phone: "(305) 555-1234" },
+      }),
+    );
+    await createRequest(
+      api,
+      validCreateRequestBody({
+        requester: { email: "other@example.com", phone: "+13055551111" },
+      }),
+    );
+
+    const response = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?phone=305-555-1234",
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].publicId).toBe(first.publicId);
+    expect(dependencies.state.requesterPhoneHash.get(first.requesterId)).toBe(
+      hashPii("3055551234"),
+    );
+  });
+
+  test("lists requests with date range filters", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const first = await createRequest(api);
+    const second = await createRequest(api);
+    const firstRecord = dependencies.state.requests.find(
+      (item) => item.id === first.id,
+    )!;
+    const secondRecord = dependencies.state.requests.find(
+      (item) => item.id === second.id,
+    )!;
+    firstRecord.createdAt = new Date("2026-07-01T00:00:00.000Z");
+    firstRecord.updatedAt = new Date("2026-07-02T00:00:00.000Z");
+    secondRecord.createdAt = new Date("2026-08-01T00:00:00.000Z");
+    secondRecord.updatedAt = new Date("2026-08-02T00:00:00.000Z");
+
+    const response = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?createdFrom=2026-07-01T00:00:00Z&createdTo=2026-07-31T00:00:00Z&updatedFrom=2026-07-01T00:00:00Z&updatedTo=2026-07-31T00:00:00Z",
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].publicId).toBe(first.publicId);
+  });
+
+  test("lists requests with combined filters", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const match = await createRequest(
+      api,
+      validCreateRequestBody({
+        type: "DATA_ACCESS",
+        requester: { email: "match@example.com", phone: "+13055550000" },
+      }),
+    );
+    const miss = await createRequest(
+      api,
+      validCreateRequestBody({
+        type: "DATA_ACCESS",
+        requester: { email: "miss@example.com", phone: "+13055551111" },
+      }),
+    );
+    dependencies.state.requests.find((item) => item.id === match.id)!.status =
+      "PROCESSING";
+    dependencies.state.requests.find((item) => item.id === miss.id)!.status =
+      "PROCESSING";
+
+    const response = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?status=PROCESSING&type=DATA_ACCESS&email=match@example.com",
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.requests).toHaveLength(1);
+    expect(body.requests[0].publicId).toBe(match.publicId);
+  });
+
+  test("uses stable cursor pagination without duplicates", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    await createRequest(api);
+    await createRequest(api);
+    await createRequest(api);
+
+    const firstResponse = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests?limit=2"),
+    );
+    const firstBody = await firstResponse.json();
+    const secondResponse = await api.list(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests?limit=2&cursor=${encodeURIComponent(
+          firstBody.pagination.nextCursor,
+        )}`,
+      ),
+    );
+    const secondBody = await secondResponse.json();
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(firstBody.requests).toHaveLength(2);
+    expect(firstBody.pagination.nextCursor).toEqual(expect.any(String));
+    expect(secondBody.requests).toHaveLength(1);
+    expect(
+      new Set(
+        [...firstBody.requests, ...secondBody.requests].map(
+          (request) => request.id,
+        ),
+      ).size,
+    ).toBe(3);
+  });
+
+  test("returns 400 for invalid cursor and invalid date ranges", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const invalidCursor = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?cursor=not-a-cursor",
+      ),
+    );
+    const invalidCreatedRange = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?createdFrom=2026-07-31T00:00:00Z&createdTo=2026-07-01T00:00:00Z",
+      ),
+    );
+    const invalidUpdatedRange = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?updatedFrom=2026-07-31T00:00:00Z&updatedTo=2026-07-01T00:00:00Z",
+      ),
+    );
+
+    expect(invalidCursor.status).toBe(400);
+    expect(invalidCreatedRange.status).toBe(400);
+    expect(invalidUpdatedRange.status).toBe(400);
+  });
+
+  test("returns 400 for invalid list filters", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const invalidType = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests?type=BAD"),
+    );
+    const invalidStatus = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?status=NOT_REAL",
+      ),
+    );
+    const invalidDate = await api.list(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests?createdFrom=tomorrow",
+      ),
+    );
+    const invalidLimit = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests?limit=500"),
+    );
+
+    expect(invalidType.status).toBe(400);
+    expect(invalidStatus.status).toBe(400);
+    expect(invalidDate.status).toBe(400);
+    expect(invalidLimit.status).toBe(400);
+  });
+
+  test("list response excludes PII and returns safe source metadata only", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+
+    await createRequest(api);
+    dependencies.state.requests[0]!.mutableData = {
+      processorReference: "job-12345",
+    };
+
+    const response = await api.list(
+      authenticatedRequest("https://magictrust.test/api/v1/requests"),
+    );
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.status).toBe(200);
+    expect(serialized).not.toContain("john@example.com");
+    expect(serialized).not.toContain("+13055551234");
+    expect(serialized).not.toContain("emailHash");
+    expect(serialized).not.toContain("phoneHash");
+    expect(serialized).not.toContain("emailEncrypted");
+    expect(serialized).not.toContain("phoneEncrypted");
+    expect(serialized).not.toContain("submittedData");
+    expect(serialized).not.toContain("submittedDataEncrypted");
+    expect(serialized).not.toContain("submittedDataHash");
+    expect(serialized).not.toContain("mutableData");
+    expect(serialized).not.toContain("job-12345");
+    expect(body.requests[0].source).toEqual({
+      channel: "API",
+      siteKey: "test-site",
+      formKey: "manual-api",
+    });
   });
 
   test("returns 401 for unauthorized status update", async () => {
@@ -2175,14 +2503,22 @@ function authenticatedRequest(input: string, init: RequestInit = {}) {
   });
 }
 
-function validCreateRequestBody(overrides: { type?: string } = {}) {
+function validCreateRequestBody(
+  overrides: {
+    type?: string;
+    requester?: {
+      email?: string;
+      phone?: string;
+    };
+  } = {},
+) {
   return {
     type: overrides.type ?? "DATA_ACCESS",
     requester: {
       firstName: "John",
       lastName: "Doe",
-      email: "john@example.com",
-      phone: "+13055551234",
+      email: overrides.requester?.email ?? "john@example.com",
+      phone: overrides.requester?.phone ?? "+13055551234",
     },
     source: {
       channel: "API",
@@ -2327,16 +2663,21 @@ function validUploadFormData(
   return formData;
 }
 
-async function createRequest(api: ReturnType<typeof createInternalRequestApi>) {
+async function createRequest(
+  api: ReturnType<typeof createInternalRequestApi>,
+  requestBody: ReturnType<
+    typeof validCreateRequestBody
+  > = validCreateRequestBody(),
+) {
   const response = await api.create(
     authenticatedRequest("https://magictrust.test/api/v1/requests", {
       method: "POST",
-      body: JSON.stringify(validCreateRequestBody()),
+      body: JSON.stringify(requestBody),
     }),
   );
-  const body = await response.json();
+  const responseBody = await response.json();
 
-  return body.request;
+  return responseBody.request;
 }
 
 async function getRequestDetail(
@@ -2413,6 +2754,8 @@ function createInMemoryDependencies(
     apiClientKey,
     requesters: [] as Requester[],
     requesterEmailEncrypted: new Map<string, string | null>(),
+    requesterEmailHash: new Map<string, string | null>(),
+    requesterPhoneHash: new Map<string, string | null>(),
     requests: [] as PrivacyRequest[],
     events: [] as RequestEvent[],
     comments: [] as RequestComment[],
@@ -2434,6 +2777,8 @@ function createInMemoryDependencies(
 
           state.requesters.push(requester);
           state.requesterEmailEncrypted.set(requester.id, data.emailEncrypted);
+          state.requesterEmailHash.set(requester.id, data.emailHash);
+          state.requesterPhoneHash.set(requester.id, data.phoneHash);
 
           return requester;
         },
@@ -2522,19 +2867,70 @@ function createInMemoryDependencies(
           state.requesterEmailEncrypted.get(request.requesterId) ?? null,
       };
     },
-    async list(filters: RequestListFilters): Promise<RequestSummary[]> {
-      return state.requests
+    async list(filters: RequestListFilters) {
+      const rows = state.requests
         .filter((request) =>
-          filters.status ? request.status === filters.status : true,
+          filters.publicId ? request.publicId === filters.publicId : true,
         )
         .filter((request) =>
-          filters.type ? request.type === filters.type : true,
+          filters.statuses ? filters.statuses.includes(request.status) : true,
         )
-        .sort(
-          (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
+        .filter((request) =>
+          filters.types ? filters.types.includes(request.type) : true,
         )
-        .slice(0, filters.limit)
-        .map(summaryFromRequest);
+        .filter((request) =>
+          filters.emailHash
+            ? state.requesterEmailHash.get(request.requesterId) ===
+              filters.emailHash
+            : true,
+        )
+        .filter((request) =>
+          filters.phoneHash
+            ? state.requesterPhoneHash.get(request.requesterId) ===
+              filters.phoneHash
+            : true,
+        )
+        .filter((request) =>
+          filters.createdFrom ? request.createdAt >= filters.createdFrom : true,
+        )
+        .filter((request) =>
+          filters.createdTo ? request.createdAt < filters.createdTo : true,
+        )
+        .filter((request) =>
+          filters.updatedFrom ? request.updatedAt >= filters.updatedFrom : true,
+        )
+        .filter((request) =>
+          filters.updatedTo ? request.updatedAt < filters.updatedTo : true,
+        )
+        .filter((request) =>
+          filters.cursor
+            ? request.createdAt < filters.cursor.createdAt ||
+              (request.createdAt.getTime() ===
+                filters.cursor.createdAt.getTime() &&
+                request.id < filters.cursor.id)
+            : true,
+        )
+        .sort((left, right) => {
+          const createdDiff =
+            right.createdAt.getTime() - left.createdAt.getTime();
+
+          return createdDiff === 0
+            ? right.id.localeCompare(left.id)
+            : createdDiff;
+        });
+      const pageRows = rows.slice(0, filters.limit);
+      const last = pageRows.at(-1);
+
+      return {
+        requests: pageRows.map(summaryFromRequest),
+        nextCursor:
+          rows.length > filters.limit && last
+            ? {
+                createdAt: last.createdAt,
+                id: last.id,
+              }
+            : null,
+      };
     },
     async updateStatus(id, input) {
       const request = state.requests.find(
@@ -3070,10 +3466,28 @@ function summaryFromRequest(request: PrivacyRequest): RequestSummary {
     requesterId: request.requesterId,
     type: request.type,
     status: request.status,
+    source: sourceFromSubmittedData(request.submittedData),
     completedAt: request.completedAt,
     createdAt: request.createdAt,
     updatedAt: request.updatedAt,
   };
+}
+
+function sourceFromSubmittedData(request: JsonObject) {
+  const source =
+    request.source &&
+    typeof request.source === "object" &&
+    !Array.isArray(request.source)
+      ? (request.source as JsonObject)
+      : null;
+
+  return source
+    ? {
+        channel: typeof source.channel === "string" ? source.channel : null,
+        siteKey: typeof source.siteKey === "string" ? source.siteKey : null,
+        formKey: typeof source.formKey === "string" ? source.formKey : null,
+      }
+    : null;
 }
 
 function isTerminalStatus(status: string): boolean {
