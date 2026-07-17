@@ -61,6 +61,10 @@ export type ConsumerAccessLinkTarget = RequestSummary & {
   requesterEmailEncrypted: string | null;
 };
 
+export type ConsumerNotificationTarget = RequestSummary & {
+  requesterEmailEncrypted: string | null;
+};
+
 export type ConsumerSecureRequestDetails = RequestSummary & {
   comments: RequestComment[];
   attachments: RequestAttachment[];
@@ -77,6 +81,9 @@ export type RequestRepository = {
   findConsumerAccessLinkTarget(
     publicId: string,
   ): Promise<ConsumerAccessLinkTarget | null>;
+  findConsumerNotificationTarget(
+    id: string,
+  ): Promise<ConsumerNotificationTarget | null>;
   list(filters: RequestListFilters): Promise<RequestSummary[]>;
   updateStatus(
     id: string,
@@ -112,10 +119,24 @@ export type RequestRepository = {
     publicId: string,
     input: CreateConsumerAccessTokenInput,
   ): Promise<ConsumerAccessTokenPreparation | null>;
+  createConsumerNotificationAccessToken(
+    requestId: string,
+    input: CreateConsumerNotificationAccessTokenInput,
+  ): Promise<RequestAccessToken | null>;
   recordConsumerAccessLinkSent(
     requestId: string,
     input: RecordConsumerAccessLinkSentInput,
   ): Promise<void>;
+  markConsumerNotificationSent(
+    requestId: string,
+    communicationId: string,
+    input: MarkConsumerNotificationSentInput,
+  ): Promise<RequestCommunication | null>;
+  markConsumerNotificationFailed(
+    requestId: string,
+    communicationId: string,
+    input: MarkConsumerNotificationFailedInput,
+  ): Promise<RequestCommunication | null>;
   consumeConsumerAccessToken(
     publicId: string,
     input: ConsumeConsumerAccessTokenInput,
@@ -211,11 +232,36 @@ export type ConsumerAccessTokenPreparation = {
   communication: RequestCommunication;
 };
 
+export type CreateConsumerNotificationAccessTokenInput = {
+  tokenHash: string;
+  expiresAt: Date;
+};
+
 export type RecordConsumerAccessLinkSentInput = {
   accessTokenId: string;
   communicationId: string;
   provider: string;
   providerMessageId: string;
+};
+
+export type ConsumerNotificationType =
+  | "REQUEST_UPDATED"
+  | "REQUEST_COMPLETED"
+  | "REQUEST_REJECTED"
+  | "FILE_AVAILABLE";
+
+export type MarkConsumerNotificationSentInput = {
+  notificationType: ConsumerNotificationType;
+  providerMessageId: string;
+  actorType: ActorType;
+  actorId: string | null;
+};
+
+export type MarkConsumerNotificationFailedInput = {
+  notificationType: ConsumerNotificationType;
+  errorMessage: string;
+  actorType: ActorType;
+  actorId: string | null;
 };
 
 export type ConsumeConsumerAccessTokenInput = {
@@ -369,6 +415,26 @@ export function createRequestRepository(db: Database): RequestRepository {
         .from(privacyRequests)
         .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
         .where(eq(privacyRequests.publicId, publicId))
+        .limit(1);
+
+      return request ?? null;
+    },
+    async findConsumerNotificationTarget(id) {
+      const [request] = await db
+        .select({
+          id: privacyRequests.id,
+          publicId: privacyRequests.publicId,
+          requesterId: privacyRequests.requesterId,
+          type: privacyRequests.type,
+          status: privacyRequests.status,
+          completedAt: privacyRequests.completedAt,
+          createdAt: privacyRequests.createdAt,
+          updatedAt: privacyRequests.updatedAt,
+          requesterEmailEncrypted: requesters.emailEncrypted,
+        })
+        .from(privacyRequests)
+        .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
+        .where(requestIdentifierCondition(id))
         .limit(1);
 
       return request ?? null;
@@ -758,6 +824,30 @@ export function createRequestRepository(db: Database): RequestRepository {
         };
       });
     },
+    async createConsumerNotificationAccessToken(requestId, input) {
+      const [request] = await db
+        .select({
+          id: privacyRequests.id,
+        })
+        .from(privacyRequests)
+        .where(eq(privacyRequests.id, requestId))
+        .limit(1);
+
+      if (!request) {
+        return null;
+      }
+
+      const [accessToken] = await db
+        .insert(requestAccessTokens)
+        .values({
+          requestId,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+        })
+        .returning(accessTokenSelection);
+
+      return accessToken;
+    },
     async recordConsumerAccessLinkSent(requestId, input) {
       await db.insert(requestEvents).values({
         privacyRequestId: requestId,
@@ -770,6 +860,86 @@ export function createRequestRepository(db: Database): RequestRepository {
           provider: input.provider,
           providerMessageId: input.providerMessageId,
         },
+      });
+    },
+    async markConsumerNotificationSent(requestId, communicationId, input) {
+      return db.transaction(async (tx) => {
+        const now = new Date();
+        const [communication] = await tx
+          .update(requestCommunications)
+          .set({
+            status: "SENT",
+            providerMessageId: input.providerMessageId,
+            errorMessage: null,
+            sentAt: now,
+          })
+          .where(
+            and(
+              eq(requestCommunications.id, communicationId),
+              eq(requestCommunications.requestId, requestId),
+            ),
+          )
+          .returning(communicationSelection);
+
+        if (!communication) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: requestId,
+          type: "CONSUMER_NOTIFICATION_SENT",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            notificationType: input.notificationType,
+            communicationId: communication.id,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return communication;
+      });
+    },
+    async markConsumerNotificationFailed(requestId, communicationId, input) {
+      return db.transaction(async (tx) => {
+        const [communication] = await tx
+          .update(requestCommunications)
+          .set({
+            status: "FAILED",
+            errorMessage: input.errorMessage,
+            sentAt: null,
+          })
+          .where(
+            and(
+              eq(requestCommunications.id, communicationId),
+              eq(requestCommunications.requestId, requestId),
+            ),
+          )
+          .returning(communicationSelection);
+
+        if (!communication) {
+          return null;
+        }
+
+        await tx.insert(requestEvents).values({
+          privacyRequestId: requestId,
+          type: "CONSUMER_NOTIFICATION_FAILED",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          data: {
+            notificationType: input.notificationType,
+            communicationId: communication.id,
+            actor: {
+              type: input.actorType,
+              id: input.actorId,
+            },
+          },
+        });
+
+        return communication;
       });
     },
     async consumeConsumerAccessToken(publicId, input) {

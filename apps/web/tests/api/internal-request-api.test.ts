@@ -3,6 +3,7 @@ import type {
   CreateRequestEventRecord,
   CreateRequesterRecord,
   PrivacyRequest,
+  RequestAccessToken,
   RequestAttachment,
   RequestComment,
   RequestCommunication,
@@ -17,6 +18,7 @@ import type {
   RequestSummary,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
+import { hashAccessToken } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test } from "vitest";
 
@@ -121,6 +123,16 @@ describe("internal request API", () => {
       ),
       created.publicId,
     );
+    const notificationResponse = await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(validNotificationBody()),
+        },
+      ),
+      created.publicId,
+    );
     const detailAfterEmailResponse = await api.get(
       authenticatedRequest(
         `https://magictrust.test/api/v1/requests/${created.publicId}`,
@@ -138,8 +150,13 @@ describe("internal request API", () => {
     expect(uploadResponse.status).toBe(201);
     expect(downloadResponse.status).toBe(200);
     expect(emailResponse.status).toBe(201);
+    expect(notificationResponse.status).toBe(201);
     expect(detailAfterEmailResponse.status).toBe(200);
     expect(detailAfterEmail.request.communications).toEqual([
+      expect.objectContaining({
+        channel: "EMAIL",
+        status: "SENT",
+      }),
       expect.objectContaining({
         channel: "EMAIL",
         status: "SENT",
@@ -1063,6 +1080,304 @@ describe("internal request API", () => {
       }),
     ]);
   });
+
+  test("returns 401 for unauthorized consumer notification", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.sendConsumerNotification(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_test/notifications",
+        {
+          method: "POST",
+          body: JSON.stringify(validNotificationBody()),
+        },
+      ),
+      "req_test",
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("returns 404 when notifying a missing request", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.sendConsumerNotification(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_missing/notifications",
+        {
+          method: "POST",
+          body: JSON.stringify(validNotificationBody()),
+        },
+      ),
+      "req_missing",
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("sends a successful update notification", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(validNotificationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.communication).toMatchObject({
+      channel: "EMAIL",
+      direction: "OUTBOUND",
+      recipient: "john@example.com",
+      provider: "resend",
+      providerMessageId: "email-message-1",
+      status: "SENT",
+      actorType: "API_CLIENT",
+      actorId: "privacy-processor",
+    });
+    expect(body.communication.body).toBeUndefined();
+    expect(dependencies.state.sentEmails.at(-1)).toMatchObject({
+      to: "john@example.com",
+      subject: `MagicTrust request updated: ${created.publicId}`,
+    });
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      "Your request is currently being processed.",
+    );
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      `Reference number: ${created.publicId}`,
+    );
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      "Current status: SUBMITTED",
+    );
+    expect(dependencies.state.sentEmails.at(-1)?.body).toContain(
+      `Track your request: https://magictrust.test/requests/${created.publicId}`,
+    );
+  });
+
+  test("marks a consumer notification as failed when provider send fails", async () => {
+    const dependencies = createInMemoryDependencies({
+      emailShouldFail: true,
+    });
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(validNotificationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.communication).toMatchObject({
+      status: "FAILED",
+      provider: "resend",
+      providerMessageId: null,
+      errorMessage: "Email provider failed to send the notification.",
+    });
+  });
+
+  test("FILE_AVAILABLE creates a hashed access token and includes secure link", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            validNotificationBody({
+              type: "FILE_AVAILABLE",
+              message: "A file is available for your request.",
+            }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+    const email = dependencies.state.sentEmails.at(-1);
+    const token = extractAccessTokenFromEmail(email);
+
+    expect(response.status).toBe(201);
+    expect(dependencies.state.accessTokens).toHaveLength(1);
+    expect(dependencies.state.accessTokens[0]?.tokenHash).not.toBe(token);
+    expect(dependencies.state.accessTokens[0]?.tokenHash).toBe(
+      hashAccessToken(token),
+    );
+    expect(email?.body).toContain(
+      `Secure access link: https://magictrust.test/requests/${created.publicId}/access?token=`,
+    );
+  });
+
+  test("consumer notification does not modify request status", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            validNotificationBody({ type: "REQUEST_COMPLETED" }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(detail.status).toBe("SUBMITTED");
+  });
+
+  test("consumer notification creates communication and audit events", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            validNotificationBody({ type: "REQUEST_REJECTED" }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(201);
+    expect(detail.communications).toEqual([
+      expect.objectContaining({
+        id: body.communication.id,
+        status: "SENT",
+        subject: `MagicTrust request rejected: ${created.publicId}`,
+      }),
+    ]);
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "CONSUMER_NOTIFICATION_SENT",
+          actorType: "API_CLIENT",
+          actorId: "privacy-processor",
+          data: {
+            notificationType: "REQUEST_REJECTED",
+            communicationId: body.communication.id,
+            actor: {
+              type: "API_CLIENT",
+              id: "privacy-processor",
+            },
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("failed consumer notification creates audit event", async () => {
+    const dependencies = createInMemoryDependencies({
+      emailShouldFail: true,
+    });
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+
+    const response = await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(validNotificationBody()),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const detail = await getRequestDetail(api, created.publicId);
+
+    expect(response.status).toBe(502);
+    expect(detail.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "CONSUMER_NOTIFICATION_FAILED",
+          actorType: "API_CLIENT",
+          actorId: "privacy-processor",
+          data: {
+            notificationType: "REQUEST_UPDATED",
+            communicationId: body.communication.id,
+            actor: {
+              type: "API_CLIENT",
+              id: "privacy-processor",
+            },
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("notification email does not expose internal comments or attachment internals", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    await api.addComment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/comments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validCommentBody({ visibility: "INTERNAL" })),
+        },
+      ),
+      created.publicId,
+    );
+    await api.addAttachment(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify(validAttachmentBody({ visibility: "INTERNAL" })),
+        },
+      ),
+      created.publicId,
+    );
+
+    await api.sendConsumerNotification(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/notifications`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            validNotificationBody({
+              type: "FILE_AVAILABLE",
+              message: "A public file is available.",
+            }),
+          ),
+        },
+      ),
+      created.publicId,
+    );
+    const emailBody = dependencies.state.sentEmails.at(-1)?.body ?? "";
+
+    expect(emailBody).not.toContain("Your request is being processed.");
+    expect(emailBody).not.toContain("manual/data-export.json");
+    expect(emailBody).not.toContain("sha256-placeholder");
+    expect(emailBody).not.toContain("INTERNAL");
+  });
 });
 
 function authenticatedRequest(input: string, init: RequestInit = {}) {
@@ -1150,6 +1465,26 @@ function validEmailCommunicationBody() {
   };
 }
 
+function validNotificationBody(
+  overrides: {
+    type?:
+      | "REQUEST_UPDATED"
+      | "REQUEST_COMPLETED"
+      | "REQUEST_REJECTED"
+      | "FILE_AVAILABLE";
+    message?: string;
+  } = {},
+) {
+  return {
+    type: overrides.type ?? "REQUEST_UPDATED",
+    message: overrides.message ?? "Your request is currently being processed.",
+    actor: {
+      type: "API_CLIENT",
+      id: "privacy-processor",
+    },
+  };
+}
+
 function validUploadFormData(
   overrides: {
     visibility?: string;
@@ -1196,6 +1531,18 @@ async function getRequestDetail(
   return body.request;
 }
 
+function extractAccessTokenFromEmail(
+  email: { body: string } | undefined,
+): string {
+  const token = email?.body.match(/\/access\?token=([A-Za-z0-9_-]+)/)?.[1];
+
+  if (!token) {
+    throw new Error("Expected secure access token in email body.");
+  }
+
+  return token;
+}
+
 async function createUploadedAttachment(
   api: ReturnType<typeof createInternalRequestApi>,
   requestId: string,
@@ -1223,11 +1570,14 @@ function createInMemoryDependencies(
   const state = {
     nextId: 1,
     requesters: [] as Requester[],
+    requesterEmailEncrypted: new Map<string, string | null>(),
     requests: [] as PrivacyRequest[],
     events: [] as RequestEvent[],
     comments: [] as RequestComment[],
     attachments: [] as RequestAttachment[],
     communications: [] as RequestCommunication[],
+    accessTokens: [] as RequestAccessToken[],
+    sentEmails: [] as Array<{ to: string; subject: string; body: string }>,
   };
 
   const creationStore: RequestCreationStore = {
@@ -1240,6 +1590,7 @@ function createInMemoryDependencies(
           };
 
           state.requesters.push(requester);
+          state.requesterEmailEncrypted.set(requester.id, data.emailEncrypted);
 
           return requester;
         },
@@ -1308,6 +1659,21 @@ function createInMemoryDependencies(
     },
     async findConsumerAccessLinkTarget() {
       throw new Error("Not implemented in internal request API tests.");
+    },
+    async findConsumerNotificationTarget(id) {
+      const request = state.requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) {
+        return null;
+      }
+
+      return {
+        ...summaryFromRequest(request),
+        requesterEmailEncrypted:
+          state.requesterEmailEncrypted.get(request.requesterId) ?? null,
+      };
     },
     async list(filters: RequestListFilters): Promise<RequestSummary[]> {
       return state.requests
@@ -1571,8 +1937,92 @@ function createInMemoryDependencies(
     async createConsumerAccessToken() {
       throw new Error("Not implemented in internal request API tests.");
     },
+    async createConsumerNotificationAccessToken(requestId, input) {
+      const request = state.requests.find((item) => item.id === requestId);
+
+      if (!request) {
+        return null;
+      }
+
+      const accessToken = {
+        id: `access-token-${state.nextId++}`,
+        requestId: request.id,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+        usedAt: null,
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      };
+      state.accessTokens.push(accessToken);
+
+      return accessToken;
+    },
     async recordConsumerAccessLinkSent() {
       throw new Error("Not implemented in internal request API tests.");
+    },
+    async markConsumerNotificationSent(requestId, communicationId, input) {
+      const communication = state.communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+
+      if (!communication) {
+        return null;
+      }
+
+      const sentAt = new Date(Date.UTC(2026, 0, state.nextId++));
+      communication.status = "SENT";
+      communication.providerMessageId = input.providerMessageId;
+      communication.errorMessage = null;
+      communication.sentAt = sentAt;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "CONSUMER_NOTIFICATION_SENT",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          notificationType: input.notificationType,
+          communicationId: communication.id,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return { ...communication };
+    },
+    async markConsumerNotificationFailed(requestId, communicationId, input) {
+      const communication = state.communications.find(
+        (item) => item.id === communicationId && item.requestId === requestId,
+      );
+
+      if (!communication) {
+        return null;
+      }
+
+      communication.status = "FAILED";
+      communication.errorMessage = input.errorMessage;
+      communication.providerMessageId = null;
+      communication.sentAt = null;
+      state.events.push({
+        id: `event-${state.nextId++}`,
+        privacyRequestId: requestId,
+        type: "CONSUMER_NOTIFICATION_FAILED",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        data: {
+          notificationType: input.notificationType,
+          communicationId: communication.id,
+          actor: {
+            type: input.actorType,
+            id: input.actorId,
+          },
+        },
+        createdAt: new Date(Date.UTC(2026, 0, state.nextId++)),
+      });
+
+      return { ...communication };
     },
     async consumeConsumerAccessToken() {
       throw new Error("Not implemented in internal request API tests.");
@@ -1616,10 +2066,16 @@ function createInMemoryDependencies(
 
   const emailProvider: EmailProvider = {
     provider: "resend",
-    async sendEmail() {
+    async sendEmail(input) {
       if (options.emailShouldFail) {
         throw new Error("Email provider failed to send the message.");
       }
+
+      state.sentEmails.push({
+        to: input.to,
+        subject: input.subject,
+        body: input.body,
+      });
 
       return {
         provider: "resend",
@@ -1634,6 +2090,8 @@ function createInMemoryDependencies(
     requestRepository,
     storageProvider,
     emailProvider,
+    appBaseUrl: "https://magictrust.test",
+    state,
   };
 }
 

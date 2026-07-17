@@ -1319,6 +1319,9 @@ function createInMemoryDependencies(
         requesterEmailEncrypted: requester?.emailEncrypted ?? null,
       };
     },
+    async findConsumerNotificationTarget() {
+      throw new Error("Not implemented in public intake tests.");
+    },
     async list(filters: RequestListFilters): Promise<RequestSummary[]> {
       return state.requests
         .filter((request) =>
@@ -1472,6 +1475,9 @@ function createInMemoryDependencies(
         communication,
       };
     },
+    async createConsumerNotificationAccessToken() {
+      throw new Error("Not implemented in public intake tests.");
+    },
     async recordConsumerAccessLinkSent(requestId, input) {
       state.events.push({
         id: `event-${state.nextId++}`,
@@ -1487,6 +1493,12 @@ function createInMemoryDependencies(
         },
         createdAt: new Date(Date.UTC(2026, 0, 1)),
       });
+    },
+    async markConsumerNotificationSent() {
+      throw new Error("Not implemented in public intake tests.");
+    },
+    async markConsumerNotificationFailed() {
+      throw new Error("Not implemented in public intake tests.");
     },
     async consumeConsumerAccessToken(publicId, input) {
       const request = state.requests.find((item) => item.publicId === publicId);

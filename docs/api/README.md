@@ -207,3 +207,47 @@ curl -X POST "http://localhost:3000/api/v1/requests/req_example/communications/e
 ```
 
 The response includes communication metadata only. It does not include provider secrets.
+
+## `POST /api/v1/requests/:id/notifications`
+
+Sends an explicit consumer notification for an existing request. The request id may be the internal id or `publicId`.
+
+The email always includes the request reference number, current status, the provided public message, and the public tracking link. `FILE_AVAILABLE` notifications also include a new secure access link that expires after 30 minutes; files are not attached to the email.
+
+### `REQUEST_UPDATED`
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
+curl -X POST "http://localhost:3000/api/v1/requests/req_example/notifications" \
+  -H "content-type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "type": "REQUEST_UPDATED",
+    "message": "Your request is currently being processed.",
+    "actor": {
+      "type": "API_CLIENT",
+      "id": "privacy-processor"
+    }
+  }'
+```
+
+### `FILE_AVAILABLE`
+
+```sh
+API_KEY=$(grep '^INTERNAL_API_KEY=' .env.local | cut -d= -f2- | tr -d '"')
+
+curl -X POST "http://localhost:3000/api/v1/requests/req_example/notifications" \
+  -H "content-type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "type": "FILE_AVAILABLE",
+    "message": "A file is available for your request.",
+    "actor": {
+      "type": "API_CLIENT",
+      "id": "privacy-processor"
+    }
+  }'
+```
+
+The response includes communication metadata only. Notification audit events never include the recipient email or email body.

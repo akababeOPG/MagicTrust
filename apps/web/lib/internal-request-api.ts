@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import {
   actorTypes,
   commentVisibilities,
@@ -14,6 +16,7 @@ import type {
 } from "@magictrust/domain";
 import type { RequestRepository } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
+import { decryptPii, hashAccessToken } from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
 
@@ -25,6 +28,7 @@ export type InternalRequestApiDependencies = {
   requestRepository: RequestRepository;
   storageProvider: PrivateFileStorageProvider;
   emailProvider: EmailProvider;
+  appBaseUrl: string;
 };
 
 const maxUploadSizeBytes = 10 * 1024 * 1024;
@@ -104,6 +108,19 @@ const sendEmailCommunicationSchema = z.object({
   to: z.string().email(),
   subject: z.string().min(1),
   body: z.string().min(1),
+  actor: actorSchema,
+});
+
+const notificationTypes = [
+  "REQUEST_UPDATED",
+  "REQUEST_COMPLETED",
+  "REQUEST_REJECTED",
+  "FILE_AVAILABLE",
+] as const;
+
+const sendConsumerNotificationSchema = z.object({
+  type: z.enum(notificationTypes),
+  message: z.string().min(1),
   actor: actorSchema,
 });
 
@@ -738,6 +755,180 @@ export function createInternalRequestApi(
         );
       }
     },
+
+    async sendConsumerNotification(
+      request: Request,
+      id: string,
+    ): Promise<Response> {
+      const unauthorized = authenticateInternalApiRequest(
+        request.headers,
+        dependencies.apiKey,
+      );
+
+      if (unauthorized) {
+        return unauthorized;
+      }
+
+      const body = await readJson(request);
+      const parsed = sendConsumerNotificationSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return validationError();
+      }
+
+      let existingRequest;
+
+      try {
+        existingRequest =
+          await dependencies.requestRepository.findConsumerNotificationTarget(
+            id,
+          );
+      } catch {
+        return serverError();
+      }
+
+      if (!existingRequest) {
+        return notFound();
+      }
+
+      if (!existingRequest.requesterEmailEncrypted) {
+        return Response.json(
+          {
+            error: {
+              code: "NOTIFICATION_UNAVAILABLE",
+              message: "Requester email is unavailable.",
+            },
+          },
+          {
+            status: 422,
+          },
+        );
+      }
+
+      let recipient: string;
+
+      try {
+        recipient = decryptPii(existingRequest.requesterEmailEncrypted);
+      } catch {
+        return serverError();
+      }
+
+      let secureAccessUrl: string | null = null;
+
+      if (parsed.data.type === "FILE_AVAILABLE") {
+        const token = generateSecureToken();
+        let accessToken;
+
+        try {
+          accessToken =
+            await dependencies.requestRepository.createConsumerNotificationAccessToken(
+              existingRequest.id,
+              {
+                tokenHash: hashAccessToken(token),
+                expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+              },
+            );
+        } catch {
+          return serverError();
+        }
+
+        if (!accessToken) {
+          return notFound();
+        }
+
+        secureAccessUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existingRequest.publicId}/access?token=${encodeURIComponent(token)}`;
+      }
+
+      const trackingUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existingRequest.publicId}`;
+      const subject = notificationSubject(parsed.data.type, existingRequest);
+      const emailBody = notificationBody({
+        publicId: existingRequest.publicId,
+        status: existingRequest.status,
+        message: parsed.data.message,
+        trackingUrl,
+        secureAccessUrl,
+      });
+
+      let communication;
+
+      try {
+        communication =
+          await dependencies.requestRepository.createCommunication(
+            existingRequest.id,
+            {
+              recipient,
+              subject,
+              body: emailBody,
+              provider: dependencies.emailProvider.provider,
+              actorType: parsed.data.actor.type,
+              actorId: parsed.data.actor.id ?? null,
+            },
+          );
+      } catch {
+        return serverError();
+      }
+
+      if (!communication) {
+        return notFound();
+      }
+
+      try {
+        const sent = await dependencies.emailProvider.sendEmail({
+          to: recipient,
+          subject,
+          body: emailBody,
+        });
+        const updated =
+          await dependencies.requestRepository.markConsumerNotificationSent(
+            existingRequest.id,
+            communication.id,
+            {
+              notificationType: parsed.data.type,
+              providerMessageId: sent.providerMessageId,
+              actorType: parsed.data.actor.type,
+              actorId: parsed.data.actor.id ?? null,
+            },
+          );
+
+        if (!updated) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            communication: normalizeCommunicationMetadata(updated),
+          },
+          {
+            status: 201,
+          },
+        );
+      } catch {
+        const failed =
+          await dependencies.requestRepository.markConsumerNotificationFailed(
+            existingRequest.id,
+            communication.id,
+            {
+              notificationType: parsed.data.type,
+              errorMessage: "Email provider failed to send the notification.",
+              actorType: parsed.data.actor.type,
+              actorId: parsed.data.actor.id ?? null,
+            },
+          );
+
+        if (!failed) {
+          return notFound();
+        }
+
+        return Response.json(
+          {
+            communication: normalizeCommunicationMetadata(failed),
+          },
+          {
+            status: 502,
+          },
+        );
+      }
+    },
   };
 }
 
@@ -877,4 +1068,49 @@ function contentDispositionAttachment(fileName: string): string {
 
 function escapeHeaderValue(value: string): string {
   return value.replace(/["\\\r\n]/g, "_");
+}
+
+function generateSecureToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+function notificationSubject(
+  type: (typeof notificationTypes)[number],
+  request: { publicId: string },
+): string {
+  switch (type) {
+    case "REQUEST_COMPLETED":
+      return `MagicTrust request completed: ${request.publicId}`;
+    case "REQUEST_REJECTED":
+      return `MagicTrust request rejected: ${request.publicId}`;
+    case "FILE_AVAILABLE":
+      return `MagicTrust file available: ${request.publicId}`;
+    case "REQUEST_UPDATED":
+      return `MagicTrust request updated: ${request.publicId}`;
+  }
+}
+
+function notificationBody(input: {
+  publicId: string;
+  status: RequestStatus;
+  message: string;
+  trackingUrl: string;
+  secureAccessUrl: string | null;
+}): string {
+  const lines = [
+    "Your MagicTrust request has an update.",
+    "",
+    `Reference number: ${input.publicId}`,
+    `Current status: ${input.status}`,
+    "",
+    input.message,
+    "",
+    `Track your request: ${input.trackingUrl}`,
+  ];
+
+  if (input.secureAccessUrl) {
+    lines.push("", `Secure access link: ${input.secureAccessUrl}`);
+  }
+
+  return lines.join("\n");
 }

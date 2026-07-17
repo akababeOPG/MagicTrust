@@ -50,10 +50,22 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         findConsumerAccessLinkTarget() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        findConsumerNotificationTarget() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         createConsumerAccessToken() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        createConsumerNotificationAccessToken() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         recordConsumerAccessLinkSent() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        markConsumerNotificationSent() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        markConsumerNotificationFailed() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
         consumeConsumerAccessToken() {

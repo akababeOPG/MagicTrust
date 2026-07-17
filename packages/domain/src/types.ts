@@ -62,7 +62,9 @@ export type RequestEventType =
   | "CONSUMER_ACCESS_SESSION_USED"
   | "CONSUMER_ATTACHMENT_DOWNLOADED"
   | "IDENTITY_VERIFICATION_SENT"
-  | "IDENTITY_VERIFIED";
+  | "IDENTITY_VERIFIED"
+  | "CONSUMER_NOTIFICATION_SENT"
+  | "CONSUMER_NOTIFICATION_FAILED";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
