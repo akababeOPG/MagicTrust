@@ -877,9 +877,7 @@ function GuidedRequestDetail({
                 Add a file when the response includes downloadable material. A
                 file is not required to complete this request.
               </p>
-              {canAct &&
-              (nextStep.actionType === "SEND_RESPONSE" ||
-                nextStep.actionType === "COMPLETE_REQUEST") ? (
+              {canAct && request.status === "PROCESSING" ? (
                 <ResponseUploadForm publicId={request.publicId} />
               ) : null}
             </div>
@@ -914,7 +912,7 @@ function GuidedRequestDetail({
               ))}
             </div>
           )}
-          {request.status === "SUCCESS" ? (
+          {request.status === "SUCCESS" && deliveryCommunication ? (
             <div className="delivery-state delivery-state-success">
               <strong>Delivered successfully</strong>
               <dl>

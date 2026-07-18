@@ -62,11 +62,12 @@ request.type -> workflow resolver -> code-defined workflow
 ```
 
 `DATA_ACCESS` resolves to `DATA_ACCESS_STANDARD`, and `DATA_DELETION` resolves
-to `DATA_DELETION_STANDARD`. Other request types resolve to the temporary
-`GENERIC_REQUEST` workflow until their own processing definitions are
-introduced. Consumers use the resolver for stages, progress, next-step guidance,
-and allowed status transitions instead of scattering request-type checks across
-routes and components.
+to `DATA_DELETION_STANDARD`. `DO_NOT_CONTACT` and `UNSUBSCRIBE` share the
+`DIRECT_PROCESSING` workflow because they can move directly from submission to
+processing without identity verification. `GENERAL_INQUIRY` remains on the
+temporary `GENERIC_REQUEST` workflow. Consumers use the resolver for stages,
+progress, next-step guidance, and allowed status transitions instead of
+scattering request-type checks across routes and components.
 
 `DATA_DELETION_STANDARD` guides a request through verification, processing,
 optional response content or files, consumer notification, and completion. A

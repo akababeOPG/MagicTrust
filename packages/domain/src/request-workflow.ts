@@ -3,6 +3,7 @@ import { requestStatuses, type RequestStatus, type RequestType } from "./types";
 export const requestWorkflowIds = [
   "DATA_ACCESS_STANDARD",
   "DATA_DELETION_STANDARD",
+  "DIRECT_PROCESSING",
   "GENERIC_REQUEST",
 ] as const;
 
@@ -113,6 +114,21 @@ const dataDeletionSteps = [
   },
 ] satisfies readonly RequestWorkflowStepDefinition[];
 
+const directProcessingSteps = [
+  { id: "received", label: "Received", statusMapping: ["SUBMITTED"] },
+  {
+    id: "processing",
+    label: "Processing",
+    statusMapping: ["PROCESSING"],
+  },
+  {
+    id: "completed",
+    label: "Completed",
+    statusMapping: ["SUCCESS"],
+    terminal: true,
+  },
+] satisfies readonly RequestWorkflowStepDefinition[];
+
 const genericSteps = [
   {
     id: "received",
@@ -150,6 +166,16 @@ export const dataDeletionStandardWorkflow: RequestWorkflowDefinition =
     getNextStep: getDataDeletionNextStep,
   });
 
+export const directProcessingWorkflow: RequestWorkflowDefinition =
+  createWorkflowDefinition({
+    id: "DIRECT_PROCESSING",
+    name: "Direct processing",
+    steps: directProcessingSteps,
+    getAllowedTransitions: getDirectProcessingAllowedTransitions,
+    getProgressState: getDirectProcessingProgressState,
+    getNextStep: getDirectProcessingNextStep,
+  });
+
 export const genericRequestWorkflow: RequestWorkflowDefinition =
   createWorkflowDefinition({
     id: "GENERIC_REQUEST",
@@ -167,6 +193,9 @@ export function getWorkflowDefinitionForRequest(
       return dataAccessStandardWorkflow;
     case "DATA_DELETION":
       return dataDeletionStandardWorkflow;
+    case "DO_NOT_CONTACT":
+    case "UNSUBSCRIBE":
+      return directProcessingWorkflow;
     default:
       return genericRequestWorkflow;
   }
@@ -211,6 +240,9 @@ function createWorkflowDefinition(input: {
     request: RequestWorkflowContext,
   ): RequestWorkflowProgressState;
   getNextStep(request: RequestWorkflowContext): RequestWorkflowNextStep;
+  getAllowedTransitions?(
+    request: RequestWorkflowContext,
+  ): readonly RequestStatus[];
 }): RequestWorkflowDefinition {
   const definition: RequestWorkflowDefinition = {
     ...input,
@@ -226,6 +258,9 @@ function createWorkflowDefinition(input: {
         : null;
     },
     getAllowedTransitions(request) {
+      if (input.getAllowedTransitions) {
+        return [...input.getAllowedTransitions(request)];
+      }
       if (isTerminalRequestStatus(request.status)) return [];
       return requestStatuses.filter((status) => status !== request.status);
     },
@@ -341,6 +376,42 @@ function getDataDeletionProgressState(
   }
 
   return progressState(dataDeletionSteps, 0);
+}
+
+function getDirectProcessingProgressState(
+  request: RequestWorkflowContext,
+): RequestWorkflowProgressState {
+  if (request.status === "SUCCESS") {
+    return progressState(directProcessingSteps, directProcessingSteps.length);
+  }
+
+  if (request.status === "REJECTED" || request.status === "CANCELLED") {
+    const achievedCount = request.processingStarted ? 2 : 1;
+    return progressState(directProcessingSteps, achievedCount, null, true);
+  }
+
+  if (request.status === "WAITING_FOR_REQUESTER") {
+    return progressState(directProcessingSteps, 1, "WAITING_FOR_REQUESTER");
+  }
+
+  if (request.status === "PROCESSING") {
+    return progressState(directProcessingSteps, 1);
+  }
+
+  return progressState(directProcessingSteps, 0);
+}
+
+function getDirectProcessingAllowedTransitions(
+  request: RequestWorkflowContext,
+): readonly RequestStatus[] {
+  switch (request.status) {
+    case "SUBMITTED":
+      return ["PROCESSING", "REJECTED", "CANCELLED"];
+    case "PROCESSING":
+      return ["SUCCESS", "REJECTED", "CANCELLED"];
+    default:
+      return [];
+  }
 }
 
 function progressState(
@@ -629,6 +700,58 @@ function getDataDeletionNextStep(
         listLabel: "Review request",
         actionType: "REVIEW_REQUEST",
       });
+  }
+}
+
+function getDirectProcessingNextStep(
+  request: RequestWorkflowContext,
+): RequestWorkflowNextStep {
+  switch (request.status) {
+    case "SUBMITTED":
+      return nextStep({
+        key: "start-processing",
+        title: "Ready to process",
+        description: "Start processing this request when you are ready.",
+        listLabel: "Start processing",
+        actionType: "START_PROCESSING",
+        actionLabel: "Start processing",
+      });
+    case "PROCESSING":
+      return nextStep({
+        key: "direct-processing",
+        title: "Request in progress",
+        description:
+          "Complete the required internal action, add any relevant notes or response files, then complete the request.",
+        listLabel: "Complete request",
+      });
+    case "SUCCESS":
+      return nextStep({
+        key: "direct-completed",
+        title: "Request completed",
+        description: "This request has been completed.",
+        listLabel: "Completed",
+        terminal: true,
+      });
+    case "REJECTED":
+      return nextStep({
+        key: "rejected",
+        title: "Request rejected",
+        description: "This request is closed.",
+        listLabel: "Rejected",
+        terminal: true,
+      });
+    case "CANCELLED":
+      return nextStep({
+        key: "cancelled",
+        title: "Request cancelled",
+        description: "This request is closed.",
+        listLabel: "Cancelled",
+        terminal: true,
+      });
+    case "PENDING_VERIFICATION":
+    case "VERIFIED":
+    case "WAITING_FOR_REQUESTER":
+      return getGenericNextStep(request);
   }
 }
 

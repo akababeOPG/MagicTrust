@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   canTransitionRequestWorkflow,
+  directProcessingWorkflow,
   getAllowedWorkflowTransitions,
   getRequestNextStep,
   getRequestWorkflowProgress,
@@ -23,14 +24,20 @@ describe("request workflow definitions", () => {
     ).toBe("DATA_DELETION_STANDARD");
   });
 
-  test.each<RequestType>(["DO_NOT_CONTACT", "UNSUBSCRIBE", "GENERAL_INQUIRY"])(
-    "%s resolves to GENERIC_REQUEST",
+  test.each<RequestType>(["DO_NOT_CONTACT", "UNSUBSCRIBE"])(
+    "%s resolves to DIRECT_PROCESSING",
     (type) => {
-      expect(getWorkflowDefinitionForRequest(request({ type })).id).toBe(
-        "GENERIC_REQUEST",
+      expect(getWorkflowDefinitionForRequest(request({ type }))).toBe(
+        directProcessingWorkflow,
       );
     },
   );
+
+  test("GENERAL_INQUIRY remains on GENERIC_REQUEST", () => {
+    expect(
+      getWorkflowDefinitionForRequest(request({ type: "GENERAL_INQUIRY" })).id,
+    ).toBe("GENERIC_REQUEST");
+  });
 
   test("DATA_ACCESS stages preserve the approved workflow", () => {
     expect(
@@ -54,6 +61,85 @@ describe("request workflow definitions", () => {
         request({ type: "GENERAL_INQUIRY" }),
       ).steps.map((step) => step.label),
     ).toEqual(["Received", "Processing", "Completed"]);
+  });
+
+  test("DIRECT_PROCESSING uses the expected shared three-stage workflow", () => {
+    expect(directProcessingWorkflow.steps.map((step) => step.label)).toEqual([
+      "Received",
+      "Processing",
+      "Completed",
+    ]);
+  });
+
+  test.each([
+    ["SUBMITTED", ["current", "upcoming", "upcoming"]],
+    ["PROCESSING", ["completed", "current", "upcoming"]],
+    ["SUCCESS", ["completed", "completed", "completed"]],
+  ] as const)("maps DIRECT_PROCESSING %s progress", (status, states) => {
+    expect(
+      getRequestWorkflowProgress(
+        request({ type: "DO_NOT_CONTACT", status }),
+      ).steps.map((step) => step.state),
+    ).toEqual(states);
+  });
+
+  test.each<RequestStatus>(["REJECTED", "CANCELLED"])(
+    "DIRECT_PROCESSING %s closes without successful completion",
+    (status) => {
+      const progress = getRequestWorkflowProgress(
+        request({ type: "UNSUBSCRIBE", status }),
+      );
+
+      expect(progress.interruption).toBe("CLOSED_BEFORE_COMPLETION");
+      expect(progress.steps.at(-1)?.state).toBe("upcoming");
+    },
+  );
+
+  test("DIRECT_PROCESSING exposes generic next-step metadata", () => {
+    const direct = (status: RequestStatus) =>
+      request({ type: "DO_NOT_CONTACT", status });
+
+    expect(getRequestNextStep(direct("SUBMITTED"))).toMatchObject({
+      title: "Ready to process",
+      listLabel: "Start processing",
+      actionType: "START_PROCESSING",
+    });
+    expect(getRequestNextStep(direct("PROCESSING"))).toMatchObject({
+      title: "Request in progress",
+      description:
+        "Complete the required internal action, add any relevant notes or response files, then complete the request.",
+      listLabel: "Complete request",
+      actionType: "NONE",
+    });
+    expect(getRequestNextStep(direct("SUCCESS"))).toMatchObject({
+      title: "Request completed",
+      listLabel: "Completed",
+      terminal: true,
+    });
+    expect(getRequestNextStep(direct("REJECTED")).listLabel).toBe("Rejected");
+    expect(getRequestNextStep(direct("CANCELLED")).listLabel).toBe("Cancelled");
+  });
+
+  test("DIRECT_PROCESSING permits only its lifecycle and terminal alternatives", () => {
+    const submitted = request({ type: "UNSUBSCRIBE", status: "SUBMITTED" });
+    const processing = request({
+      type: "UNSUBSCRIBE",
+      status: "PROCESSING",
+    });
+
+    expect(getAllowedWorkflowTransitions(submitted)).toEqual([
+      "PROCESSING",
+      "REJECTED",
+      "CANCELLED",
+    ]);
+    expect(getAllowedWorkflowTransitions(processing)).toEqual([
+      "SUCCESS",
+      "REJECTED",
+      "CANCELLED",
+    ]);
+    expect(canTransitionRequestWorkflow(submitted, "PROCESSING")).toBe(true);
+    expect(canTransitionRequestWorkflow(processing, "SUCCESS")).toBe(true);
+    expect(canTransitionRequestWorkflow(submitted, "SUCCESS")).toBe(false);
   });
 
   test("DATA_DELETION uses the expected four-stage workflow", () => {

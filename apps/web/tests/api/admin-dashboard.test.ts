@@ -1981,6 +1981,33 @@ describe("admin dashboard", () => {
     );
   });
 
+  test("DIRECT_PROCESSING starts a submitted simple request", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.type = "DO_NOT_CONTACT";
+    dependencies.state.requests[0]!.status = "SUBMITTED";
+
+    const response = await startAdminRequestProcessing(
+      guidedRequest("start-processing"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "STATUS_CHANGED",
+          data: expect.objectContaining({
+            previousStatus: "SUBMITTED",
+            newStatus: "PROCESSING",
+          }),
+        }),
+      ]),
+    );
+  });
+
   test("guided internal note is always INTERNAL", async () => {
     const dependencies = createInMemoryDependencies();
     const body = new FormData();

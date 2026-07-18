@@ -264,6 +264,41 @@ describe("admin sensitive request page", () => {
     expect(html).not.toContain("More actions");
   });
 
+  test("renders simple request types through the shared DIRECT_PROCESSING UI", async () => {
+    mocks.detail = requestDetail();
+    mocks.detail.type = "DO_NOT_CONTACT";
+    mocks.detail.status = "SUBMITTED";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+
+    const submitted = await renderPage(AdminRequestDetailPage);
+    expect(submitted).toContain("Do not contact request");
+    expect(submitted).toContain("--request-progress-step-count:3");
+    expect(submitted).toContain("Ready to process");
+    expect(submitted).toContain(
+      'action="/admin/requests/req_one/start-processing"',
+    );
+    expect(submitted).not.toContain("Verified");
+    expect(submitted).not.toContain("Response ready");
+
+    mocks.detail.status = "PROCESSING";
+    const processing = await renderPage(AdminRequestDetailPage);
+    expect(processing).toContain("Request in progress");
+    expect(processing).toContain(
+      "Complete the required internal action, add any relevant notes or response files, then complete the request.",
+    );
+    expect(processing).toContain("Upload response file");
+    expect(processing).not.toContain(
+      "I confirm that the deletion request has been processed.",
+    );
+
+    mocks.detail.status = "SUCCESS";
+    mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    const completed = await renderPage(AdminRequestDetailPage);
+    expect(completed).toContain("Request completed");
+    expect(completed).not.toContain("Delivered successfully");
+  });
+
   test("DATA_ACCESS UI hides technical controls and client scripts", async () => {
     mocks.detail.status = "PROCESSING";
     const { default: AdminRequestDetailPage } =
