@@ -103,7 +103,7 @@ describe("DATA_ACCESS request progress", () => {
 
   test("supports a configurable number of workflow stages", () => {
     const workflowProgress = progress({
-      type: "GENERAL_INQUIRY",
+      type: "DO_NOT_CONTACT",
       status: "PROCESSING",
     });
     const html = renderToStaticMarkup(
@@ -119,6 +119,26 @@ describe("DATA_ACCESS request progress", () => {
     expect(html).toContain("Processing");
     expect(html).toContain("Completed");
     expect(html).not.toContain("Response ready");
+  });
+
+  test("renders the conversational waiting stage as current", () => {
+    const workflowProgress = progress({
+      type: "GENERAL_INQUIRY",
+      status: "WAITING_FOR_REQUESTER",
+      processingStarted: true,
+    });
+    const html = renderToStaticMarkup(
+      <RequestProgress
+        steps={workflowProgress.steps}
+        interruption={workflowProgress.interruption}
+      />,
+    );
+
+    expect(workflowProgress.steps).toHaveLength(4);
+    expect(html).toContain("--request-progress-step-count:4");
+    expect(html).toContain('aria-label="Processing: completed"');
+    expect(html).toContain('aria-label="Waiting for requester: current"');
+    expect(workflowProgress.interruption).toBeNull();
   });
 });
 

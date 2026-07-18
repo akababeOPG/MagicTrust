@@ -64,10 +64,19 @@ request.type -> workflow resolver -> code-defined workflow
 `DATA_ACCESS` resolves to `DATA_ACCESS_STANDARD`, and `DATA_DELETION` resolves
 to `DATA_DELETION_STANDARD`. `DO_NOT_CONTACT` and `UNSUBSCRIBE` share the
 `DIRECT_PROCESSING` workflow because they can move directly from submission to
-processing without identity verification. `GENERAL_INQUIRY` remains on the
-temporary `GENERIC_REQUEST` workflow. Consumers use the resolver for stages,
-progress, next-step guidance, and allowed status transitions instead of
-scattering request-type checks across routes and components.
+processing without identity verification. `GENERAL_INQUIRY` resolves to the
+reusable `CONVERSATIONAL_PROCESSING` workflow for requests that may cycle
+between active processing and waiting for requester information. Consumers use
+the resolver for stages, progress, next-step guidance, and allowed status
+transitions instead of scattering request-type checks across routes and
+components.
+
+`CONVERSATIONAL_PROCESSING` follows Received, Processing, Waiting for
+requester, and Completed. Its `PROCESSING` and `WAITING_FOR_REQUESTER` states
+may repeat without adding workflow state outside the generic request. This
+foundation does not add requester reply handling, message composition, or a
+new completion flow; attachments, comments, assignment, SLA data, events, and
+communications remain generic request capabilities.
 
 `DIRECT_PROCESSING` uses one shared guided completion path for all mapped
 request types. From `PROCESSING`, an authorized operator confirms the internal

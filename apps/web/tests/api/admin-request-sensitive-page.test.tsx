@@ -328,6 +328,60 @@ describe("admin sensitive request page", () => {
     expect(completed).not.toContain("Delivered successfully");
   });
 
+  test("renders GENERAL_INQUIRY through CONVERSATIONAL_PROCESSING guidance", async () => {
+    mocks.detail = requestDetail();
+    mocks.detail.type = "GENERAL_INQUIRY";
+    mocks.detail.status = "SUBMITTED";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+
+    const submitted = await renderPage(AdminRequestDetailPage);
+    expect(submitted).toContain("General inquiry request");
+    expect(submitted).toContain("--request-progress-step-count:4");
+    expect(submitted).toContain("Ready to review");
+    expect(submitted).toContain(
+      "Review the request and begin processing when ready.",
+    );
+    expect(submitted).toContain(
+      'action="/admin/requests/req_one/start-processing"',
+    );
+    expect(submitted).toContain("Waiting for requester");
+    expect(submitted).not.toContain("Verified");
+
+    mocks.detail.status = "PROCESSING";
+    const processing = await renderPage(AdminRequestDetailPage);
+    expect(processing).toContain("Request in progress");
+    expect(processing).toContain(
+      "Continue processing the request. If more information is needed, wait for the requester. Otherwise, complete the request when ready.",
+    );
+    expect(processing).toContain('aria-label="Processing: current"');
+    expect(processing).toContain("Upload response file");
+    expect(processing).not.toContain(
+      'action="/admin/requests/req_one/complete"',
+    );
+
+    mocks.detail.status = "WAITING_FOR_REQUESTER";
+    const waiting = await renderPage(AdminRequestDetailPage);
+    expect(waiting).toContain(
+      "This request is waiting for additional information from the requester.",
+    );
+    expect(waiting).toContain('aria-label="Waiting for requester: current"');
+
+    mocks.detail.status = "PROCESSING";
+    const resumed = await renderPage(AdminRequestDetailPage);
+    expect(resumed).toContain('aria-label="Processing: current"');
+    expect(resumed).toContain('aria-label="Waiting for requester: upcoming"');
+
+    mocks.detail.status = "SUCCESS";
+    mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    const completed = await renderPage(AdminRequestDetailPage);
+    expect(completed).toContain("Request completed");
+    expect(completed).not.toContain("More actions");
+    expect(completed).not.toContain(
+      'action="/admin/requests/req_one/complete"',
+    );
+  });
+
   test("DATA_ACCESS UI hides technical controls and client scripts", async () => {
     mocks.detail.status = "PROCESSING";
     const { default: AdminRequestDetailPage } =

@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 
 import {
   canTransitionRequestWorkflow,
+  conversationalProcessingWorkflow,
   directProcessingWorkflow,
+  genericRequestWorkflow,
   getAllowedWorkflowTransitions,
   getRequestNextStep,
   getRequestWorkflowProgress,
@@ -33,10 +35,10 @@ describe("request workflow definitions", () => {
     },
   );
 
-  test("GENERAL_INQUIRY remains on GENERIC_REQUEST", () => {
+  test("GENERAL_INQUIRY resolves to CONVERSATIONAL_PROCESSING", () => {
     expect(
-      getWorkflowDefinitionForRequest(request({ type: "GENERAL_INQUIRY" })).id,
-    ).toBe("GENERIC_REQUEST");
+      getWorkflowDefinitionForRequest(request({ type: "GENERAL_INQUIRY" })),
+    ).toBe(conversationalProcessingWorkflow);
   });
 
   test("DATA_ACCESS stages preserve the approved workflow", () => {
@@ -56,11 +58,169 @@ describe("request workflow definitions", () => {
   });
 
   test("generic requests use a safe three-stage workflow", () => {
+    expect(genericRequestWorkflow.steps.map((step) => step.label)).toEqual([
+      "Received",
+      "Processing",
+      "Completed",
+    ]);
+  });
+
+  test("CONVERSATIONAL_PROCESSING uses the expected shared four-stage workflow", () => {
     expect(
-      getWorkflowDefinitionForRequest(
-        request({ type: "GENERAL_INQUIRY" }),
-      ).steps.map((step) => step.label),
-    ).toEqual(["Received", "Processing", "Completed"]);
+      conversationalProcessingWorkflow.steps.map((step) => step.label),
+    ).toEqual(["Received", "Processing", "Waiting for requester", "Completed"]);
+  });
+
+  test.each([
+    ["SUBMITTED", ["current", "upcoming", "upcoming", "upcoming"]],
+    ["PROCESSING", ["completed", "current", "upcoming", "upcoming"]],
+    [
+      "WAITING_FOR_REQUESTER",
+      ["completed", "completed", "current", "upcoming"],
+    ],
+    ["SUCCESS", ["completed", "completed", "completed", "completed"]],
+  ] as const)(
+    "maps CONVERSATIONAL_PROCESSING %s progress",
+    (status, states) => {
+      expect(
+        getRequestWorkflowProgress(
+          request({ type: "GENERAL_INQUIRY", status }),
+        ).steps.map((step) => step.state),
+      ).toEqual(states);
+    },
+  );
+
+  test("returning from requester wait makes Processing current again", () => {
+    const waiting = getRequestWorkflowProgress(
+      request({ type: "GENERAL_INQUIRY", status: "WAITING_FOR_REQUESTER" }),
+    );
+    const resumed = getRequestWorkflowProgress(
+      request({
+        type: "GENERAL_INQUIRY",
+        status: "PROCESSING",
+        processingStarted: true,
+      }),
+    );
+
+    expect(waiting.steps[2]?.state).toBe("current");
+    expect(resumed.steps.map((step) => step.state)).toEqual([
+      "completed",
+      "current",
+      "upcoming",
+      "upcoming",
+    ]);
+  });
+
+  test.each<RequestStatus>(["REJECTED", "CANCELLED"])(
+    "CONVERSATIONAL_PROCESSING %s closes without successful completion",
+    (status) => {
+      const progress = getRequestWorkflowProgress(
+        request({
+          type: "GENERAL_INQUIRY",
+          status,
+          processingStarted: true,
+        }),
+      );
+
+      expect(progress.interruption).toBe("CLOSED_BEFORE_COMPLETION");
+      expect(progress.steps.at(-1)?.state).toBe("upcoming");
+    },
+  );
+
+  test("CONVERSATIONAL_PROCESSING exposes workflow-oriented next steps", () => {
+    const conversational = (status: RequestStatus) =>
+      request({ type: "GENERAL_INQUIRY", status });
+
+    expect(getRequestNextStep(conversational("SUBMITTED"))).toMatchObject({
+      title: "Ready to review",
+      description: "Review the request and begin processing when ready.",
+      listLabel: "Start processing",
+      actionType: "START_PROCESSING",
+    });
+    expect(getRequestNextStep(conversational("PROCESSING"))).toMatchObject({
+      title: "Request in progress",
+      description:
+        "Continue processing the request. If more information is needed, wait for the requester. Otherwise, complete the request when ready.",
+      listLabel: "Continue processing",
+      actionType: "NONE",
+    });
+    expect(
+      getRequestNextStep(conversational("WAITING_FOR_REQUESTER")),
+    ).toMatchObject({
+      title: "Waiting for requester",
+      description:
+        "This request is waiting for additional information from the requester.",
+      listLabel: "Waiting for requester",
+    });
+    expect(getRequestNextStep(conversational("SUCCESS"))).toMatchObject({
+      title: "Request completed",
+      listLabel: "Completed",
+      terminal: true,
+    });
+    expect(getRequestNextStep(conversational("REJECTED")).listLabel).toBe(
+      "Rejected",
+    );
+    expect(getRequestNextStep(conversational("CANCELLED")).listLabel).toBe(
+      "Cancelled",
+    );
+  });
+
+  test("CONVERSATIONAL_PROCESSING supports repeated processing and requester-wait cycles", () => {
+    const submitted = request({
+      type: "GENERAL_INQUIRY",
+      status: "SUBMITTED",
+    });
+    const processing = request({
+      type: "GENERAL_INQUIRY",
+      status: "PROCESSING",
+    });
+    const waiting = request({
+      type: "GENERAL_INQUIRY",
+      status: "WAITING_FOR_REQUESTER",
+    });
+
+    expect(getAllowedWorkflowTransitions(submitted)).toEqual([
+      "PROCESSING",
+      "REJECTED",
+      "CANCELLED",
+    ]);
+    expect(getAllowedWorkflowTransitions(processing)).toEqual([
+      "WAITING_FOR_REQUESTER",
+      "SUCCESS",
+      "REJECTED",
+      "CANCELLED",
+    ]);
+    expect(getAllowedWorkflowTransitions(waiting)).toEqual([
+      "PROCESSING",
+      "REJECTED",
+      "CANCELLED",
+    ]);
+    expect(canTransitionRequestWorkflow(submitted, "PROCESSING")).toBe(true);
+    expect(
+      canTransitionRequestWorkflow(processing, "WAITING_FOR_REQUESTER"),
+    ).toBe(true);
+    expect(canTransitionRequestWorkflow(waiting, "PROCESSING")).toBe(true);
+    expect(canTransitionRequestWorkflow(processing, "SUCCESS")).toBe(true);
+
+    const repeatedCycle: RequestStatus[] = [
+      "PROCESSING",
+      "WAITING_FOR_REQUESTER",
+      "PROCESSING",
+      "WAITING_FOR_REQUESTER",
+      "PROCESSING",
+    ];
+
+    for (let index = 0; index < repeatedCycle.length - 1; index += 1) {
+      expect(
+        canTransitionRequestWorkflow(
+          request({
+            type: "GENERAL_INQUIRY",
+            status: repeatedCycle[index]!,
+          }),
+          repeatedCycle[index + 1]!,
+        ),
+      ).toBe(true);
+    }
   });
 
   test("DIRECT_PROCESSING uses the expected shared three-stage workflow", () => {
@@ -253,7 +413,7 @@ describe("request workflow definitions", () => {
     },
   );
 
-  test("generic progress uses its variable three-step definition", () => {
+  test("CONVERSATIONAL_PROCESSING uses its variable four-step definition", () => {
     expect(
       getRequestWorkflowProgress(
         request({ type: "GENERAL_INQUIRY", status: "PROCESSING" }),
@@ -261,6 +421,7 @@ describe("request workflow definitions", () => {
     ).toEqual([
       "Received:completed",
       "Processing:current",
+      "Waiting for requester:upcoming",
       "Completed:upcoming",
     ]);
   });

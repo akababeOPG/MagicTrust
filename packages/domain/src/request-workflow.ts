@@ -4,6 +4,7 @@ export const requestWorkflowIds = [
   "DATA_ACCESS_STANDARD",
   "DATA_DELETION_STANDARD",
   "DIRECT_PROCESSING",
+  "CONVERSATIONAL_PROCESSING",
   "GENERIC_REQUEST",
 ] as const;
 
@@ -129,6 +130,26 @@ const directProcessingSteps = [
   },
 ] satisfies readonly RequestWorkflowStepDefinition[];
 
+const conversationalProcessingSteps = [
+  { id: "received", label: "Received", statusMapping: ["SUBMITTED"] },
+  {
+    id: "processing",
+    label: "Processing",
+    statusMapping: ["PROCESSING"],
+  },
+  {
+    id: "waiting-for-requester",
+    label: "Waiting for requester",
+    statusMapping: ["WAITING_FOR_REQUESTER"],
+  },
+  {
+    id: "completed",
+    label: "Completed",
+    statusMapping: ["SUCCESS"],
+    terminal: true,
+  },
+] satisfies readonly RequestWorkflowStepDefinition[];
+
 const genericSteps = [
   {
     id: "received",
@@ -176,6 +197,16 @@ export const directProcessingWorkflow: RequestWorkflowDefinition =
     getNextStep: getDirectProcessingNextStep,
   });
 
+export const conversationalProcessingWorkflow: RequestWorkflowDefinition =
+  createWorkflowDefinition({
+    id: "CONVERSATIONAL_PROCESSING",
+    name: "Conversational processing",
+    steps: conversationalProcessingSteps,
+    getAllowedTransitions: getConversationalProcessingAllowedTransitions,
+    getProgressState: getConversationalProcessingProgressState,
+    getNextStep: getConversationalProcessingNextStep,
+  });
+
 export const genericRequestWorkflow: RequestWorkflowDefinition =
   createWorkflowDefinition({
     id: "GENERIC_REQUEST",
@@ -196,6 +227,8 @@ export function getWorkflowDefinitionForRequest(
     case "DO_NOT_CONTACT":
     case "UNSUBSCRIBE":
       return directProcessingWorkflow;
+    case "GENERAL_INQUIRY":
+      return conversationalProcessingWorkflow;
     default:
       return genericRequestWorkflow;
   }
@@ -409,6 +442,52 @@ function getDirectProcessingAllowedTransitions(
       return ["PROCESSING", "REJECTED", "CANCELLED"];
     case "PROCESSING":
       return ["SUCCESS", "REJECTED", "CANCELLED"];
+    default:
+      return [];
+  }
+}
+
+function getConversationalProcessingProgressState(
+  request: RequestWorkflowContext,
+): RequestWorkflowProgressState {
+  if (request.status === "SUCCESS") {
+    return progressState(
+      conversationalProcessingSteps,
+      conversationalProcessingSteps.length,
+    );
+  }
+
+  if (request.status === "REJECTED" || request.status === "CANCELLED") {
+    const achievedCount = request.processingStarted ? 2 : 1;
+    return progressState(
+      conversationalProcessingSteps,
+      achievedCount,
+      null,
+      true,
+    );
+  }
+
+  if (request.status === "WAITING_FOR_REQUESTER") {
+    return progressState(conversationalProcessingSteps, 2);
+  }
+
+  if (request.status === "PROCESSING") {
+    return progressState(conversationalProcessingSteps, 1);
+  }
+
+  return progressState(conversationalProcessingSteps, 0);
+}
+
+function getConversationalProcessingAllowedTransitions(
+  request: RequestWorkflowContext,
+): readonly RequestStatus[] {
+  switch (request.status) {
+    case "SUBMITTED":
+      return ["PROCESSING", "REJECTED", "CANCELLED"];
+    case "PROCESSING":
+      return ["WAITING_FOR_REQUESTER", "SUCCESS", "REJECTED", "CANCELLED"];
+    case "WAITING_FOR_REQUESTER":
+      return ["PROCESSING", "REJECTED", "CANCELLED"];
     default:
       return [];
   }
@@ -766,6 +845,66 @@ function getDirectProcessingNextStep(
     case "PENDING_VERIFICATION":
     case "VERIFIED":
     case "WAITING_FOR_REQUESTER":
+      return getGenericNextStep(request);
+  }
+}
+
+function getConversationalProcessingNextStep(
+  request: RequestWorkflowContext,
+): RequestWorkflowNextStep {
+  switch (request.status) {
+    case "SUBMITTED":
+      return nextStep({
+        key: "start-processing",
+        title: "Ready to review",
+        description: "Review the request and begin processing when ready.",
+        listLabel: "Start processing",
+        actionType: "START_PROCESSING",
+        actionLabel: "Start processing",
+      });
+    case "PROCESSING":
+      return nextStep({
+        key: "continue-processing",
+        title: "Request in progress",
+        description:
+          "Continue processing the request. If more information is needed, wait for the requester. Otherwise, complete the request when ready.",
+        listLabel: "Continue processing",
+      });
+    case "WAITING_FOR_REQUESTER":
+      return nextStep({
+        key: "wait-for-requester",
+        title: "Waiting for requester",
+        description:
+          "This request is waiting for additional information from the requester.",
+        listLabel: "Waiting for requester",
+        actionType: "WAIT_FOR_REQUESTER",
+      });
+    case "SUCCESS":
+      return nextStep({
+        key: "conversational-completed",
+        title: "Request completed",
+        description: "This request has been completed.",
+        listLabel: "Completed",
+        terminal: true,
+      });
+    case "REJECTED":
+      return nextStep({
+        key: "rejected",
+        title: "Request rejected",
+        description: "This request is closed.",
+        listLabel: "Rejected",
+        terminal: true,
+      });
+    case "CANCELLED":
+      return nextStep({
+        key: "cancelled",
+        title: "Request cancelled",
+        description: "This request is closed.",
+        listLabel: "Cancelled",
+        terminal: true,
+      });
+    case "PENDING_VERIFICATION":
+    case "VERIFIED":
       return getGenericNextStep(request);
   }
 }
