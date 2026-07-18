@@ -240,6 +240,26 @@ export function AdminFormDetail({
         </dl>
       </section>
 
+      {active && form.publishedVersionNumber !== null ? (
+        <section
+          className="admin-form-public-link"
+          aria-labelledby="public-form-heading"
+        >
+          <div>
+            <h2 id="public-form-heading">Public form</h2>
+            <p>Open the currently published version in its public runtime.</p>
+          </div>
+          <Link
+            className="mt-button mt-button-secondary"
+            href={`/forms/${encodeURIComponent(form.slug)}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open public form
+          </Link>
+        </section>
+      ) : null}
+
       {role === "ADMIN" && active ? (
         <section
           className="admin-form-next-step"

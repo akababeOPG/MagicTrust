@@ -422,6 +422,7 @@ function missingStore(): FormManagementStore {
     createForm: missing,
     listForms: missing,
     getForm: missing,
+    getPublishedFormBySlug: missing,
     updateDraftVersion: missing,
     publishFormVersion: missing,
     createDraftVersion: missing,

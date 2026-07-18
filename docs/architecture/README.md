@@ -79,6 +79,25 @@ persist changes.
 Form Editor v1 does not provide public rendering, embeds, form submissions,
 deployments, asset upload, or a visual form builder.
 
+### Public Form Rendering v1
+
+`/forms/:slug` resolves only an active form's current published version. Draft
+and archived source is never selected, archived forms return an unavailable
+state, and both the outer page and runtime response use no-store behavior so a
+newly published version becomes current immediately.
+
+Published HTML, CSS, and JavaScript execute only in an opaque-origin iframe.
+The outer MagicTrust page receives no stored source. The iframe omits
+same-origin, top-navigation, and popup privileges; its runtime response also
+applies an HTTP Content Security Policy sandbox and blocks external network
+connections, framing, navigation, and form actions. External scripts and assets
+are not supported in v1.
+
+Native form controls may be displayed and exercised, but submission is
+intentionally blocked. Public submissions, request creation, embeds,
+installation snippets, domain allowlists, analytics, and deployment management
+remain separate future phases.
+
 ## Request Model and Workflow Architecture
 
 MagicTrust keeps every privacy request in the same generic request model. A

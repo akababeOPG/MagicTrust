@@ -47,6 +47,12 @@ export type ManagedFormDetail = {
   versions: ManagedFormVersion[];
 };
 
+export type PublishedFormRuntime = {
+  html: string;
+  css: string;
+  javascript: string;
+};
+
 export type FormManagementErrorCode =
   | "ACTOR_NOT_AUTHORIZED"
   | "DRAFT_ALREADY_EXISTS"
@@ -72,6 +78,7 @@ export type FormManagementStore = {
   }): Promise<FormMutationResult>;
   listForms(): Promise<ManagedFormSummary[]>;
   getForm(publicId: string): Promise<ManagedFormDetail | null>;
+  getPublishedFormBySlug(slug: string): Promise<PublishedFormRuntime | null>;
   updateDraftVersion(input: {
     publicId: string;
     versionNumber: number;
@@ -191,6 +198,25 @@ export function createFormManagementStore(db: Database): FormManagementStore {
     },
     async getForm(publicId) {
       return getFormDetail(db, publicId);
+    },
+    async getPublishedFormBySlug(slug) {
+      const [runtime] = await db
+        .select({
+          html: formVersions.html,
+          css: formVersions.css,
+          javascript: formVersions.javascript,
+        })
+        .from(forms)
+        .innerJoin(
+          formVersions,
+          and(
+            eq(formVersions.formId, forms.id),
+            eq(formVersions.status, "PUBLISHED"),
+          ),
+        )
+        .where(and(eq(forms.slug, slug), eq(forms.status, "ACTIVE")))
+        .limit(1);
+      return runtime ?? null;
     },
     async updateDraftVersion(input) {
       return db.transaction(async (tx) => {

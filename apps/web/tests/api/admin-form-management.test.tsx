@@ -25,6 +25,7 @@ import {
   publishAdminFormVersion,
   saveAdminFormDraft,
 } from "../../lib/admin-form-management";
+import { getPublicFormRuntime } from "../../lib/public-form-rendering";
 
 describe("form management foundation", () => {
   test("ADMIN creates a form and draft v1 transactionally", async () => {
@@ -145,6 +146,72 @@ describe("form management foundation", () => {
     ]);
   });
 
+  test("public rendering resolves only the active form's current published version", async () => {
+    const dependencies = createDependencies();
+    const form = await createForm(dependencies, "Contact Us", "contact-us");
+    const v1 = dependencies.state.versions[0]!;
+    v1.html = "<main>Published v1</main>";
+    v1.css = "main { color: blue; }";
+    v1.javascript = "window.__publishedVersion = 1;";
+
+    expect(await getPublicFormRuntime("contact-us", dependencies)).toBeNull();
+    expect(await getPublicFormRuntime("unknown", dependencies)).toBeNull();
+
+    await publishAdminFormVersion(
+      formRequest(`/admin/forms/${form.publicId}/versions/1/publish`, {}),
+      form.publicId,
+      1,
+      session("ADMIN"),
+      dependencies,
+    );
+    expect(await getPublicFormRuntime("contact-us", dependencies)).toEqual({
+      html: "<main>Published v1</main>",
+      css: "main { color: blue; }",
+      javascript: "window.__publishedVersion = 1;",
+    });
+
+    await createAdminFormDraft(
+      formRequest(`/admin/forms/${form.publicId}/versions/new`, {}),
+      form.publicId,
+      session("ADMIN"),
+      dependencies,
+    );
+    const v2 = dependencies.state.versions.find(
+      (version) => version.versionNumber === 2,
+    )!;
+    v2.html = "<main>Draft v2 must stay private</main>";
+    v2.css = "main { color: red; }";
+    v2.javascript = "window.__draftVersion = 2;";
+    expect(
+      JSON.stringify(await getPublicFormRuntime("contact-us", dependencies)),
+    ).not.toContain("Draft v2");
+    expect((await getPublicFormRuntime("contact-us", dependencies))?.html).toBe(
+      "<main>Published v1</main>",
+    );
+
+    await publishAdminFormVersion(
+      formRequest(`/admin/forms/${form.publicId}/versions/2/publish`, {}),
+      form.publicId,
+      2,
+      session("ADMIN"),
+      dependencies,
+    );
+    expect(v1.status).toBe("ARCHIVED");
+    expect(await getPublicFormRuntime("contact-us", dependencies)).toEqual({
+      html: "<main>Draft v2 must stay private</main>",
+      css: "main { color: red; }",
+      javascript: "window.__draftVersion = 2;",
+    });
+
+    await archiveAdminForm(
+      formRequest(`/admin/forms/${form.publicId}/archive`, {}),
+      form.publicId,
+      session("ADMIN"),
+      dependencies,
+    );
+    expect(await getPublicFormRuntime("contact-us", dependencies)).toBeNull();
+  });
+
   test("only one draft can exist", async () => {
     const dependencies = createDependencies();
     const form = await createForm(dependencies, "Privacy", "privacy");
@@ -225,6 +292,43 @@ describe("form management foundation", () => {
     expect(html).not.toContain("Publish draft");
     expect(html).not.toContain("Archive form");
     expect(html).toContain("read-only for your role");
+  });
+
+  test("admin detail links to the public form only while a version is published", async () => {
+    const dependencies = createDependencies();
+    const form = await createForm(dependencies, "Contact Us", "contact-us");
+    const beforePublish = await getAdminForm(form.publicId, dependencies);
+    expect(
+      renderToStaticMarkup(
+        <AdminFormDetail role="ADMIN" form={beforePublish!} />,
+      ),
+    ).not.toContain("Open public form");
+
+    await publishAdminFormVersion(
+      formRequest(`/admin/forms/${form.publicId}/versions/1/publish`, {}),
+      form.publicId,
+      1,
+      session("ADMIN"),
+      dependencies,
+    );
+    const published = await getAdminForm(form.publicId, dependencies);
+    const publishedHtml = renderToStaticMarkup(
+      <AdminFormDetail role="OPERATOR" form={published!} />,
+    );
+    expect(publishedHtml).toContain("Open public form");
+    expect(publishedHtml).toContain('href="/forms/contact-us"');
+    expect(publishedHtml).toContain('target="_blank"');
+
+    await archiveAdminForm(
+      formRequest(`/admin/forms/${form.publicId}/archive`, {}),
+      form.publicId,
+      session("ADMIN"),
+      dependencies,
+    );
+    const archived = await getAdminForm(form.publicId, dependencies);
+    expect(
+      renderToStaticMarkup(<AdminFormDetail role="ADMIN" form={archived!} />),
+    ).not.toContain("Open public form");
   });
 
   test("ADMIN opens the current draft editor without persisting preview state", async () => {
@@ -543,6 +647,23 @@ function createMemoryStore(state: State): FormManagementStore {
     async getForm(publicId) {
       const form = state.forms.find((item) => item.publicId === publicId);
       return form ? detail(form) : null;
+    },
+    async getPublishedFormBySlug(slug) {
+      const form = state.forms.find(
+        (item) => item.slug === slug && item.status === "ACTIVE",
+      );
+      if (!form) return null;
+      const published = state.versions.find(
+        (version) =>
+          version.formId === form.id && version.status === "PUBLISHED",
+      );
+      return published
+        ? {
+            html: published.html,
+            css: published.css,
+            javascript: published.javascript,
+          }
+        : null;
     },
     async publishFormVersion(input) {
       const form = state.forms.find((item) => item.publicId === input.publicId);

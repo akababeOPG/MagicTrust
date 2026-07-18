@@ -1372,6 +1372,7 @@ button:disabled,
 .admin-form-version-table-wrap,
 .admin-form-summary,
 .admin-form-next-step,
+.admin-form-public-link,
 .admin-form-archive {
   border: 1px solid var(--mt-border);
   border-radius: var(--mt-radius-card);
@@ -1439,6 +1440,7 @@ button:disabled,
 
 .admin-form-summary,
 .admin-form-next-step,
+.admin-form-public-link,
 .admin-form-archive {
   display: grid;
   gap: var(--mt-space-7);
@@ -1474,6 +1476,16 @@ button:disabled,
   align-items: center;
   border-left: 3px solid var(--mt-accent);
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.admin-form-public-link {
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.admin-form-public-link > div {
+  display: grid;
+  gap: var(--mt-space-3);
 }
 
 .admin-form-next-step > div {
@@ -1593,6 +1605,20 @@ button:disabled,
   display: flex;
   grid-column: 1 / -1;
   justify-content: flex-end;
+}
+
+/* Public form runtime */
+.public-form-runtime-page {
+  min-height: 100vh;
+  padding: 0;
+}
+
+.public-form-runtime-frame {
+  width: 100%;
+  min-height: 100vh;
+  border: 0;
+  background: var(--mt-surface);
+  display: block;
 }
 
 .pagination-nav {
@@ -3021,6 +3047,11 @@ dialog.mt-dialog {
 
   .admin-form-summary dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-form-public-link {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
   }
 
   .admin-form-editor {
