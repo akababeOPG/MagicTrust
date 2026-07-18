@@ -263,6 +263,33 @@ describe("webhooks", () => {
     expect(JSON.stringify(payload)).not.toContain("secret-hash");
   });
 
+  test("due-date webhook payloads use the built-in safe allowlist", () => {
+    const payload = buildWebhookPayload({
+      deliveryId: "delivery-due-date",
+      effectiveEventType: "REQUEST_DUE_DATE_UPDATED",
+      event: {
+        ...sampleEvent(),
+        type: "REQUEST_DUE_DATE_UPDATED",
+        data: {
+          previousDueAt: "2026-07-20T00:00:00.000Z",
+          dueAt: "2026-07-24T00:00:00.000Z",
+          adminEmail: "admin@example.com",
+          requesterEmail: "consumer@example.com",
+          emailHash: "secret-hash",
+        },
+      },
+      request: sampleRequest(),
+    });
+
+    expect(payload.data).toEqual({
+      previousDueAt: "2026-07-20T00:00:00.000Z",
+      dueAt: "2026-07-24T00:00:00.000Z",
+    });
+    expect(JSON.stringify(payload)).not.toContain("admin@example.com");
+    expect(JSON.stringify(payload)).not.toContain("consumer@example.com");
+    expect(JSON.stringify(payload)).not.toContain("secret-hash");
+  });
+
   test("custom event payload includes validated custom event data", () => {
     const payload = buildWebhookPayload({
       deliveryId: "delivery-1",

@@ -65,6 +65,9 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "REQUEST_DATA_UPDATED",
   "REQUEST_ASSIGNED",
   "REQUEST_UNASSIGNED",
+  "REQUEST_DUE_DATE_SET",
+  "REQUEST_DUE_DATE_UPDATED",
+  "REQUEST_DUE_DATE_CLEARED",
 ]);
 
 export const requestEventCategoryEnum = pgEnum("request_event_category", [
@@ -152,6 +155,12 @@ export const privacyRequests = pgTable(
       () => adminUsers.id,
       { onDelete: "restrict" },
     ),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    dueAtSetAt: timestamp("due_at_set_at", { withTimezone: true }),
+    dueAtSetByAdminUserId: uuid("due_at_set_by_admin_user_id").references(
+      () => adminUsers.id,
+      { onDelete: "restrict" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -183,6 +192,7 @@ export const privacyRequests = pgTable(
     assignedToCreatedAtIdIdx: index(
       "privacy_requests_assigned_to_created_at_id_idx",
     ).on(table.assignedToAdminUserId, table.createdAt, table.id),
+    dueAtIdx: index("privacy_requests_due_at_idx").on(table.dueAt),
   }),
 );
 
@@ -647,6 +657,9 @@ export const adminUsersRelations = relations(adminUsers, ({ many }) => ({
   requestAssignments: many(privacyRequests, {
     relationName: "requestAssignedBy",
   }),
+  requestDueDatesSet: many(privacyRequests, {
+    relationName: "requestDueDateSetBy",
+  }),
 }));
 
 export const adminLoginTokensRelations = relations(
@@ -682,6 +695,11 @@ export const privacyRequestsRelations = relations(
       fields: [privacyRequests.assignedByAdminUserId],
       references: [adminUsers.id],
       relationName: "requestAssignedBy",
+    }),
+    dueAtSetByAdminUser: one(adminUsers, {
+      fields: [privacyRequests.dueAtSetByAdminUserId],
+      references: [adminUsers.id],
+      relationName: "requestDueDateSetBy",
     }),
     events: many(requestEvents),
     comments: many(requestComments),

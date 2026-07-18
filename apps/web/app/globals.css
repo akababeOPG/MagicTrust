@@ -1168,7 +1168,7 @@ button:disabled,
   align-items: end;
   display: grid;
   gap: var(--mt-space-5);
-  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding-top: var(--mt-space-5);
 }
 
@@ -1180,6 +1180,8 @@ button:disabled,
   align-items: center;
   display: flex;
   gap: var(--mt-space-4);
+  grid-column: 1 / -1;
+  justify-content: flex-end;
 }
 
 .request-filter-actions .mt-button {
@@ -1255,6 +1257,26 @@ button:disabled,
 .request-next-step {
   color: var(--mt-text-secondary);
   font-weight: 600;
+}
+
+.request-due-label {
+  display: grid;
+  gap: var(--mt-space-1);
+  white-space: nowrap;
+}
+
+.request-due-label small {
+  color: var(--mt-text-muted);
+  font-size: 12px;
+}
+
+.request-due-label[data-sla="OVERDUE"] strong,
+.request-due-label[data-sla="OVERDUE"] small {
+  color: var(--mt-danger-text);
+}
+
+.request-due-label[data-sla="DUE_SOON"] strong {
+  color: var(--mt-status-pending-fg);
 }
 
 .request-table tbody tr[data-priority="actionable"] td:first-child {
@@ -1479,7 +1501,15 @@ button:disabled,
   gap: var(--mt-space-4);
 }
 
-.request-assignment {
+.request-operational-metadata {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mt-space-8);
+}
+
+.request-assignment,
+.request-due-date {
   position: relative;
   align-items: center;
   display: flex;
@@ -1488,28 +1518,33 @@ button:disabled,
   width: fit-content;
 }
 
-.request-assignment-summary {
+.request-assignment-summary,
+.request-due-date-summary {
   display: grid;
   gap: var(--mt-space-1);
 }
 
-.request-assignment-summary span {
+.request-assignment-summary > span:first-child,
+.request-due-date-summary > span:first-child {
   color: var(--mt-text-muted);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
 
-.request-assignment-summary strong {
+.request-assignment-summary strong,
+.request-due-date-summary strong {
   color: var(--mt-ink);
   font-size: 13px;
 }
 
-.request-assignment-menu {
+.request-assignment-menu,
+.request-due-date-menu {
   position: relative;
 }
 
-.request-assignment-menu > summary {
+.request-assignment-menu > summary,
+.request-due-date-menu > summary {
   color: var(--mt-accent-strong);
   cursor: pointer;
   font-size: 12px;
@@ -1517,11 +1552,13 @@ button:disabled,
   list-style: none;
 }
 
-.request-assignment-menu > summary::-webkit-details-marker {
+.request-assignment-menu > summary::-webkit-details-marker,
+.request-due-date-menu > summary::-webkit-details-marker {
   display: none;
 }
 
-.request-assignment-panel {
+.request-assignment-panel,
+.request-due-date-panel {
   position: absolute;
   z-index: 20;
   top: calc(100% + var(--mt-space-4));
@@ -1537,18 +1574,56 @@ button:disabled,
 }
 
 .request-assignment-panel form,
-.request-assignment-panel label {
+.request-assignment-panel label,
+.request-due-date-panel form,
+.request-due-date-panel label {
   display: grid;
   gap: var(--mt-space-4);
 }
 
-.request-assignment-panel label {
+.request-assignment-panel label,
+.request-due-date-panel label {
   font-size: 12px;
   font-weight: 700;
 }
 
-.request-assignment-panel button {
+.request-assignment-panel button,
+.request-due-date-panel button {
   width: 100%;
+}
+
+.request-due-date-panel small {
+  color: var(--mt-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.request-sla-state {
+  width: fit-content;
+  border: 1px solid var(--mt-border-strong);
+  border-radius: var(--mt-radius-pill);
+  color: var(--mt-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+}
+
+.request-sla-state[data-sla="OVERDUE"] {
+  border-color: var(--mt-status-rejected-border);
+  background: var(--mt-status-rejected-bg);
+  color: var(--mt-status-rejected-fg);
+}
+
+.request-sla-state[data-sla="DUE_SOON"] {
+  border-color: var(--mt-status-pending-border);
+  background: var(--mt-status-pending-bg);
+  color: var(--mt-status-pending-fg);
+}
+
+.request-sla-state[data-sla="ON_TRACK"] {
+  border-color: var(--mt-status-success-border);
+  background: var(--mt-status-success-bg);
+  color: var(--mt-status-success-fg);
 }
 
 .request-more-actions {
@@ -2367,8 +2442,8 @@ dialog.mt-dialog {
 @media (max-width: 800px) and (min-width: 641px) {
   .request-table th:nth-child(3),
   .request-table td:nth-child(3),
-  .request-table th:nth-child(6),
-  .request-table td:nth-child(6) {
+  .request-table th:nth-child(7),
+  .request-table td:nth-child(7) {
     display: none;
   }
 

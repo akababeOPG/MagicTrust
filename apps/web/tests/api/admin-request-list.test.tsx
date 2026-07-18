@@ -67,6 +67,8 @@ describe("admin requests list UX", () => {
     });
 
     expect(html).toContain("Needs attention");
+    expect(html).toContain("Overdue");
+    expect(html).toContain("Due soon");
     expect(html).toContain("My requests");
     expect(html).toContain("Unassigned");
     expect(html).toContain("Waiting on requester");
@@ -86,6 +88,15 @@ describe("admin requests list UX", () => {
     expect(html).not.toContain("agustin@onpointglobal.com");
   });
 
+  test("renders due state in desktop and mobile results", () => {
+    const html = renderWorkspace();
+
+    expect(html.match(/Due/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html).toContain("Jul 17");
+    expect(html).toContain("Overdue by 1 day");
+    expect(html).toContain('data-sla="OVERDUE"');
+  });
+
   test("assignment filters follow role permissions", () => {
     const admin = renderWorkspace({ role: "ADMIN" });
     const operator = renderWorkspace({ role: "OPERATOR" });
@@ -97,6 +108,7 @@ describe("admin requests list UX", () => {
     expect(operator).not.toContain("Agustin (Admin)");
     expect(viewer).not.toContain('<option value="me">Me</option>');
     expect(viewer).toContain('<option value="unassigned">Unassigned</option>');
+    expect(viewer).toContain('<option value="overdue">Overdue</option>');
   });
 
   test("uses natural request type and next-step labels", () => {
@@ -144,6 +156,7 @@ describe("admin requests list UX", () => {
         status: "VERIFIED",
         limit: "25",
         assignedTo: "me",
+        due: "due-soon",
       }),
       nextCursor: "opaque-cursor",
     });
@@ -153,6 +166,7 @@ describe("admin requests list UX", () => {
     expect(html).toContain("view=needs-attention");
     expect(html).toContain("status=VERIFIED");
     expect(html).toContain("assignedTo=me");
+    expect(html).toContain("due=due-soon");
     expect(html).toContain("cursor=opaque-cursor");
     expect(html).not.toContain(">opaque-cursor<");
   });
@@ -219,6 +233,14 @@ function renderWorkspace({
                   assignment: {
                     displayName: "Agustin",
                     isCurrentUser: true,
+                  },
+                  due: {
+                    dueAt: "2026-07-17T10:00:00.000Z",
+                    state: "OVERDUE",
+                    stateLabel: "Overdue",
+                    dateLabel: "Jul 17, 2026",
+                    shortDateLabel: "Jul 17",
+                    relativeLabel: "Overdue by 1 day",
                   },
                 },
               ],

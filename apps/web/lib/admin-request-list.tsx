@@ -17,6 +17,7 @@ type WorkloadView = {
   label: string;
   status?: RequestStatus;
   assignedTo?: "me" | "unassigned";
+  due?: "overdue" | "due-soon";
 };
 
 const workloadViews: WorkloadView[] = [
@@ -56,6 +57,7 @@ const preservedSearchFilterKeys = [
   "createdTo",
   "view",
   "assignedTo",
+  "due",
   "limit",
 ] as const;
 
@@ -79,6 +81,8 @@ export function AdminRequestListWorkspace({
   const hasFilters = activeFilterCount > 0;
   const assignmentOptions = result.ok ? result.data.assignmentOptions : [];
   const visibleWorkloadViews: WorkloadView[] = [
+    { id: "overdue", label: "Overdue", due: "overdue" },
+    { id: "due-soon", label: "Due soon", due: "due-soon" },
     ...(role === "VIEWER"
       ? []
       : ([
@@ -214,6 +218,16 @@ export function AdminRequestListWorkspace({
               </select>
             </label>
             <label>
+              Due state
+              <select name="due" defaultValue={params.get("due") ?? ""}>
+                <option value="">Any due state</option>
+                <option value="overdue">Overdue</option>
+                <option value="due-soon">Due soon</option>
+                <option value="on-track">On track</option>
+                <option value="no-due-date">No due date</option>
+              </select>
+            </label>
+            <label>
               Created from
               <input
                 name="createdFrom"
@@ -241,6 +255,7 @@ export function AdminRequestListWorkspace({
                       "createdFrom",
                       "createdTo",
                       "assignedTo",
+                      "due",
                       "view",
                       "cursor",
                     ],
@@ -258,7 +273,7 @@ export function AdminRequestListWorkspace({
         <Link
           className="workload-view-link"
           href={buildAdminListHref(params, {
-            remove: ["view", "status", "assignedTo", "cursor"],
+            remove: ["view", "status", "assignedTo", "due", "cursor"],
           })}
           aria-current={!activeView ? "page" : undefined}
         >
@@ -271,13 +286,11 @@ export function AdminRequestListWorkspace({
             href={buildAdminListHref(params, {
               set: {
                 view: view.id,
-                status: view.status,
-                assignedTo: view.assignedTo,
+                ...(view.status ? { status: view.status } : {}),
+                ...(view.assignedTo ? { assignedTo: view.assignedTo } : {}),
+                ...(view.due ? { due: view.due } : {}),
               },
-              remove: [
-                "cursor",
-                ...(view.status ? ["assignedTo"] : ["status"]),
-              ],
+              remove: ["cursor"],
             })}
             aria-current={activeView === view.id ? "page" : undefined}
           >
@@ -385,6 +398,7 @@ function RequestDesktopTable({
             <th scope="col">Type</th>
             <th scope="col">Status</th>
             <th scope="col">Assigned to</th>
+            <th scope="col">Due</th>
             <th scope="col">Received</th>
             <th className="request-age-column" scope="col">
               Age
@@ -398,6 +412,7 @@ function RequestDesktopTable({
             <tr
               key={request.id}
               data-priority={requestPriority(request.status)}
+              data-sla={request.due.state}
             >
               <td>
                 <strong className="request-public-id">
@@ -418,6 +433,9 @@ function RequestDesktopTable({
               </td>
               <td>
                 <AssignmentLabel request={request} />
+              </td>
+              <td>
+                <DueLabel request={request} />
               </td>
               <td>
                 <ReceivedDate value={request.createdAt} />
@@ -462,6 +480,7 @@ function RequestMobileCards({
           <article
             className="request-mobile-card"
             data-priority={requestPriority(request.status)}
+            data-sla={request.due.state}
             key={request.id}
             aria-labelledby={headingId}
           >
@@ -484,6 +503,10 @@ function RequestMobileCards({
               <div>
                 <span>Assigned to</span>
                 <AssignmentLabel request={request} />
+              </div>
+              <div>
+                <span>Due</span>
+                <DueLabel request={request} />
               </div>
               <div>
                 <span>Next step</span>
@@ -538,6 +561,19 @@ function AssignmentLabel({ request }: { request: AdminRequestListItem }) {
       className={request.assignment.displayName ? undefined : "table-secondary"}
     >
       {request.assignment.displayName ?? "Unassigned"}
+    </span>
+  );
+}
+
+function DueLabel({ request }: { request: AdminRequestListItem }) {
+  if (!request.due.dueAt) {
+    return <span className="table-secondary">—</span>;
+  }
+
+  return (
+    <span className="request-due-label" data-sla={request.due.state}>
+      <strong>{request.due.shortDateLabel}</strong>
+      <small>{request.due.relativeLabel ?? request.due.stateLabel}</small>
     </span>
   );
 }
@@ -672,10 +708,11 @@ export function countActiveFilters(params: URLSearchParams): number {
     "createdFrom",
     "createdTo",
     "assignedTo",
+    "due",
   ].filter((key) => Boolean(params.get(key))).length;
 
   const workloadFilter = params.get("view")
-    ? params.get("assignedTo")
+    ? params.get("assignedTo") || params.get("due")
       ? 0
       : 1
     : params.get("status")

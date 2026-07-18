@@ -149,6 +149,8 @@ In production, admin session cookies are marked `secure`.
 
 The request workspace at `/admin/requests` includes optional request assignment. `ADMIN` users can assign active administrators or operators; `OPERATOR` users can claim unassigned requests for themselves; `VIEWER` users remain read-only. **My requests** and **Unassigned** are URL-based workload views. Assignment is operational metadata only and never changes request status or sends a consumer notification.
 
+Requests may also have a manually managed UTC due date. **Overdue** and **Due soon** are URL-based workload views derived from the deadline, terminal status, and current time. ADMIN can manage every deadline; OPERATOR can manage deadlines for unassigned or self-assigned requests; VIEWER is read-only. No automatic SLA policies, reminders, escalations, or scheduled jobs are included.
+
 ## Public Intake
 
 The hosted public privacy request form runs at:

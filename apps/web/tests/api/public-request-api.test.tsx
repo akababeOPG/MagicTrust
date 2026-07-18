@@ -129,7 +129,7 @@ describe("public request API", () => {
     const serialized = JSON.stringify(body);
 
     expect(response.status).toBe(201);
-    expect(serialized).not.toContain("id");
+    expect(body.request).not.toHaveProperty("id");
     expect(serialized).not.toContain("requesterId");
     expect(serialized).not.toContain("emailEncrypted");
     expect(serialized).not.toContain("emailHash");
@@ -146,6 +146,9 @@ describe("public request API", () => {
     expect(serialized).not.toContain("assignedToAdminUserId");
     expect(serialized).not.toContain("assignedByAdminUserId");
     expect(serialized).not.toContain("assignedAt");
+    expect(serialized).not.toContain("dueAt");
+    expect(serialized).not.toContain("dueAtSetAt");
+    expect(serialized).not.toContain("dueAtSetByAdminUserId");
     expect(dependencies.state.requests[0]?.submittedData).toEqual({
       type: "DATA_ACCESS",
       source: {
@@ -179,6 +182,13 @@ describe("public request API", () => {
       processorReference: "job-12345",
       resolutionCode: "DATA_EXPORT_READY",
     };
+    dependencies.state.requests[0]!.dueAt = new Date(
+      "2026-07-24T00:00:00.000Z",
+    );
+    dependencies.state.requests[0]!.dueAtSetAt = new Date(
+      "2026-07-18T00:00:00.000Z",
+    );
+    dependencies.state.requests[0]!.dueAtSetByAdminUserId = "admin-user-1";
 
     const trackingResponse = await api.get(createBody.request.publicId);
     const trackingBody = await trackingResponse.json();
@@ -187,6 +197,8 @@ describe("public request API", () => {
     expect(JSON.stringify(trackingBody)).not.toContain("mutableData");
     expect(JSON.stringify(trackingBody)).not.toContain("job-12345");
     expect(JSON.stringify(trackingBody)).not.toContain("DATA_EXPORT_READY");
+    expect(JSON.stringify(trackingBody)).not.toContain("dueAt");
+    expect(JSON.stringify(trackingBody)).not.toContain("admin-user-1");
   });
 
   test("public APIs exclude INTERNAL custom events", async () => {
@@ -1414,6 +1426,12 @@ function createInMemoryDependencies(
       return { ok: false, code: "NOT_FOUND" };
     },
     async unassignRequest() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
+    async setRequestDueDate() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
+    async clearRequestDueDate() {
       return { ok: false, code: "NOT_FOUND" };
     },
     async findAdminSensitiveData() {

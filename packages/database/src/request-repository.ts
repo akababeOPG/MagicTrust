@@ -10,11 +10,25 @@ import type {
   RequestEventCategory,
   RequestEventType,
   RequestIdentityVerificationToken,
+  RequestSlaState,
   RequestStatus,
   RequestType,
 } from "@magictrust/domain";
+import { requestDueSoonWindowMs } from "@magictrust/domain";
 import { encryptPii, hashPii } from "@magictrust/privacy";
-import { and, desc, eq, gt, gte, inArray, isNull, lt, or } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+} from "drizzle-orm";
 
 import type { AdminRole } from "./admin-auth-store";
 import type { createDatabase } from "./index";
@@ -47,6 +61,9 @@ export type RequestSummary = {
   assignedToAdminUserId?: string | null;
   assignedAt?: Date | null;
   assignedByAdminUserId?: string | null;
+  dueAt?: Date | null;
+  dueAtSetAt?: Date | null;
+  dueAtSetByAdminUserId?: string | null;
 };
 
 export type AdminUserAssignmentRecord = {
@@ -121,6 +138,8 @@ export type RequestListFilters = {
   updatedFrom?: Date;
   updatedTo?: Date;
   assignedToAdminUserId?: string | null;
+  dueState?: Exclude<RequestSlaState, "COMPLETED">;
+  slaNow?: Date;
   cursor?: {
     createdAt: Date;
     id: string;
@@ -162,6 +181,15 @@ export type RequestRepository = {
     id: string,
     actor: AdminRequestAssignmentActor,
   ): Promise<RequestAssignmentMutationResult>;
+  setRequestDueDate(
+    id: string,
+    dueAt: Date,
+    actor: AdminRequestAssignmentActor,
+  ): Promise<RequestDueDateMutationResult>;
+  clearRequestDueDate(
+    id: string,
+    actor: AdminRequestAssignmentActor,
+  ): Promise<RequestDueDateMutationResult>;
   updateStatus(
     id: string,
     input: UpdateRequestStatusInput,
@@ -263,6 +291,10 @@ export type RequestAssignmentMutationResult =
       ok: false;
       code: "NOT_FOUND" | "ASSIGNEE_NOT_FOUND" | "FORBIDDEN";
     };
+
+export type RequestDueDateMutationResult =
+  | { ok: true; request: RequestSummary; changed: boolean }
+  | { ok: false; code: "NOT_FOUND" | "FORBIDDEN" };
 
 export type UpdateRequestStatusInput = {
   status: RequestStatus;
@@ -717,6 +749,9 @@ export function createRequestRepository(db: Database): RequestRepository {
                 filters.assignedToAdminUserId,
               )
             : undefined,
+        filters.dueState
+          ? dueStateCondition(filters.dueState, filters.slaNow ?? new Date())
+          : undefined,
         filters.cursor
           ? or(
               lt(privacyRequests.createdAt, filters.cursor.createdAt),
@@ -742,6 +777,9 @@ export function createRequestRepository(db: Database): RequestRepository {
           assignedToAdminUserId: privacyRequests.assignedToAdminUserId,
           assignedAt: privacyRequests.assignedAt,
           assignedByAdminUserId: privacyRequests.assignedByAdminUserId,
+          dueAt: privacyRequests.dueAt,
+          dueAtSetAt: privacyRequests.dueAtSetAt,
+          dueAtSetByAdminUserId: privacyRequests.dueAtSetByAdminUserId,
         })
         .from(privacyRequests)
         .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
@@ -766,6 +804,9 @@ export function createRequestRepository(db: Database): RequestRepository {
           assignedToAdminUserId: row.assignedToAdminUserId,
           assignedAt: row.assignedAt,
           assignedByAdminUserId: row.assignedByAdminUserId,
+          dueAt: row.dueAt,
+          dueAtSetAt: row.dueAtSetAt,
+          dueAtSetByAdminUserId: row.dueAtSetByAdminUserId,
         })),
         nextCursor:
           hasMore && last
@@ -887,6 +928,95 @@ export function createRequestRepository(db: Database): RequestRepository {
             previouslyAssignedToAdminUserId,
             assignedByAdminUserId: actor.id,
           },
+        });
+
+        return { ok: true, request: updated, changed: true };
+      });
+    },
+    async setRequestDueDate(id, dueAt, actor) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1)
+          .for("update");
+
+        if (!request) return { ok: false, code: "NOT_FOUND" };
+        if (!canManageRequestDueDate(request, actor)) {
+          return { ok: false, code: "FORBIDDEN" };
+        }
+        if (request.dueAt?.getTime() === dueAt.getTime()) {
+          return { ok: true, request, changed: false };
+        }
+
+        const previousDueAt = request.dueAt;
+        const now = new Date();
+        const [updated] = await tx
+          .update(privacyRequests)
+          .set({
+            dueAt,
+            dueAtSetAt: now,
+            dueAtSetByAdminUserId: actor.id,
+            updatedAt: now,
+          })
+          .where(eq(privacyRequests.id, request.id))
+          .returning(requestSummarySelection);
+
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: request.id,
+          type: previousDueAt
+            ? "REQUEST_DUE_DATE_UPDATED"
+            : "REQUEST_DUE_DATE_SET",
+          actorType: "ADMIN_USER",
+          actorId: actor.id,
+          data: previousDueAt
+            ? {
+                previousDueAt: previousDueAt.toISOString(),
+                dueAt: dueAt.toISOString(),
+              }
+            : { dueAt: dueAt.toISOString() },
+        });
+
+        return { ok: true, request: updated, changed: true };
+      });
+    },
+    async clearRequestDueDate(id, actor) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1)
+          .for("update");
+
+        if (!request) return { ok: false, code: "NOT_FOUND" };
+        if (!canManageRequestDueDate(request, actor)) {
+          return { ok: false, code: "FORBIDDEN" };
+        }
+        if (!request.dueAt) {
+          return { ok: true, request, changed: false };
+        }
+
+        const previousDueAt = request.dueAt;
+        const now = new Date();
+        const [updated] = await tx
+          .update(privacyRequests)
+          .set({
+            dueAt: null,
+            dueAtSetAt: null,
+            dueAtSetByAdminUserId: null,
+            updatedAt: now,
+          })
+          .where(eq(privacyRequests.id, request.id))
+          .returning(requestSummarySelection);
+
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: request.id,
+          type: "REQUEST_DUE_DATE_CLEARED",
+          actorType: "ADMIN_USER",
+          actorId: actor.id,
+          data: { previousDueAt: previousDueAt.toISOString() },
         });
 
         return { ok: true, request: updated, changed: true };
@@ -1778,6 +1908,9 @@ const requestSummarySelection = {
   assignedToAdminUserId: privacyRequests.assignedToAdminUserId,
   assignedAt: privacyRequests.assignedAt,
   assignedByAdminUserId: privacyRequests.assignedByAdminUserId,
+  dueAt: privacyRequests.dueAt,
+  dueAtSetAt: privacyRequests.dueAtSetAt,
+  dueAtSetByAdminUserId: privacyRequests.dueAtSetByAdminUserId,
 };
 
 const accessTokenSelection = {
@@ -1901,4 +2034,44 @@ function isTerminalStatus(status: RequestStatus): boolean {
   return (
     status === "SUCCESS" || status === "REJECTED" || status === "CANCELLED"
   );
+}
+
+function canManageRequestDueDate(
+  request: Pick<RequestSummary, "assignedToAdminUserId">,
+  actor: AdminRequestAssignmentActor,
+): boolean {
+  if (actor.role === "ADMIN") return true;
+  if (actor.role === "VIEWER") return false;
+  return (
+    request.assignedToAdminUserId === null ||
+    request.assignedToAdminUserId === undefined ||
+    request.assignedToAdminUserId === actor.id
+  );
+}
+
+function dueStateCondition(
+  state: Exclude<RequestSlaState, "COMPLETED">,
+  now: Date,
+) {
+  const active = notInArray(privacyRequests.status, [
+    "SUCCESS",
+    "REJECTED",
+    "CANCELLED",
+  ]);
+  const dueSoonUntil = new Date(now.getTime() + requestDueSoonWindowMs);
+
+  switch (state) {
+    case "NO_DUE_DATE":
+      return and(active, isNull(privacyRequests.dueAt));
+    case "OVERDUE":
+      return and(active, lt(privacyRequests.dueAt, now));
+    case "DUE_SOON":
+      return and(
+        active,
+        gte(privacyRequests.dueAt, now),
+        lte(privacyRequests.dueAt, dueSoonUntil),
+      );
+    case "ON_TRACK":
+      return and(active, gt(privacyRequests.dueAt, dueSoonUntil));
+  }
 }

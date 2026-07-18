@@ -156,6 +156,18 @@ function AdminNavigation({ role }: { role: AdminSession["role"] }) {
       </div>
       <div className="mt-nav-group">
         <p className="mt-nav-label">Views</p>
+        <Link
+          className="mt-nav-item"
+          href="/admin/requests?view=overdue&due=overdue"
+        >
+          Overdue
+        </Link>
+        <Link
+          className="mt-nav-item"
+          href="/admin/requests?view=due-soon&due=due-soon"
+        >
+          Due soon
+        </Link>
         {role !== "VIEWER" ? (
           <>
             <Link

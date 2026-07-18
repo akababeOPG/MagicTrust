@@ -130,6 +130,9 @@ export const builtInWebhookEventTypes = [
   "REQUEST_DATA_UPDATED",
   "REQUEST_ASSIGNED",
   "REQUEST_UNASSIGNED",
+  "REQUEST_DUE_DATE_SET",
+  "REQUEST_DUE_DATE_UPDATED",
+  "REQUEST_DUE_DATE_CLEARED",
 ] as const;
 
 const builtInWebhookEventTypeSet = new Set<string>(builtInWebhookEventTypes);
@@ -699,6 +702,12 @@ function sanitizeWebhookEventData(event: {
         "previouslyAssignedToAdminUserId",
         "assignedByAdminUserId",
       ]);
+    case "REQUEST_DUE_DATE_SET":
+      return pickJsonObject(event.data, ["dueAt"]);
+    case "REQUEST_DUE_DATE_UPDATED":
+      return pickJsonObject(event.data, ["previousDueAt", "dueAt"]);
+    case "REQUEST_DUE_DATE_CLEARED":
+      return pickJsonObject(event.data, ["previousDueAt"]);
     case "PUBLIC_COMMENT_ADDED":
     case "INTERNAL_COMMENT_ADDED":
       return pickJsonObject(event.data, ["commentId", "visibility"]);

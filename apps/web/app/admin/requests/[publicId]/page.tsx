@@ -89,7 +89,7 @@ export default async function AdminRequestDetailPage({
         </div>
       </header>
 
-      <RequestAssignmentControl request={request} role={session.role} />
+      <RequestOperationalMetadata request={request} role={session.role} />
 
       {successMessage ? (
         <section className="admin-card success-message" role="status">
@@ -705,7 +705,7 @@ function DataAccessRequestDetail({
             Received {formatDateTime(request.createdAt)} ·{" "}
             {formatRequestAge(ageDays)}
           </p>
-          <RequestAssignmentControl request={request} role={role} />
+          <RequestOperationalMetadata request={request} role={role} />
         </div>
         <div className="request-header-actions">
           {canAct && !isTerminalStatus(request.status) ? (
@@ -1026,6 +1026,21 @@ function DataAccessRequestDetail({
   );
 }
 
+function RequestOperationalMetadata({
+  request,
+  role,
+}: {
+  request: AdminRequestDetailView;
+  role: "ADMIN" | "OPERATOR" | "VIEWER";
+}) {
+  return (
+    <div className="request-operational-metadata">
+      <RequestAssignmentControl request={request} role={role} />
+      <RequestDueDateControl request={request} role={role} />
+    </div>
+  );
+}
+
 function RequestAssignmentControl({
   request,
   role,
@@ -1119,6 +1134,81 @@ function RequestAssignmentControl({
           <input type="hidden" name="action" value="unassign" />
           <AdminSubmitButton variant="secondary">Unassign</AdminSubmitButton>
         </form>
+      ) : null}
+    </div>
+  );
+}
+
+function RequestDueDateControl({
+  request,
+  role,
+}: {
+  request: AdminRequestDetailView;
+  role: "ADMIN" | "OPERATOR" | "VIEWER";
+}) {
+  const due = request.due ?? {
+    dueAt: null,
+    state: "NO_DUE_DATE" as const,
+    stateLabel: "No due date",
+    dateLabel: "No due date",
+    shortDateLabel: "—",
+    relativeLabel: null,
+  };
+  const canManage =
+    role === "ADMIN" ||
+    (role === "OPERATOR" &&
+      (request.assignment?.assignedToAdminUserId === null ||
+        request.assignment?.assignedToAdminUserId === undefined ||
+        request.assignment?.isCurrentUser));
+
+  return (
+    <div className="request-due-date" aria-label="Request due date">
+      <div className="request-due-date-summary">
+        <span>Due date</span>
+        <strong>{due.dateLabel}</strong>
+        {due.state !== "NO_DUE_DATE" ? (
+          <span className="request-sla-state" data-sla={due.state}>
+            {due.stateLabel}
+          </span>
+        ) : null}
+      </div>
+
+      {canManage ? (
+        <details className="request-due-date-menu">
+          <summary>{due.dueAt ? "Edit" : "Set due date"}</summary>
+          <div className="request-due-date-panel">
+            <form
+              action={`/admin/requests/${request.publicId}/due-date`}
+              method="post"
+            >
+              <input type="hidden" name="action" value="set" />
+              <label>
+                Due date and time
+                <input
+                  type="datetime-local"
+                  name="dueAt"
+                  required
+                  defaultValue={due.dueAt?.slice(0, 16) ?? ""}
+                />
+                <small>Times are stored and displayed in UTC.</small>
+              </label>
+              <AdminSubmitButton>
+                {due.dueAt ? "Save due date" : "Set due date"}
+              </AdminSubmitButton>
+            </form>
+            {due.dueAt ? (
+              <form
+                action={`/admin/requests/${request.publicId}/due-date`}
+                method="post"
+              >
+                <input type="hidden" name="action" value="clear" />
+                <AdminSubmitButton variant="secondary">
+                  Clear due date
+                </AdminSubmitButton>
+              </form>
+            ) : null}
+          </div>
+        </details>
       ) : null}
     </div>
   );
@@ -1458,6 +1548,11 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Request is already assigned to that user.",
     "Request is already unassigned.",
     "The selected assignee is not available.",
+    "Due date saved.",
+    "Due date cleared.",
+    "Due date is already set to that time.",
+    "Request already has no due date.",
+    "Enter a valid due date and time in UTC.",
     "Verification email could not be sent.",
     "The response email could not be sent. The request remains in processing.",
     "Select a response file before sending.",

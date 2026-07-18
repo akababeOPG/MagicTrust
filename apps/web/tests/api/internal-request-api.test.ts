@@ -2833,6 +2833,12 @@ function createInMemoryDependencies(
     async unassignRequest() {
       return { ok: false, code: "NOT_FOUND" };
     },
+    async setRequestDueDate() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
+    async clearRequestDueDate() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
     async findAdminSensitiveData() {
       return null;
     },

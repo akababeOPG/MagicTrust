@@ -122,6 +122,9 @@ const builtInEventTypes = new Set([
   "REQUEST_DATA_UPDATED",
   "REQUEST_ASSIGNED",
   "REQUEST_UNASSIGNED",
+  "REQUEST_DUE_DATE_SET",
+  "REQUEST_DUE_DATE_UPDATED",
+  "REQUEST_DUE_DATE_CLEARED",
 ]);
 
 const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   requireAdminRole: vi.fn(),
   updateAdminRequestStatus: vi.fn(),
   updateAdminRequestAssignment: vi.fn(),
+  updateAdminRequestDueDate: vi.fn(),
   createAdminRequestComment: vi.fn(),
   uploadAdminRequestAttachment: vi.fn(),
   sendAdminConsumerNotification: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@/lib/admin-dashboard", () => ({
   createAdminDashboardDependencies: vi.fn(() => ({ kind: "dependencies" })),
   updateAdminRequestStatus: mocks.updateAdminRequestStatus,
   updateAdminRequestAssignment: mocks.updateAdminRequestAssignment,
+  updateAdminRequestDueDate: mocks.updateAdminRequestDueDate,
   createAdminRequestComment: mocks.createAdminRequestComment,
   uploadAdminRequestAttachment: mocks.uploadAdminRequestAttachment,
   sendAdminConsumerNotification: mocks.sendAdminConsumerNotification,
@@ -143,6 +145,27 @@ describe("admin action routes", () => {
       response: "json",
     });
     expect(mocks.updateAdminRequestAssignment).not.toHaveBeenCalled();
+  });
+
+  test("due-date route requires an authorized admin role", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/due-date/route");
+
+    const response = await POST(
+      new Request("https://magictrust.test/admin/requests/req_one/due-date", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.requireAdminRole).toHaveBeenCalledWith(["ADMIN", "OPERATOR"], {
+      response: "json",
+    });
+    expect(mocks.updateAdminRequestDueDate).not.toHaveBeenCalled();
   });
 
   test("unauthenticated upload rejected", async () => {

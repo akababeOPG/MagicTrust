@@ -7,6 +7,7 @@ import type {
   RequestAccessToken,
   PrivacyRequest,
 } from "@magictrust/domain";
+import { deriveRequestSlaState } from "@magictrust/domain";
 import type {
   RequestDetails,
   RequestListFilters,
@@ -39,6 +40,7 @@ import {
   sendAdminConsumerNotification,
   startAdminRequestProcessing,
   updateAdminRequestAssignment,
+  updateAdminRequestDueDate,
   updateAdminMutableData,
   updateAdminRequestStatus,
   uploadAdminRequestAttachment,
@@ -630,6 +632,239 @@ describe("admin dashboard", () => {
       displayName: "Agustin",
       isCurrentUser: true,
     });
+  });
+
+  test("requests default to no due date and ADMIN can set, update, and clear it", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = dependencies.state.adminUsers[0]!;
+    const session = adminSession({ adminUserId: admin.id, role: "ADMIN" });
+    const initialStatus = dependencies.state.requests[0]!.status;
+    const initialAssignment = dependencies.state.assignments.get("request-one");
+    const initial = await getAdminRequestDetail(
+      "req_one",
+      dependencies,
+      session,
+    );
+
+    expect(initial?.due).toEqual(
+      expect.objectContaining({
+        dueAt: null,
+        state: "NO_DUE_DATE",
+        stateLabel: "No due date",
+      }),
+    );
+
+    const set = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-07-05T12:00"),
+      "req_one",
+      session,
+      dependencies,
+    );
+    const update = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-07-06T18:30:00.000Z"),
+      "req_one",
+      session,
+      dependencies,
+    );
+    const clear = await updateAdminRequestDueDate(
+      adminDueDateRequest("clear"),
+      "req_one",
+      session,
+      dependencies,
+    );
+
+    expect([set.status, update.status, clear.status]).toEqual([303, 303, 303]);
+    expect(dependencies.state.requests[0]?.dueAt).toBeNull();
+    expect(dependencies.state.requests[0]?.status).toBe(initialStatus);
+    expect(dependencies.state.assignments.get("request-one")).toEqual(
+      initialAssignment,
+    );
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+    expect(
+      dependencies.state.events.filter((event) =>
+        event.type.startsWith("REQUEST_DUE_DATE_"),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "REQUEST_DUE_DATE_SET",
+        actorType: "ADMIN_USER",
+        actorId: admin.id,
+        data: { dueAt: "2026-07-05T12:00:00.000Z" },
+      }),
+      expect.objectContaining({
+        type: "REQUEST_DUE_DATE_UPDATED",
+        actorType: "ADMIN_USER",
+        actorId: admin.id,
+        data: {
+          previousDueAt: "2026-07-05T12:00:00.000Z",
+          dueAt: "2026-07-06T18:30:00.000Z",
+        },
+      }),
+      expect.objectContaining({
+        type: "REQUEST_DUE_DATE_CLEARED",
+        actorType: "ADMIN_USER",
+        actorId: admin.id,
+        data: { previousDueAt: "2026-07-06T18:30:00.000Z" },
+      }),
+    ]);
+  });
+
+  test("OPERATOR can manage due dates only for unassigned or own requests", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = dependencies.state.adminUsers[0]!;
+    const operator = dependencies.state.adminUsers[1]!;
+    const operatorSession = adminSession({
+      adminUserId: operator.id,
+      role: "OPERATOR",
+    });
+
+    const unassigned = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-07-05T12:00"),
+      "req_one",
+      operatorSession,
+      dependencies,
+    );
+    await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", operator.id),
+      "req_one",
+      adminSession({ adminUserId: admin.id, role: "ADMIN" }),
+      dependencies,
+    );
+    const own = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-07-06T12:00"),
+      "req_one",
+      operatorSession,
+      dependencies,
+    );
+    await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", admin.id),
+      "req_one",
+      adminSession({ adminUserId: admin.id, role: "ADMIN" }),
+      dependencies,
+    );
+    const another = await updateAdminRequestDueDate(
+      adminDueDateRequest("clear"),
+      "req_one",
+      operatorSession,
+      dependencies,
+    );
+
+    expect(unassigned.status).toBe(303);
+    expect(own.status).toBe(303);
+    expect(another.status).toBe(403);
+    expect(dependencies.state.requests[0]?.dueAt?.toISOString()).toBe(
+      "2026-07-06T12:00:00.000Z",
+    );
+  });
+
+  test("VIEWER and cross-origin submissions cannot mutate due dates", async () => {
+    const dependencies = createInMemoryDependencies();
+    const dueAt = "2026-07-05T12:00";
+    const viewer = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", dueAt),
+      "req_one",
+      adminSession({ role: "VIEWER" }),
+      dependencies,
+    );
+    const crossOrigin = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", dueAt, "https://evil.test"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(viewer.status).toBe(403);
+    expect(crossOrigin.status).toBe(403);
+    expect(dependencies.state.requests[0]?.dueAt).toBeUndefined();
+  });
+
+  test("due-date input is strict and duplicate submissions do not duplicate events", async () => {
+    const dependencies = createInMemoryDependencies();
+    const invalid = await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-02-30T12:00"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-07-05T12:00"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await updateAdminRequestDueDate(
+      adminDueDateRequest("set", "2026-07-05T12:00"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(invalid.status).toBe(303);
+    expect(invalid.headers.get("location")).toContain("valid+due+date");
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_DUE_DATE_SET",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("due-state filters use deterministic time and exclude terminal requests", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.dueAt = new Date(
+      "2026-07-02T00:00:00.000Z",
+    );
+    dependencies.state.requests[1]!.dueAt = new Date(
+      "2026-07-04T00:00:00.000Z",
+    );
+
+    const overdue = await listAdminRequests(
+      new URLSearchParams({ view: "overdue", due: "overdue" }),
+      dependencies,
+      adminSession(),
+    );
+    const dueSoon = await listAdminRequests(
+      new URLSearchParams({ view: "due-soon", due: "due-soon" }),
+      dependencies,
+      adminSession(),
+    );
+
+    expect(
+      overdue.ok && overdue.data.requests.map((request) => request.publicId),
+    ).toEqual(["req_one"]);
+    expect(
+      dueSoon.ok && dueSoon.data.requests.map((request) => request.publicId),
+    ).toEqual(["req_two"]);
+
+    dependencies.state.requests[0]!.status = "SUCCESS";
+    const terminalOverdue = await listAdminRequests(
+      new URLSearchParams({ due: "overdue" }),
+      dependencies,
+      adminSession(),
+    );
+    const terminalDetail = await getAdminRequestDetail(
+      "req_one",
+      dependencies,
+      adminSession(),
+    );
+
+    expect(terminalOverdue.ok && terminalOverdue.data.requests).toHaveLength(0);
+    expect(terminalDetail?.due.state).toBe("COMPLETED");
+    expect(terminalDetail?.due.dueAt).toBe("2026-07-02T00:00:00.000Z");
+  });
+
+  test("no-due-date filter returns active requests without deadlines", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[1]!.status = "SUCCESS";
+
+    const result = await listAdminRequests(
+      new URLSearchParams({ due: "no-due-date" }),
+      dependencies,
+      adminSession(),
+    );
+
+    expect(
+      result.ok && result.data.requests.map((request) => request.publicId),
+    ).toEqual(["req_one"]);
   });
 
   test("ADMIN can change status and actor id is derived from the admin session", async () => {
@@ -2100,6 +2335,9 @@ function createInMemoryDependencies(
         assignedAt: assignments.get(request.id)?.assignedAt ?? null,
         assignedByAdminUserId:
           assignments.get(request.id)?.assignedByAdminUserId ?? null,
+        dueAt: request.dueAt ?? null,
+        dueAtSetAt: request.dueAtSetAt ?? null,
+        dueAtSetByAdminUserId: request.dueAtSetByAdminUserId ?? null,
         mutableData: request.mutableData,
         events: events
           .filter((event) => event.privacyRequestId === request.id)
@@ -2206,6 +2444,15 @@ function createInMemoryDependencies(
               : true,
         )
         .filter((request) =>
+          filters.dueState
+            ? deriveRequestSlaState({
+                status: request.status,
+                dueAt: request.dueAt ?? null,
+                now: filters.slaNow ?? new Date("2026-07-03T00:00:00.000Z"),
+              }) === filters.dueState
+            : true,
+        )
+        .filter((request) =>
           filters.cursor
             ? request.createdAt < filters.cursor.createdAt ||
               (request.createdAt.getTime() ===
@@ -2240,6 +2487,9 @@ function createInMemoryDependencies(
           assignedAt: assignments.get(request.id)?.assignedAt ?? null,
           assignedByAdminUserId:
             assignments.get(request.id)?.assignedByAdminUserId ?? null,
+          dueAt: request.dueAt ?? null,
+          dueAtSetAt: request.dueAtSetAt ?? null,
+          dueAtSetByAdminUserId: request.dueAtSetByAdminUserId ?? null,
         })),
         nextCursor:
           rows.length > filters.limit && last
@@ -2343,6 +2593,101 @@ function createInMemoryDependencies(
           assignedByAdminUserId: actor.id,
         },
         createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+
+      return {
+        ok: true,
+        changed: true,
+        request: summaryFromPrivacyRequest(request, assignments),
+      };
+    },
+    async setRequestDueDate(id, dueAt, actor) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) return { ok: false, code: "NOT_FOUND" };
+      if (
+        actor.role === "VIEWER" ||
+        (actor.role === "OPERATOR" &&
+          assignments.get(request.id)?.assignedToAdminUserId !== undefined &&
+          assignments.get(request.id)?.assignedToAdminUserId !== actor.id)
+      ) {
+        return { ok: false, code: "FORBIDDEN" };
+      }
+      if (request.dueAt?.getTime() === dueAt.getTime()) {
+        return {
+          ok: true,
+          changed: false,
+          request: summaryFromPrivacyRequest(request, assignments),
+        };
+      }
+
+      const previousDueAt = request.dueAt ?? null;
+      const now = new Date("2026-07-03T00:00:00.000Z");
+      request.dueAt = dueAt;
+      request.dueAtSetAt = now;
+      request.dueAtSetByAdminUserId = actor.id;
+      request.updatedAt = now;
+      events.push({
+        id: `event-due-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: previousDueAt
+          ? "REQUEST_DUE_DATE_UPDATED"
+          : "REQUEST_DUE_DATE_SET",
+        actorType: "ADMIN_USER",
+        actorId: actor.id,
+        data: previousDueAt
+          ? {
+              previousDueAt: previousDueAt.toISOString(),
+              dueAt: dueAt.toISOString(),
+            }
+          : { dueAt: dueAt.toISOString() },
+        createdAt: now,
+      });
+
+      return {
+        ok: true,
+        changed: true,
+        request: summaryFromPrivacyRequest(request, assignments),
+      };
+    },
+    async clearRequestDueDate(id, actor) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) return { ok: false, code: "NOT_FOUND" };
+      if (
+        actor.role === "VIEWER" ||
+        (actor.role === "OPERATOR" &&
+          assignments.get(request.id)?.assignedToAdminUserId !== undefined &&
+          assignments.get(request.id)?.assignedToAdminUserId !== actor.id)
+      ) {
+        return { ok: false, code: "FORBIDDEN" };
+      }
+      if (!request.dueAt) {
+        return {
+          ok: true,
+          changed: false,
+          request: summaryFromPrivacyRequest(request, assignments),
+        };
+      }
+
+      const previousDueAt = request.dueAt;
+      const now = new Date("2026-07-03T00:00:00.000Z");
+      request.dueAt = null;
+      request.dueAtSetAt = null;
+      request.dueAtSetByAdminUserId = null;
+      request.updatedAt = now;
+      events.push({
+        id: `event-due-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: "REQUEST_DUE_DATE_CLEARED",
+        actorType: "ADMIN_USER",
+        actorId: actor.id,
+        data: { previousDueAt: previousDueAt.toISOString() },
+        createdAt: now,
       });
 
       return {
@@ -2867,6 +3212,9 @@ function summaryFromPrivacyRequest(
     assignedToAdminUserId: assignment?.assignedToAdminUserId ?? null,
     assignedAt: assignment?.assignedAt ?? null,
     assignedByAdminUserId: assignment?.assignedByAdminUserId ?? null,
+    dueAt: request.dueAt ?? null,
+    dueAtSetAt: request.dueAtSetAt ?? null,
+    dueAtSetByAdminUserId: request.dueAtSetByAdminUserId ?? null,
   };
 }
 
@@ -2907,6 +3255,28 @@ function adminAssignmentRequest(
 
   return new Request(
     "https://magictrust.test/admin/requests/req_one/assignment",
+    {
+      method: "POST",
+      headers: { origin },
+      body,
+    },
+  );
+}
+
+function adminDueDateRequest(
+  action: "set" | "clear",
+  dueAt?: string,
+  origin = "https://magictrust.test",
+) {
+  const body = new FormData();
+  body.set("action", action);
+
+  if (dueAt) {
+    body.set("dueAt", dueAt);
+  }
+
+  return new Request(
+    "https://magictrust.test/admin/requests/req_one/due-date",
     {
       method: "POST",
       headers: { origin },

@@ -102,6 +102,36 @@ describe("admin sensitive request page", () => {
     );
   });
 
+  test("due-date controls are compact and role-aware", async () => {
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+
+    const admin = await renderPage(AdminRequestDetailPage);
+    expect(admin).toContain("Due date");
+    expect(admin).toContain("Jul 24, 2026");
+    expect(admin).toContain("Due soon");
+    expect(admin).toContain('type="datetime-local"');
+    expect(admin).toContain("Times are stored and displayed in UTC.");
+
+    mocks.session.role = "VIEWER";
+    const viewer = await renderPage(AdminRequestDetailPage);
+    expect(viewer).toContain("Jul 24, 2026");
+    expect(viewer).not.toContain('action="/admin/requests/req_one/due-date"');
+
+    mocks.session.role = "OPERATOR";
+    mocks.detail.assignment = {
+      displayName: "Agustin",
+      isCurrentUser: false,
+      assignedToAdminUserId: "another-admin",
+      assignedAt: "2026-07-18T00:00:00.000Z",
+      options: [],
+    };
+    const operatorAssignedElsewhere = await renderPage(AdminRequestDetailPage);
+    expect(operatorAssignedElsewhere).not.toContain(
+      'action="/admin/requests/req_one/due-date"',
+    );
+  });
+
   test("renders guided DATA_ACCESS actions for each workflow state", async () => {
     const { default: AdminRequestDetailPage } =
       await import("../../app/admin/requests/[publicId]/page");
@@ -398,6 +428,21 @@ function requestDetail(options: { includeSensitive?: boolean } = {}) {
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
     completedAt: null,
+    assignment: {
+      displayName: null,
+      isCurrentUser: false,
+      assignedToAdminUserId: null,
+      assignedAt: null,
+      options: [],
+    },
+    due: {
+      dueAt: "2026-07-24T12:00:00.000Z",
+      state: "DUE_SOON",
+      stateLabel: "Due soon",
+      dateLabel: "Jul 24, 2026",
+      shortDateLabel: "Jul 24",
+      relativeLabel: "Due tomorrow",
+    },
     mutableData: {},
     timeline: [],
     comments: [],

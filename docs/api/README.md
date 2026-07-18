@@ -361,6 +361,7 @@ status        one request status
 createdFrom   inclusive ISO-8601 datetime
 createdTo     exclusive ISO-8601 datetime
 assignedTo    me, unassigned, or an active user id for ADMIN
+due           overdue, due-soon, on-track, or no-due-date
 ```
 
 Example:
@@ -372,6 +373,8 @@ Example:
 Filters combine with `AND` and pagination uses the same stable ordering as the Internal API request list: `created_at DESC, id DESC`. The dashboard does not expose email or phone search in this version.
 
 The request list also includes assignment ownership. `ADMIN` users can filter by themselves, unassigned requests, or any active `ADMIN`/`OPERATOR`. `OPERATOR` users can filter by themselves or unassigned requests, while `VIEWER` users can filter only by unassigned state. The URL-derived **My requests** and **Unassigned** workload views do not create separate stored state, and assignment filters survive pagination.
+
+Due dates are manual operational deadlines stored in UTC. The dashboard derives SLA state at request time: terminal requests are **Completed**, active requests without a deadline have **No due date**, past deadlines are **Overdue**, deadlines within the next 48 hours are **Due soon**, and later deadlines are **On track**. The URL-derived **Overdue** and **Due soon** views use these same rules, and due filters survive search and pagination.
 
 Request detail pages are available at:
 
@@ -413,6 +416,7 @@ POST /admin/requests/:publicId/notifications
 POST /admin/requests/:publicId/data
 POST /admin/requests/:publicId/events
 POST /admin/requests/:publicId/assignment
+POST /admin/requests/:publicId/due-date
 ```
 
 These routes never call `/api/v1`, never use `x-api-key`, and never expose Internal API keys or API client keys to the browser. Actor identity is derived only from the secure admin session:
@@ -427,6 +431,10 @@ Caller-submitted actor fields are ignored. Actions require same-origin POST subm
 Request assignment is optional operational metadata and does not alter workflow status, require assignment before processing, create a comment, or notify the consumer. `ADMIN` may assign or reassign a request to any active `ADMIN` or `OPERATOR`, and may unassign it. `OPERATOR` may claim an unassigned request for themselves and may unassign their own request, but cannot assign another user or take ownership from someone else. `VIEWER` remains read-only.
 
 Assignment changes are atomic and create `REQUEST_ASSIGNED` or `REQUEST_UNASSIGNED` audit events with `ADMIN_USER` actor identity. Event and webhook data contains only the relevant admin user ids; it never contains admin email, requester PII, encrypted values, or hashes. Historical assignment remains visible when a user later becomes inactive, while new assignments target active users only.
+
+`ADMIN` users may set, change, or clear any request due date. `OPERATOR` users may do so only when a request is unassigned or assigned to themselves. `VIEWER` remains read-only. Due-date changes are atomic and create `REQUEST_DUE_DATE_SET`, `REQUEST_DUE_DATE_UPDATED`, or `REQUEST_DUE_DATE_CLEARED` with ISO-8601 dates and authenticated `ADMIN_USER` actor identity. They do not change request status, assignment, comments, or communications.
+
+Terminal requests preserve their historical `dueAt`, but derive **Completed** and never appear overdue. MagicTrust does not assign default deadlines, calculate business days, apply request-type SLA policies, send reminders, or run escalation jobs in this version.
 
 Status updates require a destination status and a trimmed reason of 1-2,000 characters. The dashboard offers transitions only while the request is non-terminal. Terminal statuses are:
 

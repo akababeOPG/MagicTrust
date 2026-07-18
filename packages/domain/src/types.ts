@@ -70,7 +70,10 @@ export type RequestEventType =
   | "CONSUMER_NOTIFICATION_FAILED"
   | "REQUEST_DATA_UPDATED"
   | "REQUEST_ASSIGNED"
-  | "REQUEST_UNASSIGNED";
+  | "REQUEST_UNASSIGNED"
+  | "REQUEST_DUE_DATE_SET"
+  | "REQUEST_DUE_DATE_UPDATED"
+  | "REQUEST_DUE_DATE_CLEARED";
 
 export type RequestEventCategory = "BUILT_IN" | "CUSTOM";
 
@@ -97,6 +100,9 @@ export type PrivacyRequest = {
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
+  dueAt?: Date | null;
+  dueAtSetAt?: Date | null;
+  dueAtSetByAdminUserId?: string | null;
 };
 
 export type RequestEvent = {

@@ -17,11 +17,15 @@ import {
 import {
   commentVisibilities,
   decryptOriginalSubmittedData,
+  deriveRequestSlaState,
+  formatDueDate,
+  formatDueRelative,
   requestStatuses,
   requestTypes,
   type JsonObject,
   type JsonValue,
   type RequestStatus,
+  type RequestSlaState,
   type RequestType,
 } from "@magictrust/domain";
 import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
@@ -83,6 +87,14 @@ export type AdminRequestListItem = {
   assignment: {
     displayName: string | null;
     isCurrentUser: boolean;
+  };
+  due: {
+    dueAt: string | null;
+    state: RequestSlaState;
+    stateLabel: string;
+    dateLabel: string;
+    shortDateLabel: string;
+    relativeLabel: string | null;
   };
 };
 
@@ -173,6 +185,12 @@ type AdminViewerContext = {
 
 const defaultAdminPageSize = 25;
 const maxAdminPageSize = 100;
+const dueFilterValues = [
+  "overdue",
+  "due-soon",
+  "on-track",
+  "no-due-date",
+] as const;
 const maxUploadSizeBytes = 10 * 1024 * 1024;
 const allowedUploadMimeTypes = new Set([
   "application/json",
@@ -211,6 +229,9 @@ const builtInEventTypes = new Set([
   "REQUEST_DATA_UPDATED",
   "REQUEST_ASSIGNED",
   "REQUEST_UNASSIGNED",
+  "REQUEST_DUE_DATE_SET",
+  "REQUEST_DUE_DATE_UPDATED",
+  "REQUEST_DUE_DATE_CLEARED",
 ]);
 const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;
 const maxAdminMutableDataBytes = 32 * 1024;
@@ -320,6 +341,8 @@ export async function listAdminRequests(
     return parsed;
   }
 
+  const now = dependencies.now();
+
   const assignmentOptions =
     context.role === "ADMIN"
       ? normalizeAssignmentOptions(
@@ -337,7 +360,10 @@ export async function listAdminRequests(
     return { ok: false, message: "Assigned user is not available." };
   }
 
-  const result = await dependencies.requestRepository.list(parsed.filters);
+  const result = await dependencies.requestRepository.list({
+    ...parsed.filters,
+    slaNow: now,
+  });
   const workflowRows = dependencies.requestRepository.findAdminListWorkflowData
     ? await dependencies.requestRepository.findAdminListWorkflowData(
         result.requests.map((request) => request.id),
@@ -369,7 +395,7 @@ export async function listAdminRequests(
       workflowByRequest,
       assignedUserById,
       assignmentOptions,
-      dependencies.now(),
+      now,
     ),
   };
 }
@@ -406,6 +432,7 @@ export async function getAdminRequestDetail(
     context,
     assignedUser ? adminUserDisplayName(assignedUser) : null,
     assignmentOptions,
+    dependencies.now(),
   );
 
   if (context.role !== "ADMIN" && context.role !== "OPERATOR") {
@@ -582,6 +609,80 @@ export async function updateAdminRequestAssignment(
       : assigned
         ? "Request is already assigned to that user."
         : "Request is already unassigned.",
+  });
+}
+
+export async function updateAdminRequestDueDate(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const action = z.enum(["set", "clear"]).safeParse(formData.get("action"));
+
+  if (!action.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Due date action is invalid.",
+    });
+  }
+
+  const dueAt =
+    action.data === "set" ? parseUtcDueDateInput(formData.get("dueAt")) : null;
+
+  if (action.data === "set" && !dueAt) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Enter a valid due date and time in UTC.",
+    });
+  }
+
+  const actor = {
+    id: adminSession.adminUserId,
+    role: adminSession.role,
+  };
+  const result =
+    action.data === "clear"
+      ? await dependencies.requestRepository.clearRequestDueDate(
+          publicId,
+          actor,
+        )
+      : await dependencies.requestRepository.setRequestDueDate(
+          publicId,
+          dueAt!,
+          actor,
+        );
+
+  if (!result.ok) {
+    if (result.code === "NOT_FOUND") {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+
+    return actionError(
+      "FORBIDDEN",
+      "You are not allowed to change this due date.",
+      403,
+    );
+  }
+
+  const set = action.data === "set";
+
+  return redirectToRequestDetail(request, publicId, {
+    success: result.changed
+      ? set
+        ? "Due date saved."
+        : "Due date cleared."
+      : set
+        ? "Due date is already set to that time."
+        : "Request already has no due date.",
   });
 }
 
@@ -1642,6 +1743,12 @@ export function parseAdminRequestListSearchParams(
     return status;
   }
 
+  const due = parseSingleEnum(searchParams.get("due"), dueFilterValues, "due");
+
+  if (!due.ok) {
+    return due;
+  }
+
   const createdFrom = parseDateFilter(searchParams.get("createdFrom"));
   const createdTo = parseDateFilter(searchParams.get("createdTo"));
 
@@ -1739,10 +1846,26 @@ export function parseAdminRequestListSearchParams(
       createdFrom: createdFrom.value,
       createdTo: createdTo.value,
       assignedToAdminUserId,
+      dueState: due.value ? dueFilterState(due.value) : undefined,
       cursor: cursor.value,
       limit: limit.value,
     },
   };
+}
+
+function dueFilterState(
+  value: (typeof dueFilterValues)[number],
+): Exclude<RequestSlaState, "COMPLETED"> {
+  switch (value) {
+    case "overdue":
+      return "OVERDUE";
+    case "due-soon":
+      return "DUE_SOON";
+    case "on-track":
+      return "ON_TRACK";
+    case "no-due-date":
+      return "NO_DUE_DATE";
+  }
 }
 
 export function encodeAdminRequestListCursor(cursor: {
@@ -1778,6 +1901,7 @@ export function normalizeAdminRequestDetail(
   context: AdminViewerContext = { role: "VIEWER", adminUserId: null },
   assignedToDisplayName: string | null = null,
   assignmentOptions: AdminAssignmentOption[] = [],
+  now: Date = new Date(),
 ): AdminRequestDetailView {
   const effectiveAssignedToDisplayName = request.assignedToAdminUserId
     ? (assignedToDisplayName ??
@@ -1789,6 +1913,7 @@ export function normalizeAdminRequestDetail(
       request,
       context,
       effectiveAssignedToDisplayName,
+      now,
     ),
     assignment: {
       displayName: effectiveAssignedToDisplayName,
@@ -2053,6 +2178,7 @@ function normalizeAdminRequestList(
             ? (assignedUserById.get(request.assignedToAdminUserId) ??
                 (context.role === "VIEWER" ? "Assigned" : "Admin user"))
             : null,
+          now,
         ),
         requesterSummary: normalizeRequesterSummary(workflow, context.role),
         ageDays: Math.max(
@@ -2236,6 +2362,7 @@ function normalizeAdminRequestListItem(request: {
   createdAt: Date;
   updatedAt: Date;
   assignedToAdminUserId?: string | null;
+  dueAt?: Date | null;
 }): AdminRequestListItem;
 function normalizeAdminRequestListItem(
   request: {
@@ -2252,9 +2379,11 @@ function normalizeAdminRequestListItem(
     createdAt: Date;
     updatedAt: Date;
     assignedToAdminUserId?: string | null;
+    dueAt?: Date | null;
   },
   context?: AdminViewerContext,
   assignedToDisplayName?: string | null,
+  now?: Date,
 ): AdminRequestListItem;
 function normalizeAdminRequestListItem(
   request: {
@@ -2271,9 +2400,11 @@ function normalizeAdminRequestListItem(
     createdAt: Date;
     updatedAt: Date;
     assignedToAdminUserId?: string | null;
+    dueAt?: Date | null;
   },
   context: AdminViewerContext = { role: "VIEWER", adminUserId: null },
   assignedToDisplayName: string | null = null,
+  now: Date = new Date(),
 ): AdminRequestListItem {
   return {
     id: request.id,
@@ -2290,7 +2421,47 @@ function normalizeAdminRequestListItem(
         Boolean(context.adminUserId) &&
         request.assignedToAdminUserId === context.adminUserId,
     },
+    due: normalizeRequestDueSummary(request, now),
   };
+}
+
+function normalizeRequestDueSummary(
+  request: Pick<RequestDetails, "status" | "dueAt">,
+  now: Date,
+): AdminRequestListItem["due"] {
+  const dueAt = request.dueAt ?? null;
+  const state = deriveRequestSlaState({ status: request.status, dueAt, now });
+
+  return {
+    dueAt: dueAt?.toISOString() ?? null,
+    state,
+    stateLabel: requestSlaStateLabel(state),
+    dateLabel: dueAt ? formatDueDate(dueAt) : "No due date",
+    shortDateLabel: dueAt ? formatDueDate(dueAt, "short") : "—",
+    relativeLabel:
+      state === "COMPLETED"
+        ? dueAt
+          ? "Completed"
+          : null
+        : dueAt
+          ? formatDueRelative(dueAt, now)
+          : null,
+  };
+}
+
+function requestSlaStateLabel(state: RequestSlaState): string {
+  switch (state) {
+    case "NO_DUE_DATE":
+      return "No due date";
+    case "ON_TRACK":
+      return "On track";
+    case "DUE_SOON":
+      return "Due soon";
+    case "OVERDUE":
+      return "Overdue";
+    case "COMPLETED":
+      return "Completed";
+  }
 }
 
 function parseLimit(
@@ -2345,6 +2516,25 @@ function parseDateFilter(
   return Number.isNaN(date.getTime())
     ? { ok: false }
     : { ok: true, value: date };
+}
+
+function parseUtcDueDateInput(value: FormDataEntryValue | null): Date | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) {
+    const date = new Date(`${value}:00.000Z`);
+
+    return !Number.isNaN(date.getTime()) &&
+      date.toISOString().slice(0, 16) === value
+      ? date
+      : null;
+  }
+
+  const parsed = z.string().datetime({ offset: true }).safeParse(value);
+
+  if (!parsed.success) return null;
+  const date = new Date(parsed.data);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function parseAdminListCursor(
@@ -2684,6 +2874,12 @@ function missingDatabaseRequestRepository(): RequestRepository {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     unassignRequest() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    setRequestDueDate() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    clearRequestDueDate() {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     updateStatus() {
