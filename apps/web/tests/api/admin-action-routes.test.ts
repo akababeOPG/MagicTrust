@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   createAdminCustomEvent: vi.fn(),
   resendAdminIdentityVerification: vi.fn(),
   sendAdminDataAccessResponse: vi.fn(),
-  completeAdminDeletionRequest: vi.fn(),
+  completeAdminGuidedRequest: vi.fn(),
 }));
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -33,7 +33,7 @@ vi.mock("@/lib/admin-dashboard", () => ({
   createAdminCustomEvent: mocks.createAdminCustomEvent,
   resendAdminIdentityVerification: mocks.resendAdminIdentityVerification,
   sendAdminDataAccessResponse: mocks.sendAdminDataAccessResponse,
-  completeAdminDeletionRequest: mocks.completeAdminDeletionRequest,
+  completeAdminGuidedRequest: mocks.completeAdminGuidedRequest,
 }));
 
 describe("admin action routes", () => {
@@ -396,7 +396,7 @@ describe("admin action routes", () => {
     expect(mocks.sendAdminDataAccessResponse).not.toHaveBeenCalled();
   });
 
-  test("VIEWER cannot complete a guided deletion request", async () => {
+  test("VIEWER cannot complete a guided request", async () => {
     mocks.requireAdminRole.mockResolvedValueOnce(
       Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
     );
@@ -411,6 +411,6 @@ describe("admin action routes", () => {
     );
 
     expect(response.status).toBe(403);
-    expect(mocks.completeAdminDeletionRequest).not.toHaveBeenCalled();
+    expect(mocks.completeAdminGuidedRequest).not.toHaveBeenCalled();
   });
 });

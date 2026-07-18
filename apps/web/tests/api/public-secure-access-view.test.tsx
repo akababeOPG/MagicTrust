@@ -116,6 +116,36 @@ describe("public secure access view", () => {
     expect(html).toContain(title);
   });
 
+  test("renders completed DO_NOT_CONTACT copy without an empty files section", () => {
+    const html = renderSecureAccess({
+      type: "DO_NOT_CONTACT",
+      status: "SUCCESS",
+      completedAt: "2026-07-18T12:00:00.000Z",
+      publicAttachments: [],
+    });
+
+    expect(html).toContain("Your do not contact request is complete");
+    expect(html).toContain("Your request has been processed.");
+    expect(html).not.toContain("Your response</h2>");
+    expect(html).not.toContain("Your response files");
+  });
+
+  test("renders completed UNSUBSCRIBE copy with secure public files", () => {
+    const html = renderSecureAccess({
+      type: "UNSUBSCRIBE",
+      status: "SUCCESS",
+      completedAt: "2026-07-18T12:00:00.000Z",
+      publicAttachments: [responseFile()],
+    });
+
+    expect(html).toContain("Your unsubscribe request is complete");
+    expect(html).toContain("Your unsubscribe request has been processed.");
+    expect(html).toContain("Download response");
+    expect(html).not.toContain("storageKey");
+    expect(html).not.toContain("assignment");
+    expect(html).not.toContain("DIRECT_PROCESSING");
+  });
+
   test("hides empty updates and empty response UI while processing", () => {
     const html = renderSecureAccess({
       status: "PROCESSING",

@@ -28,6 +28,7 @@ vi.mock("server-only", () => ({}));
 import {
   addAdminInternalNote,
   completeAdminDeletionRequest,
+  completeAdminGuidedRequest,
   createAdminRequestComment,
   createAdminCustomEvent,
   downloadAdminAttachment,
@@ -2182,6 +2183,170 @@ describe("admin dashboard", () => {
         }),
       ]),
     );
+  });
+
+  test.each(["DO_NOT_CONTACT", "UNSUBSCRIBE"] as const)(
+    "%s completes through the shared DIRECT_PROCESSING orchestration without files",
+    async (type) => {
+      const dependencies = createInMemoryDependencies();
+      const request = dependencies.state.requests[0]!;
+      request.type = type;
+      request.status = "PROCESSING";
+      dependencies.state.attachments.splice(0);
+      const body = new FormData();
+      body.set("confirmed", "on");
+      body.set("completionNote", "The requested action was completed.");
+
+      await completeAdminGuidedRequest(
+        guidedRequest("complete", body),
+        "req_one",
+        adminSession(),
+        dependencies,
+      );
+
+      expect(request.status).toBe("SUCCESS");
+      expect(dependencies.state.sentEmails).toHaveLength(1);
+      expect(dependencies.state.sentEmails[0]).toMatchObject({
+        subject: "Your request has been completed",
+        body: expect.stringContaining("Your request has been completed."),
+      });
+      expect(dependencies.state.sentEmails[0]?.body).toContain(
+        "Reference number: req_one",
+      );
+      expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+        "Response files are available",
+      );
+      expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+        "The requested action was completed.",
+      );
+      expect(dependencies.state.comments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requestId: "request-one",
+            visibility: "INTERNAL",
+            body: "The requested action was completed.",
+          }),
+        ]),
+      );
+      expect(dependencies.state.accessTokens).toHaveLength(0);
+    },
+  );
+
+  test("DIRECT_PROCESSING completion includes secure access for public files", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.type = "UNSUBSCRIBE";
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    dependencies.state.attachments.push({
+      ...dependencies.state.attachments[0]!,
+      id: "attachment-two",
+      fileName: "supporting-response.txt",
+      storageKey: "private/supporting-response.txt",
+    });
+    const body = new FormData();
+    body.set("confirmed", "on");
+
+    await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.requests[0]?.status).toBe("SUCCESS");
+    expect(dependencies.state.accessTokens).toHaveLength(1);
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Response files are available securely.",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Secure access link:",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+      "requests/request-one/attachments",
+    );
+  });
+
+  test("DIRECT_PROCESSING failed completion retries without duplicate side effects", async () => {
+    const dependencies = createInMemoryDependencies({ emailShouldFail: true });
+    dependencies.state.requests[0]!.type = "DO_NOT_CONTACT";
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    dependencies.state.attachments.splice(0);
+    const body = new FormData();
+    body.set("confirmed", "on");
+    body.set("completionNote", "Suppression was completed.");
+
+    const failed = await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(failed.headers.get("location")).toContain(
+      "request+remains+in+processing",
+    );
+
+    dependencies.state.emailShouldFail = false;
+    await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+    await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.requests[0]?.status).toBe("SUCCESS");
+    expect(
+      dependencies.state.comments.filter(
+        (comment) => comment.body === "Suppression was completed.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.privacyRequestId === "request-one" &&
+          event.type === "STATUS_CHANGED" &&
+          event.data.newStatus === "SUCCESS",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.privacyRequestId === "request-one" &&
+          event.type === "CONSUMER_NOTIFICATION_SENT",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.communications.filter(
+        (communication) =>
+          communication.requestId === "request-one" &&
+          communication.subject === "Your request has been completed",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("DIRECT_PROCESSING completion requires explicit confirmation", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.type = "UNSUBSCRIBE";
+    dependencies.state.requests[0]!.status = "PROCESSING";
+
+    const response = await completeAdminGuidedRequest(
+      guidedRequest("complete", new FormData()),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "Confirm+that+this+request+has+been+processed",
+    );
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
   });
 
   test("DATA_DELETION completes without files and keeps its note internal", async () => {

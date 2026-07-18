@@ -717,18 +717,33 @@ function getDirectProcessingNextStep(
         actionLabel: "Start processing",
       });
     case "PROCESSING":
+      if (request.latestResponseDeliveryStatus === "FAILED") {
+        return nextStep({
+          key: "retry-completion",
+          title: "Completion notification could not be sent",
+          description:
+            "The request remains in processing. Confirm the completed work and retry the notification.",
+          listLabel: "Retry completion",
+          actionType: "COMPLETE_REQUEST",
+          actionLabel: "Retry completion",
+        });
+      }
+
       return nextStep({
         key: "direct-processing",
-        title: "Request in progress",
+        title: "Complete request",
         description:
-          "Complete the required internal action, add any relevant notes or response files, then complete the request.",
+          "Complete the required internal action, add any relevant notes or response files, then notify the requester and complete the request.",
         listLabel: "Complete request",
+        actionType: "COMPLETE_REQUEST",
+        actionLabel: "Complete request",
       });
     case "SUCCESS":
       return nextStep({
         key: "direct-completed",
         title: "Request completed",
-        description: "This request has been completed.",
+        description:
+          "This request has been completed and the requester has been notified.",
         listLabel: "Completed",
         terminal: true,
       });

@@ -707,6 +707,7 @@ function GuidedRequestDetail({
   const nextStep = getRequestNextStep(workflowContext);
   const workflow = getWorkflowDefinitionForRequest(workflowContext);
   const responsePresentation = guidedResponsePresentation(workflow.id);
+  const completionPresentation = guidedCompletionPresentation(workflow.id);
 
   return (
     <main className="admin-page guided-request-page">
@@ -773,6 +774,7 @@ function GuidedRequestDetail({
             latestVerificationAt={latestVerification?.createdAt ?? null}
             terminalEvent={terminalEvent}
             deliveryCommunication={deliveryCommunication}
+            completionPresentation={completionPresentation}
           />
         </div>
       </section>
@@ -1299,6 +1301,7 @@ function GuidedRequestNextStep({
   latestVerificationAt,
   terminalEvent,
   deliveryCommunication,
+  completionPresentation,
 }: {
   request: AdminRequestDetailView;
   nextStep: RequestWorkflowNextStep;
@@ -1310,6 +1313,7 @@ function GuidedRequestNextStep({
   terminalEvent: AdminRequestDetailView["timeline"][number] | undefined;
   deliveryCommunication:
     AdminRequestDetailView["communications"][number] | null;
+  completionPresentation: GuidedCompletionPresentation;
 }) {
   if (nextStep.actionType === "RESEND_VERIFICATION")
     return (
@@ -1372,9 +1376,7 @@ function GuidedRequestNextStep({
           >
             <label className="admin-checkbox-label">
               <input name="confirmed" type="checkbox" required />
-              <span>
-                I confirm that the deletion request has been processed.
-              </span>
+              <span>{completionPresentation.confirmationLabel}</span>
             </label>
             <label>
               Internal completion note (optional)
@@ -1382,7 +1384,7 @@ function GuidedRequestNextStep({
               <small>This note is visible only to your internal team.</small>
             </label>
             <AdminConfirmSubmitButton
-              confirmation="Complete this deletion request and notify the requester?"
+              confirmation={completionPresentation.dialogConfirmation}
               variant="primary"
             >
               {nextStep.actionLabel ?? "Complete request"}
@@ -1554,6 +1556,15 @@ function activityLabel(
     }
   }
 
+  if (workflowId === "DIRECT_PROCESSING") {
+    if (event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS") {
+      return "Request completed";
+    }
+    if (event.type === "CONSUMER_NOTIFICATION_SENT") {
+      return "Requester notified";
+    }
+  }
+
   if (
     event.type === "STATUS_CHANGED" &&
     event.data.newStatus === "PROCESSING"
@@ -1604,6 +1615,29 @@ function guidedResponsePresentation(workflowId: RequestWorkflowId): {
   };
 }
 
+type GuidedCompletionPresentation = {
+  confirmationLabel: string;
+  dialogConfirmation: string;
+};
+
+function guidedCompletionPresentation(
+  workflowId: RequestWorkflowId,
+): GuidedCompletionPresentation {
+  if (workflowId === "DATA_DELETION_STANDARD") {
+    return {
+      confirmationLabel:
+        "I confirm that the deletion request has been processed.",
+      dialogConfirmation:
+        "Complete this deletion request and notify the requester?",
+    };
+  }
+
+  return {
+    confirmationLabel: "I confirm that this request has been processed.",
+    dialogConfirmation: "Complete this request and notify the requester?",
+  };
+}
+
 function friendlyFeedback(message: string, kind: "success" | "error"): string {
   const safeMessages = new Set([
     "Verification email sent.",
@@ -1616,6 +1650,7 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Attachment upload was already recorded.",
     "Response sent and request completed.",
     "Deletion request completed.",
+    "Request completed.",
     "This request is already completed.",
     "Status updated.",
     "Request assigned.",
@@ -1636,6 +1671,7 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "This request is not ready for completion.",
     "This completion action is not available for this request.",
     "Confirm that the deletion request has been processed.",
+    "Confirm that this request has been processed.",
     "Completion notification could not be sent. The request remains in processing.",
     "This request is not ready to process.",
     "Internal note is required.",

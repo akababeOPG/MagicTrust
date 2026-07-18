@@ -105,14 +105,26 @@ describe("request workflow definitions", () => {
       actionType: "START_PROCESSING",
     });
     expect(getRequestNextStep(direct("PROCESSING"))).toMatchObject({
-      title: "Request in progress",
+      title: "Complete request",
       description:
-        "Complete the required internal action, add any relevant notes or response files, then complete the request.",
+        "Complete the required internal action, add any relevant notes or response files, then notify the requester and complete the request.",
       listLabel: "Complete request",
-      actionType: "NONE",
+      actionType: "COMPLETE_REQUEST",
+    });
+    expect(
+      getRequestNextStep({
+        ...direct("PROCESSING"),
+        latestResponseDeliveryStatus: "FAILED",
+      }),
+    ).toMatchObject({
+      title: "Completion notification could not be sent",
+      listLabel: "Retry completion",
+      actionType: "COMPLETE_REQUEST",
     });
     expect(getRequestNextStep(direct("SUCCESS"))).toMatchObject({
       title: "Request completed",
+      description:
+        "This request has been completed and the requester has been notified.",
       listLabel: "Completed",
       terminal: true,
     });

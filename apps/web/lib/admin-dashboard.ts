@@ -30,6 +30,7 @@ import {
   type RequestStatus,
   type RequestSlaState,
   type RequestType,
+  type RequestWorkflowId,
 } from "@magictrust/domain";
 import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
 import type { EmailProvider } from "@magictrust/email";
@@ -1531,7 +1532,7 @@ export async function sendAdminDataAccessResponse(
   });
 }
 
-export async function completeAdminDeletionRequest(
+export async function completeAdminGuidedRequest(
   request: Request,
   publicId: string,
   adminSession: AdminSession,
@@ -1545,6 +1546,23 @@ export async function completeAdminDeletionRequest(
 
   if (!formData) {
     return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const completion = guidedCompletionConfig(
+    getWorkflowDefinitionForRequest(existing).id,
+  );
+
+  if (!completion) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This completion action is not available for this request.",
+    });
   }
 
   const parsed = z
@@ -1561,22 +1579,7 @@ export async function completeAdminDeletionRequest(
 
   if (!parsed.success) {
     return redirectToRequestDetail(request, publicId, {
-      error: "Confirm that the deletion request has been processed.",
-    });
-  }
-
-  const existing =
-    await dependencies.requestRepository.findByIdOrPublicId(publicId);
-
-  if (!existing) {
-    return actionError("NOT_FOUND", "Request not found.", 404);
-  }
-
-  if (
-    getWorkflowDefinitionForRequest(existing).id !== "DATA_DELETION_STANDARD"
-  ) {
-    return redirectToRequestDetail(request, publicId, {
-      error: "This completion action is not available for this request.",
+      error: completion.confirmationError,
     });
   }
 
@@ -1626,7 +1629,6 @@ export async function completeAdminDeletionRequest(
   );
   const attachment = publicAttachments[0] ?? null;
   const notificationType = attachment ? "FILE_AVAILABLE" : "REQUEST_COMPLETED";
-  const completionSubject = "Your data deletion request has been completed";
   const alreadyNotified = existing.events.some((event) => {
     const communicationId = event.data.communicationId;
 
@@ -1637,7 +1639,7 @@ export async function completeAdminDeletionRequest(
       existing.communications.some(
         (communication) =>
           communication.id === communicationId &&
-          communication.subject === completionSubject &&
+          communication.subject === completion.subject &&
           communication.status === "SENT",
       )
     );
@@ -1656,17 +1658,16 @@ export async function completeAdminDeletionRequest(
       headers: { origin: new URL(request.url).origin },
       body: notificationForm,
     });
-    const completionMessage = attachment
-      ? "Your data deletion request has been completed.\n\nResponse files are available securely."
-      : "Your data deletion request has been completed.";
     const delivery = await sendAdminConsumerNotification(
       notificationRequest,
       publicId,
       adminSession,
       dependencies,
       {
-        subject: completionSubject,
-        message: completionMessage,
+        subject: completion.subject,
+        message: attachment
+          ? completion.messageWithFiles
+          : completion.messageWithoutFiles,
         status: "SUCCESS",
       },
     );
@@ -1690,7 +1691,7 @@ export async function completeAdminDeletionRequest(
       status: "SUCCESS",
       actorType: "ADMIN_USER",
       actorId: adminSession.adminUserId,
-      reason: "Deletion request completed from admin dashboard",
+      reason: completion.statusReason,
     },
   );
 
@@ -1699,8 +1700,50 @@ export async function completeAdminDeletionRequest(
   }
 
   return redirectToRequestDetail(request, publicId, {
-    success: "Deletion request completed.",
+    success: completion.successMessage,
   });
+}
+
+export const completeAdminDeletionRequest = completeAdminGuidedRequest;
+
+type GuidedCompletionConfig = {
+  confirmationError: string;
+  subject: string;
+  messageWithoutFiles: string;
+  messageWithFiles: string;
+  statusReason: string;
+  successMessage: string;
+};
+
+function guidedCompletionConfig(
+  workflowId: RequestWorkflowId,
+): GuidedCompletionConfig | null {
+  if (workflowId === "DATA_DELETION_STANDARD") {
+    return {
+      confirmationError:
+        "Confirm that the deletion request has been processed.",
+      subject: "Your data deletion request has been completed",
+      messageWithoutFiles: "Your data deletion request has been completed.",
+      messageWithFiles:
+        "Your data deletion request has been completed.\n\nResponse files are available securely.",
+      statusReason: "Deletion request completed from admin dashboard",
+      successMessage: "Deletion request completed.",
+    };
+  }
+
+  if (workflowId === "DIRECT_PROCESSING") {
+    return {
+      confirmationError: "Confirm that this request has been processed.",
+      subject: "Your request has been completed",
+      messageWithoutFiles: "Your request has been completed.",
+      messageWithFiles:
+        "Your request has been completed.\n\nResponse files are available securely.",
+      statusReason: "Request completed from admin dashboard",
+      successMessage: "Request completed.",
+    };
+  }
+
+  return null;
 }
 
 export async function updateAdminMutableData(

@@ -176,6 +176,12 @@ function secureHeroCopy(access: PublicSecureAccessData): {
     return dataDeletionSecureHeroCopy(access);
   }
 
+  const directProcessingCopy = directProcessingCompletedHeroCopy(access);
+
+  if (directProcessingCopy) {
+    return directProcessingCopy;
+  }
+
   if (access.status === "SUCCESS" && access.publicAttachments.length > 0) {
     return {
       title: "Your response is ready",
@@ -236,6 +242,26 @@ function secureHeroCopy(access: PublicSecureAccessData): {
         description: "We'll review your request and keep you updated here.",
       };
   }
+}
+
+const directProcessingCompletedCopy: Partial<
+  Record<RequestType, { title: string; description: string }>
+> = {
+  DO_NOT_CONTACT: {
+    title: "Your do not contact request is complete",
+    description: "Your request has been processed.",
+  },
+  UNSUBSCRIBE: {
+    title: "Your unsubscribe request is complete",
+    description: "Your unsubscribe request has been processed.",
+  },
+};
+
+function directProcessingCompletedHeroCopy(
+  access: PublicSecureAccessData,
+): { title: string; description: string } | null {
+  if (access.status !== "SUCCESS") return null;
+  return directProcessingCompletedCopy[access.type] ?? null;
 }
 
 function dataDeletionSecureHeroCopy(access: PublicSecureAccessData): {

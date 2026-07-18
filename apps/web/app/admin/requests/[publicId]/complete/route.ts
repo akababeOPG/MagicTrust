@@ -1,6 +1,6 @@
 import { requireAdminRole } from "@/lib/admin-auth";
 import {
-  completeAdminDeletionRequest,
+  completeAdminGuidedRequest,
   createAdminDashboardDependencies,
 } from "@/lib/admin-dashboard";
 
@@ -14,7 +14,7 @@ export async function POST(
 
   if (session instanceof Response) return session;
 
-  return completeAdminDeletionRequest(
+  return completeAdminGuidedRequest(
     request,
     (await context.params).publicId,
     session,

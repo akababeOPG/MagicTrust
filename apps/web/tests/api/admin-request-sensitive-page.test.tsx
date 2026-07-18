@@ -283,19 +283,48 @@ describe("admin sensitive request page", () => {
 
     mocks.detail.status = "PROCESSING";
     const processing = await renderPage(AdminRequestDetailPage);
-    expect(processing).toContain("Request in progress");
+    expect(processing).toContain("Complete request");
     expect(processing).toContain(
-      "Complete the required internal action, add any relevant notes or response files, then complete the request.",
+      "Complete the required internal action, add any relevant notes or response files, then notify the requester and complete the request.",
     );
     expect(processing).toContain("Upload response file");
+    expect(processing).toContain(
+      "I confirm that this request has been processed.",
+    );
+    expect(processing).toContain('action="/admin/requests/req_one/complete"');
     expect(processing).not.toContain(
       "I confirm that the deletion request has been processed.",
     );
 
     mocks.detail.status = "SUCCESS";
     mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    mocks.detail.timeline = [
+      {
+        id: "direct-completed",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        data: { newStatus: "SUCCESS" },
+      },
+      {
+        id: "direct-notified",
+        type: "CONSUMER_NOTIFICATION_SENT",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        data: { notificationType: "REQUEST_COMPLETED" },
+      },
+    ];
     const completed = await renderPage(AdminRequestDetailPage);
     expect(completed).toContain("Request completed");
+    expect(completed).toContain(
+      "This request has been completed and the requester has been notified.",
+    );
+    expect(completed).toContain("Requester notified");
+    expect(completed).not.toContain("admin-user-secret");
     expect(completed).not.toContain("Delivered successfully");
   });
 

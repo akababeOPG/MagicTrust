@@ -69,6 +69,14 @@ temporary `GENERIC_REQUEST` workflow. Consumers use the resolver for stages,
 progress, next-step guidance, and allowed status transitions instead of
 scattering request-type checks across routes and components.
 
+`DIRECT_PROCESSING` uses one shared guided completion path for all mapped
+request types. From `PROCESSING`, an authorized operator confirms the internal
+work, may save one internal completion note, may include zero or more public
+response files, and notifies the requester before MagicTrust records
+`SUCCESS`. Failed delivery leaves the request in `PROCESSING` for a retry
+without duplicating successful completion history. Request-intent wording is
+resolved separately in the consumer presentation layer.
+
 `DATA_DELETION_STANDARD` guides a request through verification, processing,
 optional response content or files, consumer notification, and completion. A
 successful completion email must be delivered before the request moves from
