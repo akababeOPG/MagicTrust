@@ -1194,6 +1194,11 @@ export async function sendAdminConsumerNotification(
   publicId: string,
   adminSession: AdminSession,
   dependencies: AdminDashboardDependencies,
+  overrides?: {
+    subject: string;
+    message: string;
+    status?: RequestStatus;
+  },
 ): Promise<Response> {
   if (!isSameOriginRequest(request)) {
     return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
@@ -1302,14 +1307,17 @@ export async function sendAdminConsumerNotification(
   }
 
   const trackingUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existing.publicId}`;
-  const message = notificationMessage(parsed.data.type, {
-    customMessage: parsed.data.message,
-    attachmentFileName: selectedAttachment?.fileName ?? null,
-  });
-  const subject = notificationSubject(parsed.data.type, existing);
+  const message =
+    overrides?.message ??
+    notificationMessage(parsed.data.type, {
+      customMessage: parsed.data.message,
+      attachmentFileName: selectedAttachment?.fileName ?? null,
+    });
+  const subject =
+    overrides?.subject ?? notificationSubject(parsed.data.type, existing);
   const body = notificationBody({
     publicId: existing.publicId,
-    status: existing.status,
+    status: overrides?.status ?? existing.status,
     message,
     trackingUrl,
     secureAccessUrl,
@@ -1520,6 +1528,178 @@ export async function sendAdminDataAccessResponse(
 
   return redirectToRequestDetail(request, publicId, {
     success: "Response sent and request completed.",
+  });
+}
+
+export async function completeAdminDeletionRequest(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const parsed = z
+    .object({
+      confirmed: z.literal("on"),
+      completionNote: z.string().trim().max(5_000).optional(),
+    })
+    .safeParse({
+      confirmed: formData.get("confirmed"),
+      completionNote: emptyToUndefined(
+        formData.get("completionNote")?.toString() ?? null,
+      ),
+    });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Confirm that the deletion request has been processed.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (
+    getWorkflowDefinitionForRequest(existing).id !== "DATA_DELETION_STANDARD"
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This completion action is not available for this request.",
+    });
+  }
+
+  if (existing.status === "SUCCESS") {
+    return redirectToRequestDetail(request, publicId, {
+      success: "This request is already completed.",
+    });
+  }
+
+  if (
+    getRequestNextStep(existing).actionType !== "COMPLETE_REQUEST" ||
+    !getAllowedWorkflowTransitions(existing).includes("SUCCESS")
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This request is not ready for completion.",
+    });
+  }
+
+  if (parsed.data.completionNote) {
+    const duplicateNote = existing.comments.some(
+      (comment) =>
+        comment.visibility === "INTERNAL" &&
+        comment.body === parsed.data.completionNote &&
+        comment.actorType === "ADMIN_USER" &&
+        comment.actorId === adminSession.adminUserId,
+    );
+
+    if (!duplicateNote) {
+      const note = await dependencies.requestRepository.addComment(
+        existing.id,
+        {
+          visibility: "INTERNAL",
+          body: parsed.data.completionNote,
+          actorType: "ADMIN_USER",
+          actorId: adminSession.adminUserId,
+        },
+      );
+
+      if (!note) {
+        return actionError("NOT_FOUND", "Request not found.", 404);
+      }
+    }
+  }
+
+  const publicAttachments = existing.attachments.filter(
+    (attachment) => attachment.visibility === "PUBLIC",
+  );
+  const attachment = publicAttachments[0] ?? null;
+  const notificationType = attachment ? "FILE_AVAILABLE" : "REQUEST_COMPLETED";
+  const completionSubject = "Your data deletion request has been completed";
+  const alreadyNotified = existing.events.some((event) => {
+    const communicationId = event.data.communicationId;
+
+    return (
+      event.type === "CONSUMER_NOTIFICATION_SENT" &&
+      event.data.notificationType === notificationType &&
+      typeof communicationId === "string" &&
+      existing.communications.some(
+        (communication) =>
+          communication.id === communicationId &&
+          communication.subject === completionSubject &&
+          communication.status === "SENT",
+      )
+    );
+  });
+
+  if (!alreadyNotified) {
+    const notificationForm = new FormData();
+    notificationForm.set("type", notificationType);
+
+    if (attachment) {
+      notificationForm.set("attachmentId", attachment.id);
+    }
+
+    const notificationRequest = new Request(request.url, {
+      method: "POST",
+      headers: { origin: new URL(request.url).origin },
+      body: notificationForm,
+    });
+    const completionMessage = attachment
+      ? "Your data deletion request has been completed.\n\nResponse files are available securely."
+      : "Your data deletion request has been completed.";
+    const delivery = await sendAdminConsumerNotification(
+      notificationRequest,
+      publicId,
+      adminSession,
+      dependencies,
+      {
+        subject: completionSubject,
+        message: completionMessage,
+        status: "SUCCESS",
+      },
+    );
+    const location = delivery.headers.get("location");
+    const delivered =
+      delivery.status === 303 &&
+      location !== null &&
+      new URL(location).searchParams.has("success");
+
+    if (!delivered) {
+      return redirectToRequestDetail(request, publicId, {
+        error:
+          "Completion notification could not be sent. The request remains in processing.",
+      });
+    }
+  }
+
+  const updated = await dependencies.requestRepository.updateStatus(
+    existing.id,
+    {
+      status: "SUCCESS",
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+      reason: "Deletion request completed from admin dashboard",
+    },
+  );
+
+  if (!updated) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Deletion request completed.",
   });
 }
 

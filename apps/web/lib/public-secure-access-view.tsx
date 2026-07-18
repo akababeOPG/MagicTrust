@@ -172,6 +172,10 @@ function secureHeroCopy(access: PublicSecureAccessData): {
   title: string;
   description: string;
 } {
+  if (access.type === "DATA_DELETION") {
+    return dataDeletionSecureHeroCopy(access);
+  }
+
   if (access.status === "SUCCESS" && access.publicAttachments.length > 0) {
     return {
       title: "Your response is ready",
@@ -229,6 +233,62 @@ function secureHeroCopy(access: PublicSecureAccessData): {
     case "SUBMITTED":
       return {
         title: "Your request has been received",
+        description: "We'll review your request and keep you updated here.",
+      };
+  }
+}
+
+function dataDeletionSecureHeroCopy(access: PublicSecureAccessData): {
+  title: string;
+  description: string;
+} {
+  switch (access.status) {
+    case "PROCESSING":
+      return {
+        title: "Your deletion request is being processed",
+        description:
+          "We're working on your request. You'll receive an email when the process is complete.",
+      };
+    case "PENDING_VERIFICATION":
+      return {
+        title: "Verification required",
+        description:
+          "Please complete the email verification step before your request can be processed.",
+      };
+    case "VERIFIED":
+      return {
+        title: "Your request is ready for processing",
+        description:
+          "Your identity has been verified and your deletion request is waiting to be processed.",
+      };
+    case "WAITING_FOR_REQUESTER":
+      return {
+        title: "We need more information",
+        description:
+          "Your deletion request is waiting for additional information from you.",
+      };
+    case "REJECTED":
+      return {
+        title: "Your deletion request could not be completed",
+        description:
+          latestPublicComment(access) ??
+          "Review the updates below for available information about this outcome.",
+      };
+    case "CANCELLED":
+      return {
+        title: "Your deletion request was cancelled",
+        description:
+          latestPublicComment(access) ??
+          "Review the updates below for available information about this outcome.",
+      };
+    case "SUCCESS":
+      return {
+        title: "Your deletion request is complete",
+        description: "Your data deletion request has been completed.",
+      };
+    case "SUBMITTED":
+      return {
+        title: "Your deletion request has been received",
         description: "We'll review your request and keep you updated here.",
       };
   }

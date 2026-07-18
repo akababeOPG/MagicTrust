@@ -1029,6 +1029,25 @@ button:disabled,
   margin-top: var(--mt-space-5);
 }
 
+.admin-checkbox-label {
+  align-items: start;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius-control);
+  display: grid;
+  gap: var(--mt-space-4);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: var(--mt-space-5);
+}
+
+.admin-checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  accent-color: var(--mt-ink);
+  margin: 2px 0 0;
+  padding: 0;
+}
+
 .admin-table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -1813,7 +1832,7 @@ button:disabled,
   color: var(--mt-ink);
 }
 
-.data-access-workspace {
+.guided-request-workspace {
   align-items: flex-start;
   display: grid;
   gap: var(--mt-space-7);
@@ -1841,7 +1860,20 @@ button:disabled,
 }
 
 .guided-section-heading h2 {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   font-size: 18px;
+  gap: var(--mt-space-3);
+}
+
+.guided-section-optional {
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius-pill);
+  color: var(--mt-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px var(--mt-space-3);
 }
 
 .guided-section-heading p {
@@ -2405,7 +2437,7 @@ dialog.mt-dialog {
     min-width: 780px;
   }
 
-  .data-access-workspace {
+  .guided-request-workspace {
     grid-template-areas:
       "requester"
       "response"

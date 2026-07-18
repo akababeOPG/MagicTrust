@@ -201,6 +201,69 @@ describe("admin sensitive request page", () => {
     expect(completed).not.toContain("Notify Consumer");
   });
 
+  test("renders the four-stage guided DATA_DELETION workflow", async () => {
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    mocks.detail = requestDetail();
+    mocks.detail.type = "DATA_DELETION";
+    mocks.detail.status = "PENDING_VERIFICATION";
+
+    const verification = await renderPage(AdminRequestDetailPage);
+    expect(verification).toContain("Data deletion request");
+    expect(verification).toContain("Waiting for requester verification");
+    expect(verification).toContain("Resend verification email");
+    expect(verification).toContain("--request-progress-step-count:4");
+    expect(verification).toContain("Received");
+    expect(verification).toContain("Verified");
+    expect(verification).toContain("Processing");
+    expect(verification).toContain("Completed");
+    expect(verification).not.toContain("Response ready");
+
+    mocks.detail.status = "VERIFIED";
+    expect(await renderPage(AdminRequestDetailPage)).toContain(
+      "Start processing",
+    );
+
+    mocks.detail.status = "PROCESSING";
+    mocks.detail.attachments = [];
+    const processing = await renderPage(AdminRequestDetailPage);
+    expect(processing).toContain("Complete the deletion request");
+    expect(processing).toContain("Complete request");
+    expect(processing).toContain(
+      "I confirm that the deletion request has been processed.",
+    );
+    expect(processing).toContain("Internal completion note (optional)");
+    expect(processing).toContain("Response files");
+    expect(processing).toContain("Optional");
+    expect(processing).not.toContain("proof-of-deletion");
+
+    mocks.detail.status = "SUCCESS";
+    mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    const completed = await renderPage(AdminRequestDetailPage);
+    expect(completed).toContain("Deletion request completed");
+    expect(completed).toContain("requester has been notified");
+    expect(completed).not.toContain(
+      'action="/admin/requests/req_one/complete"',
+    );
+  });
+
+  test("keeps DATA_DELETION workflow controls read-only for VIEWER", async () => {
+    mocks.session.role = "VIEWER";
+    mocks.detail = requestDetail();
+    mocks.detail.type = "DATA_DELETION";
+    mocks.detail.status = "PROCESSING";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("Complete the deletion request");
+    expect(html).not.toContain('action="/admin/requests/req_one/complete"');
+    expect(html).not.toContain(
+      "I confirm that the deletion request has been processed.",
+    );
+    expect(html).not.toContain("More actions");
+  });
+
   test("DATA_ACCESS UI hides technical controls and client scripts", async () => {
     mocks.detail.status = "PROCESSING";
     const { default: AdminRequestDetailPage } =
@@ -309,6 +372,50 @@ describe("admin sensitive request page", () => {
     expect(html).not.toContain("admin-user-secret");
     expect(html).not.toContain("private/storage/key");
     expect(html).not.toContain("must-not-render");
+  });
+
+  test("DATA_DELETION activity uses workflow-specific natural language", async () => {
+    mocks.detail.type = "DATA_DELETION";
+    mocks.detail.status = "SUCCESS";
+    mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    mocks.detail.timeline = [
+      {
+        id: "event-completed",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        data: { newStatus: "SUCCESS", reason: "safe-reason" },
+      },
+      {
+        id: "event-notified",
+        type: "CONSUMER_NOTIFICATION_SENT",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        data: { notificationType: "REQUEST_COMPLETED" },
+      },
+      {
+        id: "event-processing",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-02T00:00:00.000Z",
+        data: { newStatus: "PROCESSING" },
+      },
+    ];
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("Deletion processing started");
+    expect(html).toContain("Requester notified");
+    expect(html).toContain("Deletion request completed");
+    expect(html).not.toContain("admin-user-secret");
+    expect(html).not.toContain("REQUEST_COMPLETED");
   });
 
   test.each([

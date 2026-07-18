@@ -27,6 +27,7 @@ vi.mock("server-only", () => ({}));
 
 import {
   addAdminInternalNote,
+  completeAdminDeletionRequest,
   createAdminRequestComment,
   createAdminCustomEvent,
   downloadAdminAttachment,
@@ -141,6 +142,7 @@ describe("admin dashboard", () => {
         publicId: "req_two",
         type: "DATA_DELETION",
         status: "PROCESSING",
+        nextStep: "Complete request",
         source: {
           channel: "FORM",
           siteKey: "magictrust-hosted",
@@ -2155,6 +2157,173 @@ describe("admin dashboard", () => {
     );
   });
 
+  test("DATA_DELETION completes without files and keeps its note internal", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[1]!;
+    const dueAt = new Date("2026-07-20T12:00:00.000Z");
+    request.dueAt = dueAt;
+    dependencies.state.assignments.set(request.id, {
+      assignedToAdminUserId: "admin-user-1",
+      assignedAt: new Date("2026-07-02T12:00:00.000Z"),
+      assignedByAdminUserId: "admin-user-1",
+    });
+    const body = new FormData();
+    body.set("confirmed", "on");
+    body.set("completionNote", "Deletion work confirmed internally.");
+
+    await completeAdminDeletionRequest(
+      guidedRequest("complete", body),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(request.status).toBe("SUCCESS");
+    expect(request.dueAt).toEqual(dueAt);
+    expect(dependencies.state.assignments.get(request.id)).toMatchObject({
+      assignedToAdminUserId: "admin-user-1",
+    });
+    expect(dependencies.state.comments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: "request-two",
+          visibility: "INTERNAL",
+          body: "Deletion work confirmed internally.",
+        }),
+      ]),
+    );
+    expect(dependencies.state.sentEmails[0]).toMatchObject({
+      subject: "Your data deletion request has been completed",
+      body: expect.stringContaining(
+        "Your data deletion request has been completed.",
+      ),
+    });
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Reference number: req_two",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Current status: SUCCESS",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+      "Response files are available",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+      "Deletion work confirmed internally.",
+    );
+    expect(dependencies.state.accessTokens).toHaveLength(0);
+  });
+
+  test("DATA_DELETION completion includes secure access when public files exist", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.attachments.push({
+      id: "deletion-response",
+      requestId: "request-two",
+      visibility: "PUBLIC",
+      fileName: "deletion-summary.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 120,
+      storageProvider: "vercel-blob",
+      storageKey: "private/deletion-summary.pdf",
+      checksum: "sha256-private",
+      actorType: "ADMIN_USER",
+      actorId: "admin-user-1",
+      createdAt: new Date("2026-07-03T00:00:00.000Z"),
+    });
+    const body = new FormData();
+    body.set("confirmed", "on");
+
+    await completeAdminDeletionRequest(
+      guidedRequest("complete", body),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.requests[1]?.status).toBe("SUCCESS");
+    expect(dependencies.state.accessTokens).toHaveLength(1);
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Response files are available securely.",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Secure access link:",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+      "private/deletion-summary.pdf",
+    );
+  });
+
+  test("failed DATA_DELETION completion retries without duplicate notes or success events", async () => {
+    const dependencies = createInMemoryDependencies({ emailShouldFail: true });
+    const body = new FormData();
+    body.set("confirmed", "on");
+    body.set("completionNote", "Deletion completed in source systems.");
+
+    const failed = await completeAdminDeletionRequest(
+      guidedRequest("complete", body),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(failed.status).toBe(303);
+    expect(dependencies.state.requests[1]?.status).toBe("PROCESSING");
+    expect(failed.headers.get("location")).toContain(
+      "request+remains+in+processing",
+    );
+
+    dependencies.state.emailShouldFail = false;
+    await completeAdminDeletionRequest(
+      guidedRequest("complete", body),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+    await completeAdminDeletionRequest(
+      guidedRequest("complete", body),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.requests[1]?.status).toBe("SUCCESS");
+    expect(
+      dependencies.state.comments.filter(
+        (comment) => comment.body === "Deletion completed in source systems.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "CONSUMER_NOTIFICATION_SENT",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("DATA_DELETION completion requires explicit confirmation", async () => {
+    const dependencies = createInMemoryDependencies();
+
+    const response = await completeAdminDeletionRequest(
+      guidedRequest("complete", new FormData()),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.requests[1]?.status).toBe("PROCESSING");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+    expect(
+      dependencies.state.comments.filter(
+        (comment) => comment.requestId === "request-two",
+      ),
+    ).toHaveLength(0);
+  });
+
   test("resend verification creates a token and email without changing status", async () => {
     const dependencies = createInMemoryDependencies();
     dependencies.state.requests[0]!.status = "PENDING_VERIFICATION";
@@ -2390,6 +2559,7 @@ function createInMemoryDependencies(
     adminUsers,
     assignments,
     sensitiveReads: 0,
+    emailShouldFail: options.emailShouldFail ?? false,
     uploadedFiles: [] as Array<{
       storageKey: string;
       contentType: string;
@@ -3238,7 +3408,7 @@ function createInMemoryDependencies(
     emailProvider: {
       provider: "resend",
       async sendEmail(input) {
-        if (options.emailShouldFail) {
+        if (state.emailShouldFail) {
           throw new Error("Email provider failed.");
         }
 

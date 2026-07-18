@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createAdminCustomEvent: vi.fn(),
   resendAdminIdentityVerification: vi.fn(),
   sendAdminDataAccessResponse: vi.fn(),
+  completeAdminDeletionRequest: vi.fn(),
 }));
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -32,6 +33,7 @@ vi.mock("@/lib/admin-dashboard", () => ({
   createAdminCustomEvent: mocks.createAdminCustomEvent,
   resendAdminIdentityVerification: mocks.resendAdminIdentityVerification,
   sendAdminDataAccessResponse: mocks.sendAdminDataAccessResponse,
+  completeAdminDeletionRequest: mocks.completeAdminDeletionRequest,
 }));
 
 describe("admin action routes", () => {
@@ -392,5 +394,23 @@ describe("admin action routes", () => {
 
     expect(response.status).toBe(403);
     expect(mocks.sendAdminDataAccessResponse).not.toHaveBeenCalled();
+  });
+
+  test("VIEWER cannot complete a guided deletion request", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/complete/route");
+
+    const response = await POST(
+      new Request("https://magictrust.test/admin/requests/req_two/complete", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ publicId: "req_two" }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.completeAdminDeletionRequest).not.toHaveBeenCalled();
   });
 });

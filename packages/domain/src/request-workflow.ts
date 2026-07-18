@@ -2,6 +2,7 @@ import { requestStatuses, type RequestStatus, type RequestType } from "./types";
 
 export const requestWorkflowIds = [
   "DATA_ACCESS_STANDARD",
+  "DATA_DELETION_STANDARD",
   "GENERIC_REQUEST",
 ] as const;
 
@@ -27,6 +28,7 @@ export type RequestWorkflowActionType =
   | "RESEND_VERIFICATION"
   | "START_PROCESSING"
   | "SEND_RESPONSE"
+  | "COMPLETE_REQUEST"
   | "WAIT_FOR_REQUESTER"
   | "REVIEW_REQUEST"
   | "NONE";
@@ -91,6 +93,26 @@ const dataAccessSteps = [
   },
 ] satisfies readonly RequestWorkflowStepDefinition[];
 
+const dataDeletionSteps = [
+  { id: "received", label: "Received", statusMapping: ["SUBMITTED"] },
+  {
+    id: "verified",
+    label: "Verified",
+    statusMapping: ["PENDING_VERIFICATION"],
+  },
+  {
+    id: "processing",
+    label: "Processing",
+    statusMapping: ["VERIFIED", "PROCESSING", "WAITING_FOR_REQUESTER"],
+  },
+  {
+    id: "completed",
+    label: "Completed",
+    statusMapping: ["SUCCESS"],
+    terminal: true,
+  },
+] satisfies readonly RequestWorkflowStepDefinition[];
+
 const genericSteps = [
   {
     id: "received",
@@ -119,6 +141,15 @@ export const dataAccessStandardWorkflow: RequestWorkflowDefinition =
     getNextStep: getDataAccessNextStep,
   });
 
+export const dataDeletionStandardWorkflow: RequestWorkflowDefinition =
+  createWorkflowDefinition({
+    id: "DATA_DELETION_STANDARD",
+    name: "Data deletion standard",
+    steps: dataDeletionSteps,
+    getProgressState: getDataDeletionProgressState,
+    getNextStep: getDataDeletionNextStep,
+  });
+
 export const genericRequestWorkflow: RequestWorkflowDefinition =
   createWorkflowDefinition({
     id: "GENERIC_REQUEST",
@@ -131,9 +162,14 @@ export const genericRequestWorkflow: RequestWorkflowDefinition =
 export function getWorkflowDefinitionForRequest(
   request: Pick<RequestWorkflowContext, "type">,
 ): RequestWorkflowDefinition {
-  return request.type === "DATA_ACCESS"
-    ? dataAccessStandardWorkflow
-    : genericRequestWorkflow;
+  switch (request.type) {
+    case "DATA_ACCESS":
+      return dataAccessStandardWorkflow;
+    case "DATA_DELETION":
+      return dataDeletionStandardWorkflow;
+    default:
+      return genericRequestWorkflow;
+  }
 }
 
 export function getRequestWorkflowProgress(
@@ -271,6 +307,40 @@ function getGenericProgressState(
   }
 
   return progressState(genericSteps, 0);
+}
+
+function getDataDeletionProgressState(
+  request: RequestWorkflowContext,
+): RequestWorkflowProgressState {
+  if (request.status === "SUCCESS") {
+    return progressState(dataDeletionSteps, dataDeletionSteps.length);
+  }
+
+  const verified = request.verified ?? false;
+  const processingStarted = request.processingStarted ?? false;
+
+  if (request.status === "REJECTED" || request.status === "CANCELLED") {
+    const achievedIndex = processingStarted ? 2 : verified ? 1 : 0;
+    return progressState(dataDeletionSteps, achievedIndex + 1, null, true);
+  }
+
+  if (request.status === "WAITING_FOR_REQUESTER") {
+    const currentIndex = processingStarted ? 2 : verified ? 1 : 0;
+    return progressState(
+      dataDeletionSteps,
+      currentIndex,
+      "WAITING_FOR_REQUESTER",
+    );
+  }
+
+  if (request.status === "PENDING_VERIFICATION") {
+    return progressState(dataDeletionSteps, 1);
+  }
+  if (request.status === "VERIFIED" || request.status === "PROCESSING") {
+    return progressState(dataDeletionSteps, 2);
+  }
+
+  return progressState(dataDeletionSteps, 0);
 }
 
 function progressState(
@@ -466,6 +536,98 @@ function getGenericNextStep(
         description: "This request is closed.",
         listLabel: "Cancelled",
         terminal: true,
+      });
+  }
+}
+
+function getDataDeletionNextStep(
+  request: RequestWorkflowContext,
+): RequestWorkflowNextStep {
+  switch (request.status) {
+    case "PENDING_VERIFICATION":
+      return nextStep({
+        key: "await-verification",
+        title: "Waiting for requester verification",
+        description:
+          "The requester must verify their email address before this request can be processed.",
+        listLabel: "Waiting for verification",
+        actionType: "RESEND_VERIFICATION",
+        actionLabel: "Resend verification email",
+      });
+    case "VERIFIED":
+      return nextStep({
+        key: "start-processing",
+        title: "Ready to process",
+        description:
+          "The requester has verified their identity. Start processing the deletion request when you are ready.",
+        listLabel: "Start processing",
+        actionType: "START_PROCESSING",
+        actionLabel: "Start processing",
+      });
+    case "PROCESSING":
+      if (request.latestResponseDeliveryStatus === "FAILED") {
+        return nextStep({
+          key: "retry-completion",
+          title: "Completion notification could not be sent",
+          description:
+            "The request remains in processing. Confirm the completed work and retry the notification.",
+          listLabel: "Retry completion",
+          actionType: "COMPLETE_REQUEST",
+          actionLabel: "Retry completion",
+        });
+      }
+
+      return nextStep({
+        key: "complete-deletion",
+        title: "Complete the deletion request",
+        description:
+          "Complete the required deletion work, add any relevant internal notes or response files, then notify the requester and complete the request.",
+        listLabel: "Complete request",
+        actionType: "COMPLETE_REQUEST",
+        actionLabel: "Complete request",
+      });
+    case "WAITING_FOR_REQUESTER":
+      return nextStep({
+        key: "wait-for-requester",
+        title: "Waiting for requester",
+        description:
+          "Processing is paused until the requester provides the required information.",
+        listLabel: "Waiting for requester",
+        actionType: "WAIT_FOR_REQUESTER",
+      });
+    case "SUCCESS":
+      return nextStep({
+        key: "completed",
+        title: "Deletion request completed",
+        description:
+          "The deletion request has been completed and the requester has been notified.",
+        listLabel: "Completed",
+        terminal: true,
+      });
+    case "REJECTED":
+      return nextStep({
+        key: "rejected",
+        title: "Deletion request rejected",
+        description: "This deletion request is closed.",
+        listLabel: "Rejected",
+        terminal: true,
+      });
+    case "CANCELLED":
+      return nextStep({
+        key: "cancelled",
+        title: "Deletion request cancelled",
+        description: "This deletion request is closed.",
+        listLabel: "Cancelled",
+        terminal: true,
+      });
+    case "SUBMITTED":
+      return nextStep({
+        key: "review-request",
+        title: "Review request",
+        description:
+          "Review the request details and determine the appropriate next step.",
+        listLabel: "Review request",
+        actionType: "REVIEW_REQUEST",
       });
   }
 }

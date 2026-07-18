@@ -513,6 +513,28 @@ Reject request is for invalid, duplicate, fraudulent, unsupported, or unfulfilla
 
 `VIEWER` remains read-only, cannot perform PII search, does not trigger requester decryption, and receives no guided mutation controls.
 
+## Guided DATA_DELETION Workflow
+
+`DATA_DELETION` remains a generic request resource and resolves through the
+shared workflow layer to `DATA_DELETION_STANDARD`. Its guided stages are
+Received, Verified, Processing, and Completed. Public intake continues to start
+deletion requests in `PENDING_VERIFICATION` and uses the shared email identity
+verification flow before an operator can start processing.
+
+During processing, response files are optional. An `ADMIN` or `OPERATOR` may
+confirm the deletion work, add an optional internal-only completion note, and
+complete the request with zero or more public response files. Completion sends
+the requester a data-deletion completion email and changes the request to
+`SUCCESS` only after delivery succeeds. A failed notification leaves the
+request in `PROCESSING` and allows a retry without duplicating the completion
+note or successful completion history.
+
+Assignment and due-date metadata remain independent generic capabilities: the
+workflow does not assign a user, set a deadline, or clear either value. The
+consumer secure page uses deletion-specific status language, shows public files
+through the existing secure download flow when present, and never exposes
+internal notes, assignment, SLA details, workflow IDs, or storage metadata.
+
 ## `GET /api/v1/requests`
 
 Lists Internal API request summaries. Requires `x-api-key` with `requests:read`.

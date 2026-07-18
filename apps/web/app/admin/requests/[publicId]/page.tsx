@@ -22,6 +22,7 @@ import {
   getRequestWorkflowProgress,
   getWorkflowDefinitionForRequest,
   isTerminalRequestStatus,
+  type RequestWorkflowId,
   type RequestWorkflowNextStep,
 } from "@magictrust/domain";
 
@@ -73,9 +74,9 @@ export default async function AdminRequestDetailPage({
   const successMessage = firstParam(messages?.success);
   const errorMessage = firstParam(messages?.error);
 
-  if (getWorkflowDefinitionForRequest(request).id === "DATA_ACCESS_STANDARD") {
+  if (getWorkflowDefinitionForRequest(request).id !== "GENERIC_REQUEST") {
     return (
-      <DataAccessRequestDetail
+      <GuidedRequestDetail
         request={request}
         role={session.role}
         successMessage={successMessage}
@@ -615,7 +616,7 @@ export default async function AdminRequestDetailPage({
   );
 }
 
-function DataAccessRequestDetail({
+function GuidedRequestDetail({
   request,
   role,
   successMessage,
@@ -704,6 +705,8 @@ function DataAccessRequestDetail({
   };
   const workflowProgress = getRequestWorkflowProgress(workflowContext);
   const nextStep = getRequestNextStep(workflowContext);
+  const workflow = getWorkflowDefinitionForRequest(workflowContext);
+  const responsePresentation = guidedResponsePresentation(workflow.id);
 
   return (
     <main className="admin-page guided-request-page">
@@ -718,7 +721,9 @@ function DataAccessRequestDetail({
 
       <header className="admin-header guided-request-header">
         <div className="guided-request-identity">
-          <p className="guided-request-eyebrow">Data access request</p>
+          <p className="guided-request-eyebrow">
+            {formatEnumLabel(request.type)} request
+          </p>
           <div className="guided-request-title-row">
             <h1>{request.publicId}</h1>
             <StatusBadge status={request.status} />
@@ -731,7 +736,7 @@ function DataAccessRequestDetail({
         </div>
         <div className="request-header-actions">
           {canAct && !isTerminalRequestStatus(request.status) ? (
-            <DataAccessMoreActions publicId={request.publicId} />
+            <GuidedRequestMoreActions publicId={request.publicId} />
           ) : null}
         </div>
       </header>
@@ -758,7 +763,7 @@ function DataAccessRequestDetail({
       >
         <p className="eyebrow">Next step</p>
         <div className="next-step-content">
-          <DataAccessNextStep
+          <GuidedRequestNextStep
             request={request}
             nextStep={nextStep}
             canAct={canAct}
@@ -772,7 +777,7 @@ function DataAccessRequestDetail({
         </div>
       </section>
 
-      <div className="data-access-workspace">
+      <div className="guided-request-workspace">
         <section
           className="admin-card requester-request-card"
           aria-labelledby="request-details-heading"
@@ -853,10 +858,13 @@ function DataAccessRequestDetail({
         >
           <div className="guided-section-heading">
             <div>
-              <h2 id="response-heading">Response</h2>
-              <p>
-                Files are stored privately and delivered through secure access.
-              </p>
+              <h2 id="response-heading">
+                {responsePresentation.heading}
+                {responsePresentation.optional ? (
+                  <span className="guided-section-optional">Optional</span>
+                ) : null}
+              </h2>
+              <p>{responsePresentation.description}</p>
             </div>
           </div>
           {publicAttachments.length === 0 ? (
@@ -869,7 +877,9 @@ function DataAccessRequestDetail({
                 Add a file when the response includes downloadable material. A
                 file is not required to complete this request.
               </p>
-              {canAct && nextStep.actionType === "SEND_RESPONSE" ? (
+              {canAct &&
+              (nextStep.actionType === "SEND_RESPONSE" ||
+                nextStep.actionType === "COMPLETE_REQUEST") ? (
                 <ResponseUploadForm publicId={request.publicId} />
               ) : null}
             </div>
@@ -1031,7 +1041,7 @@ function DataAccessRequestDetail({
                 <li key={event.id} data-category={event.category}>
                   <span className="activity-marker" aria-hidden="true" />
                   <div>
-                    <strong>{activityLabel(event)}</strong>
+                    <strong>{activityLabel(event, workflow.id)}</strong>
                     <p>
                       {actorCategory(event.actorType)} ·{" "}
                       <time dateTime={event.createdAt}>
@@ -1237,7 +1247,7 @@ function RequestDueDateControl({
   );
 }
 
-function DataAccessMoreActions({ publicId }: { publicId: string }) {
+function GuidedRequestMoreActions({ publicId }: { publicId: string }) {
   return (
     <details className="request-more-actions">
       <summary>
@@ -1281,7 +1291,7 @@ function DataAccessMoreActions({ publicId }: { publicId: string }) {
   );
 }
 
-function DataAccessNextStep({
+function GuidedRequestNextStep({
   request,
   nextStep,
   canAct,
@@ -1341,6 +1351,44 @@ function DataAccessNextStep({
             <AdminSubmitButton>
               {nextStep.actionLabel ?? "Start processing"}
             </AdminSubmitButton>
+          </form>
+        ) : null}
+      </>
+    );
+  if (nextStep.actionType === "COMPLETE_REQUEST")
+    return (
+      <>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
+        <p>{nextStep.description}</p>
+        {deliveryFailed ? (
+          <p role="alert">
+            The completion email could not be delivered. The request remains in
+            processing.
+          </p>
+        ) : null}
+        {canAct ? (
+          <form
+            className="admin-action-form"
+            action={`/admin/requests/${request.publicId}/complete`}
+            method="post"
+          >
+            <label className="admin-checkbox-label">
+              <input name="confirmed" type="checkbox" required />
+              <span>
+                I confirm that the deletion request has been processed.
+              </span>
+            </label>
+            <label>
+              Internal completion note (optional)
+              <textarea name="completionNote" maxLength={5000} rows={4} />
+              <small>This note is visible only to your internal team.</small>
+            </label>
+            <AdminConfirmSubmitButton
+              confirmation="Complete this deletion request and notify the requester?"
+              variant="primary"
+            >
+              {nextStep.actionLabel ?? "Complete request"}
+            </AdminConfirmSubmitButton>
           </form>
         ) : null}
       </>
@@ -1489,7 +1537,25 @@ function actorCategory(actorType: string) {
         ? "System"
         : "Integration";
 }
-function activityLabel(event: AdminRequestDetailView["timeline"][number]) {
+function activityLabel(
+  event: AdminRequestDetailView["timeline"][number],
+  workflowId: RequestWorkflowId,
+) {
+  if (workflowId === "DATA_DELETION_STANDARD") {
+    if (
+      event.type === "STATUS_CHANGED" &&
+      event.data.newStatus === "PROCESSING"
+    ) {
+      return "Deletion processing started";
+    }
+    if (event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS") {
+      return "Deletion request completed";
+    }
+    if (event.type === "CONSUMER_NOTIFICATION_SENT") {
+      return "Requester notified";
+    }
+  }
+
   if (
     event.type === "STATUS_CHANGED" &&
     event.data.newStatus === "PROCESSING"
@@ -1518,6 +1584,28 @@ function activityLabel(event: AdminRequestDetailView["timeline"][number]) {
   );
 }
 
+function guidedResponsePresentation(workflowId: RequestWorkflowId): {
+  heading: string;
+  description: string;
+  optional: boolean;
+} {
+  if (workflowId === "DATA_DELETION_STANDARD") {
+    return {
+      heading: "Response files",
+      description:
+        "Add files only when the requester should receive supporting response material.",
+      optional: true,
+    };
+  }
+
+  return {
+    heading: "Response",
+    description:
+      "Files are stored privately and delivered through secure access.",
+    optional: false,
+  };
+}
+
 function friendlyFeedback(message: string, kind: "success" | "error"): string {
   const safeMessages = new Set([
     "Verification email sent.",
@@ -1529,6 +1617,7 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Attachment uploaded.",
     "Attachment upload was already recorded.",
     "Response sent and request completed.",
+    "Deletion request completed.",
     "This request is already completed.",
     "Status updated.",
     "Request assigned.",
@@ -1546,6 +1635,10 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Response details are invalid.",
     "Select a valid response file.",
     "This request is not ready for response delivery.",
+    "This request is not ready for completion.",
+    "This completion action is not available for this request.",
+    "Confirm that the deletion request has been processed.",
+    "Completion notification could not be sent. The request remains in processing.",
     "This request is not ready to process.",
     "Internal note is required.",
     "File is required.",
@@ -1579,10 +1672,8 @@ function formatAdminRole(role: "ADMIN" | "OPERATOR"): string {
 }
 
 function formatEnumLabel(value: string): string {
-  return value
-    .split("_")
-    .map((part) => (part ? part[0] + part.slice(1).toLowerCase() : ""))
-    .join(" ");
+  const label = value.toLowerCase().replaceAll("_", " ");
+  return label ? label[0]!.toUpperCase() + label.slice(1) : "";
 }
 
 function formatDateTime(value: string): string {

@@ -61,11 +61,23 @@ code-defined models. The v1 resolution path is:
 request.type -> workflow resolver -> code-defined workflow
 ```
 
-`DATA_ACCESS` resolves to `DATA_ACCESS_STANDARD`. Other request types resolve to
-the temporary `GENERIC_REQUEST` workflow until their own processing definitions
-are introduced. Consumers use the resolver for stages, progress, next-step
-guidance, and allowed status transitions instead of scattering request-type
-checks across routes and components.
+`DATA_ACCESS` resolves to `DATA_ACCESS_STANDARD`, and `DATA_DELETION` resolves
+to `DATA_DELETION_STANDARD`. Other request types resolve to the temporary
+`GENERIC_REQUEST` workflow until their own processing definitions are
+introduced. Consumers use the resolver for stages, progress, next-step guidance,
+and allowed status transitions instead of scattering request-type checks across
+routes and components.
+
+`DATA_DELETION_STANDARD` guides a request through verification, processing,
+optional response content or files, consumer notification, and completion. A
+successful completion email must be delivered before the request moves from
+`PROCESSING` to `SUCCESS`; a failed delivery leaves it in `PROCESSING` for a
+safe retry. Attachments remain optional generic request resources and are not a
+condition of deletion completion.
+
+Request type continues to describe consumer intent, while workflow describes
+the lifecycle. `DATA_DELETION_STANDARD` therefore does not introduce a distinct
+deletion request entity, assignment model, SLA rule, or storage capability.
 
 Workflow definitions are not database-backed or user-configurable in v1. A
 future implementation can evolve the resolution path to:

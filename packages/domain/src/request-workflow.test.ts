@@ -17,16 +17,20 @@ describe("request workflow definitions", () => {
     );
   });
 
-  test.each<RequestType>([
-    "DATA_DELETION",
-    "DO_NOT_CONTACT",
-    "UNSUBSCRIBE",
-    "GENERAL_INQUIRY",
-  ])("%s resolves to GENERIC_REQUEST", (type) => {
-    expect(getWorkflowDefinitionForRequest(request({ type })).id).toBe(
-      "GENERIC_REQUEST",
-    );
+  test("DATA_DELETION resolves to DATA_DELETION_STANDARD", () => {
+    expect(
+      getWorkflowDefinitionForRequest(request({ type: "DATA_DELETION" })).id,
+    ).toBe("DATA_DELETION_STANDARD");
   });
+
+  test.each<RequestType>(["DO_NOT_CONTACT", "UNSUBSCRIBE", "GENERAL_INQUIRY"])(
+    "%s resolves to GENERIC_REQUEST",
+    (type) => {
+      expect(getWorkflowDefinitionForRequest(request({ type })).id).toBe(
+        "GENERIC_REQUEST",
+      );
+    },
+  );
 
   test("DATA_ACCESS stages preserve the approved workflow", () => {
     expect(
@@ -50,6 +54,68 @@ describe("request workflow definitions", () => {
         request({ type: "GENERAL_INQUIRY" }),
       ).steps.map((step) => step.label),
     ).toEqual(["Received", "Processing", "Completed"]);
+  });
+
+  test("DATA_DELETION uses the expected four-stage workflow", () => {
+    expect(
+      getWorkflowDefinitionForRequest(
+        request({ type: "DATA_DELETION" }),
+      ).steps.map((step) => step.label),
+    ).toEqual(["Received", "Verified", "Processing", "Completed"]);
+  });
+
+  test.each([
+    ["PENDING_VERIFICATION", ["completed", "current", "upcoming", "upcoming"]],
+    ["VERIFIED", ["completed", "completed", "current", "upcoming"]],
+    ["PROCESSING", ["completed", "completed", "current", "upcoming"]],
+    ["SUCCESS", ["completed", "completed", "completed", "completed"]],
+  ] as const)("maps DATA_DELETION %s progress", (status, states) => {
+    expect(
+      getRequestWorkflowProgress(
+        request({ type: "DATA_DELETION", status }),
+      ).steps.map((step) => step.state),
+    ).toEqual(states);
+  });
+
+  test("DATA_DELETION next steps guide verification through completion", () => {
+    const deletion = (status: RequestStatus) =>
+      request({ type: "DATA_DELETION", status });
+
+    expect(getRequestNextStep(deletion("PENDING_VERIFICATION"))).toMatchObject({
+      title: "Waiting for requester verification",
+      listLabel: "Waiting for verification",
+      actionType: "RESEND_VERIFICATION",
+    });
+    expect(getRequestNextStep(deletion("VERIFIED"))).toMatchObject({
+      title: "Ready to process",
+      listLabel: "Start processing",
+      actionType: "START_PROCESSING",
+    });
+    expect(getRequestNextStep(deletion("PROCESSING"))).toMatchObject({
+      title: "Complete the deletion request",
+      listLabel: "Complete request",
+      actionType: "COMPLETE_REQUEST",
+    });
+    expect(getRequestNextStep(deletion("SUCCESS"))).toMatchObject({
+      title: "Deletion request completed",
+      listLabel: "Completed",
+      terminal: true,
+    });
+  });
+
+  test("DATA_DELETION workflow allows processing and completion", () => {
+    expect(
+      canTransitionRequestWorkflow(
+        request({ type: "DATA_DELETION", status: "VERIFIED" }),
+        "PROCESSING",
+      ),
+    ).toBe(true);
+    expect(
+      canTransitionRequestWorkflow(
+        request({ type: "DATA_DELETION", status: "PROCESSING" }),
+        "SUCCESS",
+      ),
+    ).toBe(true);
   });
 
   test.each([

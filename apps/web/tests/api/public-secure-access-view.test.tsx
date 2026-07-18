@@ -76,6 +76,46 @@ describe("public secure access view", () => {
     expect(html).not.toContain("data access request");
   });
 
+  test("renders DATA_DELETION completion copy without an empty files section", () => {
+    const html = renderSecureAccess({
+      type: "DATA_DELETION",
+      status: "SUCCESS",
+      completedAt: "2026-07-18T12:00:00.000Z",
+      publicAttachments: [],
+    });
+
+    expect(html).toContain("Your deletion request is complete");
+    expect(html).toContain("Your data deletion request has been completed.");
+    expect(html).not.toContain("Your response</h2>");
+    expect(html).not.toContain("Your response files");
+  });
+
+  test("renders secure public files for a completed DATA_DELETION request", () => {
+    const html = renderSecureAccess({
+      type: "DATA_DELETION",
+      status: "SUCCESS",
+      completedAt: "2026-07-18T12:00:00.000Z",
+      publicAttachments: [responseFile()],
+    });
+
+    expect(html).toContain("Your deletion request is complete");
+    expect(html).toContain("Download response");
+    expect(html).not.toContain("storageKey");
+    expect(html).not.toContain("assignment");
+    expect(html).not.toContain("dueAt");
+  });
+
+  test.each([
+    ["PROCESSING", "Your deletion request is being processed"],
+    ["PENDING_VERIFICATION", "Verification required"],
+    ["VERIFIED", "Your request is ready for processing"],
+    ["REJECTED", "Your deletion request could not be completed"],
+    ["CANCELLED", "Your deletion request was cancelled"],
+  ] as const)("renders DATA_DELETION %s copy", (status, title) => {
+    const html = renderSecureAccess({ type: "DATA_DELETION", status });
+    expect(html).toContain(title);
+  });
+
   test("hides empty updates and empty response UI while processing", () => {
     const html = renderSecureAccess({
       status: "PROCESSING",
