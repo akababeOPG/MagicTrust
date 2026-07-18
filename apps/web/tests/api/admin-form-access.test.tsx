@@ -6,7 +6,9 @@ vi.mock("server-only", () => ({}));
 const mocks = vi.hoisted(() => ({
   requireAdminRole: vi.fn(),
   listAdminForms: vi.fn(async () => []),
+  getAdminFormDraftEditor: vi.fn(),
   createAdminForm: vi.fn(),
+  saveAdminFormDraft: vi.fn(),
   noStore: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NOT_FOUND");
@@ -21,7 +23,9 @@ vi.mock("@/lib/admin-auth", () => ({
 vi.mock("@/lib/admin-form-management", () => ({
   createAdminFormDependencies: vi.fn(() => ({ kind: "deps" })),
   listAdminForms: mocks.listAdminForms,
+  getAdminFormDraftEditor: mocks.getAdminFormDraftEditor,
   createAdminForm: mocks.createAdminForm,
+  saveAdminFormDraft: mocks.saveAdminFormDraft,
 }));
 
 describe("admin form access", () => {
@@ -77,5 +81,76 @@ describe("admin form access", () => {
       response: "json",
     });
     expect(mocks.createAdminForm).not.toHaveBeenCalled();
+  });
+
+  test("ADMIN opens the draft editor", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce({
+      adminUserId: "admin-1",
+      role: "ADMIN",
+      sessionId: "session-1",
+    });
+    mocks.getAdminFormDraftEditor.mockResolvedValueOnce({
+      publicId: "frm_1",
+      formName: "Privacy Request",
+      versionNumber: 2,
+      html: "<main>Draft</main>",
+      css: "main { display: block; }",
+      javascript: "document.body.dataset.ready = 'true';",
+      updatedAt: "2026-07-18T12:00:00.000Z",
+    });
+    const { default: AdminFormEditorPage } =
+      await import("../../app/admin/forms/[publicId]/versions/[versionNumber]/edit/page");
+    const html = renderToStaticMarkup(
+      await AdminFormEditorPage({
+        params: Promise.resolve({ publicId: "frm_1", versionNumber: "2" }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+
+    expect(html).toContain("Edit Privacy Request");
+    expect(html).toContain("HTML source");
+    expect(html).toContain('sandbox="allow-scripts"');
+    expect(mocks.requireAdminRole).toHaveBeenCalledWith(["ADMIN"]);
+  });
+
+  test.each(["OPERATOR", "VIEWER"])(
+    "%s cannot open the draft editor",
+    async () => {
+      mocks.requireAdminRole.mockResolvedValueOnce(
+        new Response("Forbidden", { status: 403 }),
+      );
+      const { default: AdminFormEditorPage } =
+        await import("../../app/admin/forms/[publicId]/versions/[versionNumber]/edit/page");
+
+      await expect(
+        AdminFormEditorPage({
+          params: Promise.resolve({ publicId: "frm_1", versionNumber: "1" }),
+          searchParams: Promise.resolve({}),
+        }),
+      ).rejects.toThrow("NOT_FOUND");
+      expect(mocks.getAdminFormDraftEditor).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["OPERATOR", "VIEWER"])("%s cannot save draft source", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/forms/[publicId]/versions/[versionNumber]/save/route");
+    const response = await POST(
+      new Request("https://magictrust.test/admin/forms/frm_1/versions/1/save", {
+        method: "POST",
+      }),
+      {
+        params: Promise.resolve({ publicId: "frm_1", versionNumber: "1" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.requireAdminRole).toHaveBeenCalledWith(["ADMIN"], {
+      response: "json",
+    });
+    expect(mocks.saveAdminFormDraft).not.toHaveBeenCalled();
   });
 });

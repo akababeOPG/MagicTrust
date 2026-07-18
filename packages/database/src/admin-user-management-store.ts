@@ -19,6 +19,7 @@ export const adminAuditEventTypes = [
   "FORM_ARCHIVED",
   "FORM_VERSION_CREATED",
   "FORM_VERSION_PUBLISHED",
+  "FORM_VERSION_UPDATED",
 ] as const;
 
 export type AdminAuditEventType = (typeof adminAuditEventTypes)[number];

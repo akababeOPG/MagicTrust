@@ -12,12 +12,18 @@ vi.mock("server-only", () => ({}));
 
 import { AdminFormDetail, AdminFormsList } from "../../lib/admin-form-view";
 import {
+  AdminFormEditor,
+  buildSandboxedPreviewDocument,
+} from "../../lib/admin-form-editor";
+import {
   archiveAdminForm,
   createAdminForm,
   createAdminFormDraft,
   getAdminForm,
+  getAdminFormDraftEditor,
   listAdminForms,
   publishAdminFormVersion,
+  saveAdminFormDraft,
 } from "../../lib/admin-form-management";
 
 describe("form management foundation", () => {
@@ -220,6 +226,224 @@ describe("form management foundation", () => {
     expect(html).not.toContain("Archive form");
     expect(html).toContain("read-only for your role");
   });
+
+  test("ADMIN opens the current draft editor without persisting preview state", async () => {
+    const dependencies = createDependencies();
+    const form = await createForm(dependencies, "Privacy", "privacy");
+    const auditCount = dependencies.state.audits.length;
+    const draft = await getAdminFormDraftEditor(form.publicId, 1, dependencies);
+
+    expect(draft).toMatchObject({
+      publicId: form.publicId,
+      versionNumber: 1,
+      html: "<form>\n  <!-- Form content -->\n</form>",
+    });
+    const html = renderToStaticMarkup(<AdminFormEditor draft={draft!} />);
+    expect(html).toContain("Refresh preview");
+    expect(html).toContain('sandbox="allow-scripts"');
+    expect(html).not.toContain("allow-same-origin");
+    expect(dependencies.state.audits).toHaveLength(auditCount);
+  });
+
+  test("ADMIN saves HTML, CSS, and JavaScript together and audits no source", async () => {
+    const dependencies = createDependencies();
+    const form = await createForm(dependencies, "Privacy", "privacy");
+    const expectedUpdatedAt = dependencies.state.versions[0]!.updatedAt;
+    dependencies.state.now = new Date("2026-07-18T12:05:00.000Z");
+
+    const response = await saveAdminFormDraft(
+      formRequest(
+        `/admin/forms/${form.publicId}/versions/1/save`,
+        draftValues(expectedUpdatedAt, {
+          html: "<main>Updated</main>",
+          css: "main { color: green; }",
+          javascript: "document.body.dataset.ready = 'true';",
+        }),
+      ),
+      form.publicId,
+      1,
+      session("ADMIN"),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("Draft+saved");
+    expect(dependencies.state.versions[0]).toMatchObject({
+      html: "<main>Updated</main>",
+      css: "main { color: green; }",
+      javascript: "document.body.dataset.ready = 'true';",
+      updatedAt: dependencies.state.now,
+    });
+    expect(dependencies.state.audits.at(-1)).toEqual({
+      type: "FORM_VERSION_UPDATED",
+      formId: form.id,
+      versionNumber: 1,
+    });
+    expect(JSON.stringify(dependencies.state.audits)).not.toContain("Updated");
+    expect(JSON.stringify(dependencies.state.audits)).not.toContain("color");
+  });
+
+  test("stale draft writes are rejected without overwriting newer source", async () => {
+    const dependencies = createDependencies();
+    const form = await createForm(dependencies, "Privacy", "privacy");
+    const staleUpdatedAt = dependencies.state.versions[0]!.updatedAt;
+    dependencies.state.versions[0]!.html = "<main>Newer edit</main>";
+    dependencies.state.versions[0]!.updatedAt = new Date(
+      "2026-07-18T12:04:00.000Z",
+    );
+
+    const response = await saveAdminFormDraft(
+      formRequest(
+        `/admin/forms/${form.publicId}/versions/1/save`,
+        draftValues(staleUpdatedAt, { html: "<main>Stale edit</main>" }),
+      ),
+      form.publicId,
+      1,
+      session("ADMIN"),
+      dependencies,
+    );
+
+    expect(response.headers.get("location")).toContain(
+      "This+draft+was+updated+elsewhere",
+    );
+    expect(dependencies.state.versions[0]!.html).toBe(
+      "<main>Newer edit</main>",
+    );
+    expect(dependencies.state.audits.at(-1)?.type).not.toBe(
+      "FORM_VERSION_UPDATED",
+    );
+  });
+
+  test("published and archived versions cannot be edited", async () => {
+    const publishedDependencies = createDependencies();
+    const publishedForm = await createForm(
+      publishedDependencies,
+      "Published",
+      "published",
+    );
+    const publishedUpdatedAt =
+      publishedDependencies.state.versions[0]!.updatedAt;
+    await publishAdminFormVersion(
+      formRequest(
+        `/admin/forms/${publishedForm.publicId}/versions/1/publish`,
+        {},
+      ),
+      publishedForm.publicId,
+      1,
+      session("ADMIN"),
+      publishedDependencies,
+    );
+    expect(
+      await getAdminFormDraftEditor(
+        publishedForm.publicId,
+        1,
+        publishedDependencies,
+      ),
+    ).toBeNull();
+    const publishedSave = await saveAdminFormDraft(
+      formRequest(
+        `/admin/forms/${publishedForm.publicId}/versions/1/save`,
+        draftValues(publishedUpdatedAt),
+      ),
+      publishedForm.publicId,
+      1,
+      session("ADMIN"),
+      publishedDependencies,
+    );
+    expect(publishedSave.headers.get("location")).toContain(
+      "Draft+version+could+not+be+found",
+    );
+
+    const archivedDependencies = createDependencies();
+    const archivedForm = await createForm(
+      archivedDependencies,
+      "Archived",
+      "archived",
+    );
+    const archivedUpdatedAt = archivedDependencies.state.versions[0]!.updatedAt;
+    await archiveAdminForm(
+      formRequest(`/admin/forms/${archivedForm.publicId}/archive`, {}),
+      archivedForm.publicId,
+      session("ADMIN"),
+      archivedDependencies,
+    );
+    expect(
+      await getAdminFormDraftEditor(
+        archivedForm.publicId,
+        1,
+        archivedDependencies,
+      ),
+    ).toBeNull();
+    const archivedSave = await saveAdminFormDraft(
+      formRequest(
+        `/admin/forms/${archivedForm.publicId}/versions/1/save`,
+        draftValues(archivedUpdatedAt),
+      ),
+      archivedForm.publicId,
+      1,
+      session("ADMIN"),
+      archivedDependencies,
+    );
+    expect(archivedSave.headers.get("location")).toContain(
+      "Archived+forms+cannot+be+changed",
+    );
+  });
+
+  test.each([
+    ["html", "HTML"],
+    ["css", "CSS"],
+    ["javascript", "JavaScript"],
+  ] as const)("rejects %s source larger than 250 KB", async (field, label) => {
+    const dependencies = createDependencies();
+    const form = await createForm(dependencies, "Privacy", "privacy");
+    const before = structuredClone(dependencies.state.versions[0]);
+    const response = await saveAdminFormDraft(
+      formRequest(
+        `/admin/forms/${form.publicId}/versions/1/save`,
+        draftValues(before!.updatedAt, { [field]: "x".repeat(250 * 1024 + 1) }),
+      ),
+      form.publicId,
+      1,
+      session("ADMIN"),
+      dependencies,
+    );
+
+    expect(response.headers.get("location")).toContain(
+      `${label}+source+must+be+250+KB+or+less`,
+    );
+    expect(dependencies.state.versions[0]).toEqual(before);
+  });
+
+  test("preview keeps JavaScript in a network-isolated iframe document", () => {
+    const preview = buildSandboxedPreviewDocument({
+      html: '<button onclick="window.parent.document.body.remove()">Try</button>',
+      css: "button { display: block; }",
+      javascript: "fetch('https://example.com/private');",
+    });
+
+    expect(preview).toContain("connect-src 'none'");
+    expect(preview).toContain("navigate-to 'none'");
+    expect(preview).toContain("form-action 'none'");
+    expect(preview).toContain("<script>fetch(");
+    const markup = renderToStaticMarkup(
+      <AdminFormEditor
+        draft={{
+          publicId: "frm_1",
+          formName: "Privacy",
+          versionNumber: 1,
+          html: "<script>window.parent.__escaped = false</script>",
+          css: "",
+          javascript: "window.parent.__escaped = false;",
+          updatedAt: "2026-07-18T12:00:00.000Z",
+        }}
+      />,
+    );
+    expect(markup).toContain('sandbox="allow-scripts"');
+    expect(markup).not.toContain("allow-same-origin");
+    expect(markup).not.toContain(
+      "<script>window.parent.__escaped = false</script>",
+    );
+  });
 });
 
 type State = {
@@ -290,6 +514,7 @@ function createMemoryStore(state: State): FormManagementStore {
         css: "",
         javascript: "",
         createdAt: input.now,
+        updatedAt: input.now,
         createdByAdminUserId: input.actorAdminUserId,
         publishedAt: null,
         publishedByAdminUserId: null,
@@ -334,8 +559,12 @@ function createMemoryStore(state: State): FormManagementStore {
       const published = state.versions.find(
         (v) => v.formId === form.id && v.status === "PUBLISHED",
       );
-      if (published) published.status = "ARCHIVED";
+      if (published) {
+        published.status = "ARCHIVED";
+        published.updatedAt = input.now;
+      }
       draft.status = "PUBLISHED";
+      draft.updatedAt = input.now;
       draft.publishedAt = input.now;
       draft.publishedByAdminUserId = input.actorAdminUserId;
       state.audits.push({
@@ -370,6 +599,7 @@ function createMemoryStore(state: State): FormManagementStore {
         versionNumber,
         status: "DRAFT" as const,
         createdAt: input.now,
+        updatedAt: input.now,
         createdByAdminUserId: input.actorAdminUserId,
         publishedAt: null,
         publishedByAdminUserId: null,
@@ -379,6 +609,34 @@ function createMemoryStore(state: State): FormManagementStore {
         type: "FORM_VERSION_CREATED",
         formId: form.id,
         versionNumber,
+      });
+      return { ok: true, detail: detail(form), changed: true };
+    },
+    async updateDraftVersion(input) {
+      const form = state.forms.find((item) => item.publicId === input.publicId);
+      if (!form) return { ok: false, code: "FORM_NOT_FOUND" };
+      if (form.status === "ARCHIVED") {
+        return { ok: false, code: "FORM_ARCHIVED" };
+      }
+      const draft = state.versions.find(
+        (version) =>
+          version.formId === form.id &&
+          version.versionNumber === input.versionNumber &&
+          version.status === "DRAFT",
+      );
+      if (!draft) return { ok: false, code: "DRAFT_NOT_FOUND" };
+      if (draft.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
+        return { ok: false, code: "DRAFT_STALE" };
+      }
+      draft.html = input.html;
+      draft.css = input.css;
+      draft.javascript = input.javascript;
+      draft.updatedAt = input.now;
+      form.updatedAt = input.now;
+      state.audits.push({
+        type: "FORM_VERSION_UPDATED",
+        formId: form.id,
+        versionNumber: draft.versionNumber,
       });
       return { ok: true, detail: detail(form), changed: true };
     },
@@ -404,4 +662,17 @@ function formRequest(path: string, values: Record<string, string>) {
     },
     body: new URLSearchParams(values),
   });
+}
+
+function draftValues(
+  expectedUpdatedAt: Date,
+  overrides: Partial<Record<"html" | "css" | "javascript", string>> = {},
+) {
+  return {
+    html: "<main>Draft</main>",
+    css: "main { display: block; }",
+    javascript: "document.body.dataset.preview = 'ready';",
+    expectedUpdatedAt: expectedUpdatedAt.toISOString(),
+    ...overrides,
+  };
 }

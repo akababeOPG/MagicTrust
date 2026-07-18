@@ -31,6 +31,7 @@ export type ManagedFormVersion = {
   css: string;
   javascript: string;
   createdAt: Date;
+  updatedAt: Date;
   createdByAdminUserId: string;
   publishedAt: Date | null;
   publishedByAdminUserId: string | null;
@@ -50,6 +51,7 @@ export type FormManagementErrorCode =
   | "ACTOR_NOT_AUTHORIZED"
   | "DRAFT_ALREADY_EXISTS"
   | "DRAFT_NOT_FOUND"
+  | "DRAFT_STALE"
   | "FORM_ARCHIVED"
   | "FORM_NOT_FOUND"
   | "NO_PUBLISHED_VERSION"
@@ -70,6 +72,16 @@ export type FormManagementStore = {
   }): Promise<FormMutationResult>;
   listForms(): Promise<ManagedFormSummary[]>;
   getForm(publicId: string): Promise<ManagedFormDetail | null>;
+  updateDraftVersion(input: {
+    publicId: string;
+    versionNumber: number;
+    html: string;
+    css: string;
+    javascript: string;
+    expectedUpdatedAt: Date;
+    actorAdminUserId: string;
+    now: Date;
+  }): Promise<FormMutationResult>;
   publishFormVersion(input: {
     publicId: string;
     versionNumber: number;
@@ -122,6 +134,7 @@ export function createFormManagementStore(db: Database): FormManagementStore {
             css: "",
             javascript: "",
             createdAt: input.now,
+            updatedAt: input.now,
             createdByAdminUserId: input.actorAdminUserId,
           })
           .returning(formVersionSelection);
@@ -179,6 +192,60 @@ export function createFormManagementStore(db: Database): FormManagementStore {
     async getForm(publicId) {
       return getFormDetail(db, publicId);
     },
+    async updateDraftVersion(input) {
+      return db.transaction(async (tx) => {
+        if (!(await isActiveAdmin(tx, input.actorAdminUserId))) {
+          return { ok: false, code: "ACTOR_NOT_AUTHORIZED" };
+        }
+        const form = await lockForm(tx, input.publicId);
+        if (!form) return { ok: false, code: "FORM_NOT_FOUND" };
+        if (form.status !== "ACTIVE") {
+          return { ok: false, code: "FORM_ARCHIVED" };
+        }
+        const versions = await lockVersions(tx, form.id);
+        const draft = versions.find(
+          (version) =>
+            version.versionNumber === input.versionNumber &&
+            version.status === "DRAFT",
+        );
+        if (!draft) return { ok: false, code: "DRAFT_NOT_FOUND" };
+        if (draft.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
+          return { ok: false, code: "DRAFT_STALE" };
+        }
+
+        await tx
+          .update(formVersions)
+          .set({
+            html: input.html,
+            css: input.css,
+            javascript: input.javascript,
+            updatedAt: input.now,
+          })
+          .where(eq(formVersions.id, draft.id));
+        await tx
+          .update(forms)
+          .set({ updatedAt: input.now })
+          .where(eq(forms.id, form.id));
+        await audit(
+          tx,
+          "FORM_VERSION_UPDATED",
+          form.id,
+          input.actorAdminUserId,
+          {
+            formId: form.id,
+            versionId: draft.id,
+            versionNumber: draft.versionNumber,
+          },
+          input.now,
+        );
+
+        return {
+          ok: true,
+          detail: (await getFormDetail(tx, input.publicId))!,
+          changed: true,
+        };
+      });
+    },
     async publishFormVersion(input) {
       return db.transaction(async (tx) => {
         if (!(await isActiveAdmin(tx, input.actorAdminUserId))) {
@@ -203,7 +270,7 @@ export function createFormManagementStore(db: Database): FormManagementStore {
         if (published) {
           await tx
             .update(formVersions)
-            .set({ status: "ARCHIVED" })
+            .set({ status: "ARCHIVED", updatedAt: input.now })
             .where(eq(formVersions.id, published.id));
         }
         await tx
@@ -212,6 +279,7 @@ export function createFormManagementStore(db: Database): FormManagementStore {
             status: "PUBLISHED",
             publishedAt: input.now,
             publishedByAdminUserId: input.actorAdminUserId,
+            updatedAt: input.now,
           })
           .where(eq(formVersions.id, draft.id));
         await tx
@@ -268,6 +336,7 @@ export function createFormManagementStore(db: Database): FormManagementStore {
             css: published.css,
             javascript: published.javascript,
             createdAt: input.now,
+            updatedAt: input.now,
             createdByAdminUserId: input.actorAdminUserId,
           })
           .returning(formVersionSelection);
@@ -422,6 +491,7 @@ const formVersionSelection = {
   css: formVersions.css,
   javascript: formVersions.javascript,
   createdAt: formVersions.createdAt,
+  updatedAt: formVersions.updatedAt,
   createdByAdminUserId: formVersions.createdByAdminUserId,
   publishedAt: formVersions.publishedAt,
   publishedByAdminUserId: formVersions.publishedByAdminUserId,

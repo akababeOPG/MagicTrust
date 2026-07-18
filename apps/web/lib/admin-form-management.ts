@@ -24,6 +24,19 @@ const createFormSchema = z.object({
   description: z.string().trim().max(2000).optional(),
 });
 
+const saveDraftSchema = z.object({
+  html: z.string(),
+  css: z.string(),
+  javascript: z.string(),
+  expectedUpdatedAt: z.string().datetime(),
+});
+
+export const formSourceLimits = {
+  html: 250 * 1024,
+  css: 250 * 1024,
+  javascript: 250 * 1024,
+} as const;
+
 export type AdminFormListItem = {
   publicId: string;
   name: string;
@@ -49,6 +62,16 @@ export type AdminFormDetailView = {
     createdAt: string;
     publishedAt: string | null;
   }>;
+};
+
+export type AdminFormDraftEditorView = {
+  publicId: string;
+  formName: string;
+  versionNumber: number;
+  html: string;
+  css: string;
+  javascript: string;
+  updatedAt: string;
 };
 
 export type AdminFormDependencies = {
@@ -88,6 +111,29 @@ export async function getAdminForm(
   const detail = await dependencies.store.getForm(publicId);
   if (!detail) return null;
   return toDetailView(detail);
+}
+
+export async function getAdminFormDraftEditor(
+  publicId: string,
+  versionNumber: number,
+  dependencies: AdminFormDependencies,
+): Promise<AdminFormDraftEditorView | null> {
+  const detail = await dependencies.store.getForm(publicId);
+  if (!detail || detail.form.status !== "ACTIVE") return null;
+  const draft = detail.versions.find(
+    (version) =>
+      version.versionNumber === versionNumber && version.status === "DRAFT",
+  );
+  if (!draft) return null;
+  return {
+    publicId: detail.form.publicId,
+    formName: detail.form.name,
+    versionNumber: draft.versionNumber,
+    html: draft.html,
+    css: draft.css,
+    javascript: draft.javascript,
+    updatedAt: draft.updatedAt.toISOString(),
+  };
 }
 
 export async function createAdminForm(
@@ -179,6 +225,56 @@ export async function archiveAdminForm(
   return redirectDetail(request, publicId, { success: "Form archived." });
 }
 
+export async function saveAdminFormDraft(
+  request: Request,
+  publicId: string,
+  versionNumber: number,
+  session: AdminSession,
+  dependencies: AdminFormDependencies,
+) {
+  if (!sameOrigin(request)) return forbiddenOrigin();
+  const data = await safeFormData(request);
+  const parsed = saveDraftSchema.safeParse({
+    html: data?.get("html"),
+    css: data?.get("css"),
+    javascript: data?.get("javascript"),
+    expectedUpdatedAt: data?.get("expectedUpdatedAt"),
+  });
+  if (!parsed.success) {
+    return redirectEditor(request, publicId, versionNumber, {
+      error: "Draft source is invalid.",
+    });
+  }
+  const oversized = sourceSizeError(parsed.data);
+  if (oversized) {
+    return redirectEditor(request, publicId, versionNumber, {
+      error: oversized,
+    });
+  }
+  const result = await dependencies.store.updateDraftVersion({
+    publicId,
+    versionNumber,
+    html: parsed.data.html,
+    css: parsed.data.css,
+    javascript: parsed.data.javascript,
+    expectedUpdatedAt: new Date(parsed.data.expectedUpdatedAt),
+    actorAdminUserId: session.adminUserId,
+    now: dependencies.now(),
+  });
+  if (!result.ok) {
+    if (result.code === "DRAFT_STALE") {
+      return redirectEditor(request, publicId, versionNumber, {
+        error:
+          "This draft was updated elsewhere. Reload the page before saving your changes.",
+      });
+    }
+    return failure(request, result.code, publicId);
+  }
+  return redirectEditor(request, publicId, versionNumber, {
+    success: "Draft saved.",
+  });
+}
+
 function toDetailView(detail: ManagedFormDetail) {
   const draft = detail.versions.find((version) => version.status === "DRAFT");
   const published = detail.versions.find(
@@ -226,6 +322,8 @@ function failure(
   > = {
     DRAFT_ALREADY_EXISTS: "This form already has a draft.",
     DRAFT_NOT_FOUND: "Draft version could not be found.",
+    DRAFT_STALE:
+      "This draft was updated elsewhere. Reload the page before saving your changes.",
     FORM_ARCHIVED: "Archived forms cannot be changed.",
     FORM_NOT_FOUND: "Form could not be found.",
     NO_PUBLISHED_VERSION: "A published version is required.",
@@ -254,6 +352,37 @@ function redirectDetail(
   if (params.success) url.searchParams.set("success", params.success);
   if (params.error) url.searchParams.set("error", params.error);
   return Response.redirect(url, 303);
+}
+
+function redirectEditor(
+  request: Request,
+  publicId: string,
+  versionNumber: number,
+  params: { success?: string; error?: string },
+) {
+  const url = new URL(
+    `/admin/forms/${encodeURIComponent(publicId)}/versions/${versionNumber}/edit`,
+    request.url,
+  );
+  if (params.success) url.searchParams.set("success", params.success);
+  if (params.error) url.searchParams.set("error", params.error);
+  return Response.redirect(url, 303);
+}
+
+function sourceSizeError(input: {
+  html: string;
+  css: string;
+  javascript: string;
+}) {
+  const fields = [
+    ["HTML", input.html, formSourceLimits.html],
+    ["CSS", input.css, formSourceLimits.css],
+    ["JavaScript", input.javascript, formSourceLimits.javascript],
+  ] as const;
+  const oversized = fields.find(
+    ([, value, limit]) => Buffer.byteLength(value, "utf8") > limit,
+  );
+  return oversized ? `${oversized[0]} source must be 250 KB or less.` : null;
 }
 
 function sameOrigin(request: Request) {
@@ -293,6 +422,7 @@ function missingStore(): FormManagementStore {
     createForm: missing,
     listForms: missing,
     getForm: missing,
+    updateDraftVersion: missing,
     publishFormVersion: missing,
     createDraftVersion: missing,
     archiveForm: missing,

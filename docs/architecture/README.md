@@ -59,9 +59,25 @@ source is never edited in place; creating the next draft copies the current
 published source into a new version. Archiving a form preserves all historical
 versions while preventing new lifecycle changes.
 
-The foundation does not render or execute stored source. The planned HTML,
-CSS, and JavaScript editor, sandboxed preview, public form rendering, embed
-snippet, and deployment model are future capabilities and are not implemented.
+### Form Editor v1
+
+ADMIN users may edit the HTML, CSS, and JavaScript source of the current draft
+version. Saves update that draft in place and use its `updated_at` value as an
+optimistic concurrency token, so a stale browser tab cannot silently overwrite
+a newer edit. Each source field has a server-enforced 250 KB limit. Publishing
+remains a separate, deliberate action; published and archived versions are
+immutable.
+
+The editor preview is validation tooling, not a production deployment. It runs
+unsaved source in a `srcDoc` iframe with `sandbox="allow-scripts"`, without
+same-origin privileges, and with a restrictive Content Security Policy that
+blocks network connections, form submission, framing, and navigation. External
+resources are therefore not guaranteed to load. Stored source is never
+executed in the parent admin document, and refreshing the preview does not
+persist changes.
+
+Form Editor v1 does not provide public rendering, embeds, form submissions,
+deployments, asset upload, or a visual form builder.
 
 ## Request Model and Workflow Architecture
 

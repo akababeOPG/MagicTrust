@@ -401,6 +401,9 @@ export const formVersions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     createdByAdminUserId: uuid("created_by_admin_user_id")
       .notNull()
       .references(() => adminUsers.id, { onDelete: "restrict" }),

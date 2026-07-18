@@ -249,25 +249,33 @@ export function AdminFormDetail({
             <p className="eyebrow">Next step</p>
             <h2 id="form-next-step-heading">
               {form.draftVersionNumber
-                ? "Draft ready to publish"
+                ? `Continue editing draft v${form.draftVersionNumber}`
                 : "Create the next version"}
             </h2>
             <p>
               {form.draftVersionNumber
-                ? `Review draft v${form.draftVersionNumber} metadata, then publish when ready.`
+                ? "Update and preview the draft, then publish it separately when ready."
                 : "Create a draft copied from the current published version."}
             </p>
           </div>
           {form.draftVersionNumber ? (
             <div className="admin-form-next-step-actions">
-              <Link className="mt-button mt-button-secondary" href="#draft">
-                View draft metadata
+              <Link
+                className="mt-button"
+                href={`/admin/forms/${encodeURIComponent(form.publicId)}/versions/${form.draftVersionNumber}/edit`}
+              >
+                Edit draft
               </Link>
               <form
                 action={`/admin/forms/${encodeURIComponent(form.publicId)}/versions/${form.draftVersionNumber}/publish`}
                 method="post"
               >
-                <AdminSubmitButton>Publish draft</AdminSubmitButton>
+                <AdminConfirmSubmitButton
+                  confirmation={`Publish draft v${form.draftVersionNumber}? Published versions cannot be edited.`}
+                  variant="secondary"
+                >
+                  Publish draft
+                </AdminConfirmSubmitButton>
               </form>
             </div>
           ) : (
