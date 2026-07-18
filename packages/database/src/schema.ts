@@ -349,6 +349,35 @@ export const adminSessions = pgTable(
   }),
 );
 
+export const adminAuditEvents = pgTable(
+  "admin_audit_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    type: varchar("type", { length: 64 }).notNull(),
+    targetAdminUserId: uuid("target_admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "restrict" }),
+    actorAdminUserId: uuid("actor_admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "restrict" }),
+    data: jsonb("data").default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    targetAdminUserIdIdx: index(
+      "admin_audit_events_target_admin_user_id_idx",
+    ).on(table.targetAdminUserId),
+    actorAdminUserIdIdx: index("admin_audit_events_actor_admin_user_id_idx").on(
+      table.actorAdminUserId,
+    ),
+    createdAtIdx: index("admin_audit_events_created_at_idx").on(
+      table.createdAt,
+    ),
+  }),
+);
+
 export const requestComments = pgTable(
   "request_comments",
   {

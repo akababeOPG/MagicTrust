@@ -41,29 +41,41 @@ export function AdminShell({
   session,
   children,
   topbarSlot,
+  currentSection = "requests",
 }: {
   session: AdminSession;
   children: ReactNode;
   topbarSlot?: ReactNode;
+  currentSection?: "requests" | "users";
 }) {
   return (
     <div className="mt-admin-shell">
-      <AdminSidebar session={session} />
+      <AdminSidebar session={session} currentSection={currentSection} />
       <div className="mt-admin-main">
-        <AdminTopbar session={session} searchSlot={topbarSlot} />
+        <AdminTopbar
+          session={session}
+          searchSlot={topbarSlot}
+          currentSection={currentSection}
+        />
         <AdminPageContainer>{children}</AdminPageContainer>
       </div>
     </div>
   );
 }
 
-export function AdminSidebar({ session }: { session: AdminSession }) {
+export function AdminSidebar({
+  session,
+  currentSection = "requests",
+}: {
+  session: AdminSession;
+  currentSection?: "requests" | "users";
+}) {
   return (
     <aside className="mt-admin-sidebar" aria-label="Admin navigation">
       <div className="mt-sidebar-brand">
         <MagicTrustWordmark dark />
       </div>
-      <AdminNavigation role={session.role} />
+      <AdminNavigation role={session.role} currentSection={currentSection} />
       <div className="mt-sidebar-footer">
         <div className="mt-user-summary">
           <span className="mt-user-avatar" aria-hidden="true">
@@ -87,9 +99,11 @@ export function AdminSidebar({ session }: { session: AdminSession }) {
 export function AdminTopbar({
   session,
   searchSlot,
+  currentSection = "requests",
 }: {
   session: AdminSession;
   searchSlot?: ReactNode;
+  currentSection?: "requests" | "users";
 }) {
   return (
     <header className="mt-admin-topbar">
@@ -98,7 +112,10 @@ export function AdminTopbar({
           <MenuIcon />
         </summary>
         <div className="mt-mobile-nav-panel">
-          <AdminNavigation role={session.role} />
+          <AdminNavigation
+            role={session.role}
+            currentSection={currentSection}
+          />
           <div className="mt-mobile-account">
             <div className="mt-user-summary">
               <span className="mt-user-avatar" aria-hidden="true">
@@ -120,7 +137,7 @@ export function AdminTopbar({
       <nav className="mt-breadcrumbs" aria-label="Breadcrumb">
         <span>Workspace</span>
         <span aria-hidden="true">/</span>
-        <strong>Requests</strong>
+        <strong>{currentSection === "users" ? "Users" : "Requests"}</strong>
       </nav>
       {searchSlot ? <div className="mt-topbar-search">{searchSlot}</div> : null}
       <span className="mt-topbar-spacer" />
@@ -140,15 +157,23 @@ export function AdminPageContainer({ children }: { children: ReactNode }) {
   return <div className="mt-admin-page-container">{children}</div>;
 }
 
-function AdminNavigation({ role }: { role: AdminSession["role"] }) {
+function AdminNavigation({
+  role,
+  currentSection,
+}: {
+  role: AdminSession["role"];
+  currentSection: "requests" | "users";
+}) {
   return (
     <nav className="mt-sidebar-nav" aria-label="Workspace">
       <div className="mt-nav-group">
         <p className="mt-nav-label">Workspace</p>
         <Link
-          className="mt-nav-item mt-nav-item-active"
+          className={`mt-nav-item${
+            currentSection === "requests" ? " mt-nav-item-active" : ""
+          }`}
           href="/admin/requests"
-          aria-current="page"
+          aria-current={currentSection === "requests" ? "page" : undefined}
         >
           <InboxIcon />
           <span>Requests</span>
@@ -212,6 +237,16 @@ function AdminNavigation({ role }: { role: AdminSession["role"] }) {
       {role === "ADMIN" ? (
         <div className="mt-nav-group mt-nav-group-advanced">
           <p className="mt-nav-label">Administration</p>
+          <Link
+            className={`mt-nav-item${
+              currentSection === "users" ? " mt-nav-item-active" : ""
+            }`}
+            href="/admin/users"
+            aria-current={currentSection === "users" ? "page" : undefined}
+          >
+            <UserIcon />
+            <span>Users</span>
+          </Link>
           <span className="mt-nav-item mt-nav-item-secondary">
             <SettingsIcon />
             <span>Advanced tools</span>
@@ -290,6 +325,28 @@ function SettingsIcon() {
       />
       <path
         d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function UserIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle
+        cx="12"
+        cy="8"
+        r="3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d="M5.5 20c.6-3.5 2.8-5.5 6.5-5.5s5.9 2 6.5 5.5"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.7"

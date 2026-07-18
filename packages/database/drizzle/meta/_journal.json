@@ -155,6 +155,13 @@
       "when": 1784384245760,
       "tag": "0021_open_frank_castle",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784413794601,
+      "tag": "0022_bizarre_vivisector",
+      "breakpoints": true
     }
   ]
 }

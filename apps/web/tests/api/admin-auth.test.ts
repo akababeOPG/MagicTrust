@@ -202,6 +202,30 @@ describe("admin authentication", () => {
     expect(await service.validateSessionToken("session-token")).toBeNull();
   });
 
+  test("protected session validation uses the current persisted role", async () => {
+    const dependencies = createInMemoryDependencies({
+      tokens: ["login-token", "session-token"],
+    });
+    const service = createAdminAuthService(dependencies);
+    const adminUser = await dependencies.adminAuthStore.createAdminUser(
+      prepareAdminUserCreateInput("current-role@onpointglobal.com", "VIEWER"),
+    );
+
+    await service.requestLoginLink(
+      loginRequest("current-role@onpointglobal.com"),
+    );
+    await service.verifyLoginToken("login-token");
+
+    dependencies.state.adminUsers.find(
+      (user) => user.id === adminUser.id,
+    )!.role = "OPERATOR";
+
+    expect(await service.validateSessionToken("session-token")).toMatchObject({
+      adminUserId: adminUser.id,
+      role: "OPERATOR",
+    });
+  });
+
   test("logout revokes session and clears cookie", async () => {
     const dependencies = createInMemoryDependencies({
       tokens: ["login-token", "session-token"],

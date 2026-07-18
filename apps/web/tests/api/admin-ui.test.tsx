@@ -48,9 +48,21 @@ describe("MagicTrust admin UI", () => {
     expect(renderShell("OPERATOR")).not.toContain("Advanced tools");
     expect(renderShell("VIEWER")).not.toContain("Advanced tools");
   });
+
+  test("shows Users navigation only to ADMIN users", () => {
+    const admin = renderShell("ADMIN", "users");
+
+    expect(admin).toContain('href="/admin/users"');
+    expect(admin).toContain('aria-current="page"');
+    expect(renderShell("OPERATOR")).not.toContain('href="/admin/users"');
+    expect(renderShell("VIEWER")).not.toContain('href="/admin/users"');
+  });
 });
 
-function renderShell(role: "ADMIN" | "OPERATOR" | "VIEWER") {
+function renderShell(
+  role: "ADMIN" | "OPERATOR" | "VIEWER",
+  currentSection: "requests" | "users" = "requests",
+) {
   return renderToStaticMarkup(
     <AdminShell
       session={{
@@ -58,6 +70,7 @@ function renderShell(role: "ADMIN" | "OPERATOR" | "VIEWER") {
         role,
         sessionId: "session-1",
       }}
+      currentSection={currentSection}
     >
       <p>Dashboard content</p>
     </AdminShell>,
