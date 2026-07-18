@@ -22,6 +22,7 @@ import {
   buildPublicFormRuntimeDocument,
   publicFormRuntimeCsp,
 } from "../../lib/public-form-runtime";
+import { isResizeMessage } from "../../lib/public-form-frame";
 
 const publishedSource = {
   html: '<form action="https://example.com"><button>Send</button></form>',
@@ -81,10 +82,15 @@ describe("public form rendering", () => {
     expect(response.headers.get("content-security-policy")).toContain(
       "form-action 'none'",
     );
+    expect(response.headers.get("content-security-policy")).toContain(
+      "frame-ancestors *",
+    );
     expect(body).toContain(publishedSource.html);
     expect(body).toContain(publishedSource.css);
     expect(body).toContain(publishedSource.javascript);
     expect(body).toContain("Form submission is not available yet.");
+    expect(body).toContain("magictrust:runtime-resize");
+    expect(body).toContain("ResizeObserver");
     expect(body).not.toContain("stack");
   });
 
@@ -115,5 +121,23 @@ describe("public form rendering", () => {
     expect(publicFormRuntimeCsp).toContain("default-src 'none'");
     expect(document).toContain("<\\/style");
     expect(document).toContain("<\\/script");
+  });
+
+  test("public resize messages enforce numeric height bounds", () => {
+    expect(isResizeMessage({ type: "magictrust:resize", height: 200 })).toBe(
+      true,
+    );
+    expect(isResizeMessage({ type: "magictrust:resize", height: 4000 })).toBe(
+      true,
+    );
+    expect(isResizeMessage({ type: "magictrust:resize", height: 199 })).toBe(
+      false,
+    );
+    expect(isResizeMessage({ type: "magictrust:resize", height: 4001 })).toBe(
+      false,
+    );
+    expect(isResizeMessage({ type: "magictrust:resize", height: "640" })).toBe(
+      false,
+    );
   });
 });

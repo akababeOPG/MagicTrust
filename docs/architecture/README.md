@@ -94,9 +94,37 @@ connections, framing, navigation, and form actions. External scripts and assets
 are not supported in v1.
 
 Native form controls may be displayed and exercised, but submission is
-intentionally blocked. Public submissions, request creation, embeds,
-installation snippets, domain allowlists, analytics, and deployment management
-remain separate future phases.
+intentionally blocked. Public submissions, request creation, domain allowlists,
+analytics, and deployment management remain separate future phases.
+
+### Embed Snippet v1
+
+External websites install a published form with a slug-only snippet:
+
+```html
+<div data-magictrust-form="privacy-request"></div>
+<script src="https://magictrust.example.com/embed.js" async></script>
+```
+
+The configured MagicTrust public origin serves dependency-free `embed.js`. The
+loader discovers every `data-magictrust-form` target, creates one iframe per
+target, and points each iframe to `/forms/:slug`. That route continues to
+resolve the current published `FormVersion`, so publishing a newer version
+updates existing installations without changing their snippets. Multiple forms
+on one page are supported and duplicate loader execution is idempotent.
+
+Stored form code remains in the existing opaque inner runtime iframe. The
+trusted public page relays only bounded height measurements, and the host loader
+accepts resize messages only when both the MagicTrust origin and exact iframe
+window match. Public form pages and their HTTP-sandboxed runtime may be framed
+by external sites, while admin routes deny framing. The outer public page keeps
+its MagicTrust origin only for validated resize messaging. The embed loader
+uses a 500px initial height and updates it between 200 and 4000px through
+`ResizeObserver` with a non-polling fallback.
+
+Embedding remains rendering-only. Form submissions, request creation, domain
+allowlists, themes, analytics, version pinning, and per-site configuration are
+not implemented.
 
 ## Request Model and Workflow Architecture
 

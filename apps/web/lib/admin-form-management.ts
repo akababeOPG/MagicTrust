@@ -13,7 +13,7 @@ import type {
   FormVersionStatus,
   ManagedFormDetail,
 } from "@magictrust/database";
-import { getRequiredDatabaseUrl } from "@magictrust/config";
+import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
 import { z } from "zod";
 
 import type { AdminSession } from "./admin-auth";
@@ -56,6 +56,7 @@ export type AdminFormDetailView = {
   updatedAt: string;
   draftVersionNumber: number | null;
   publishedVersionNumber: number | null;
+  embedSnippet: string | null;
   versions: Array<{
     versionNumber: number;
     status: FormVersionStatus;
@@ -78,6 +79,7 @@ export type AdminFormDependencies = {
   store: FormManagementStore;
   now: () => Date;
   generatePublicId: () => string;
+  appBaseUrl: string;
 };
 
 export function createAdminFormDependencies(): AdminFormDependencies {
@@ -88,6 +90,7 @@ export function createAdminFormDependencies(): AdminFormDependencies {
       : missingStore(),
     now: () => new Date(),
     generatePublicId: () => `frm_${randomBytes(12).toString("base64url")}`,
+    appBaseUrl: getAppBaseUrl(),
   };
 }
 
@@ -110,7 +113,7 @@ export async function getAdminForm(
 ): Promise<AdminFormDetailView | null> {
   const detail = await dependencies.store.getForm(publicId);
   if (!detail) return null;
-  return toDetailView(detail);
+  return toDetailView(detail, dependencies.appBaseUrl);
 }
 
 export async function getAdminFormDraftEditor(
@@ -275,7 +278,7 @@ export async function saveAdminFormDraft(
   });
 }
 
-function toDetailView(detail: ManagedFormDetail) {
+function toDetailView(detail: ManagedFormDetail, appBaseUrl: string) {
   const draft = detail.versions.find((version) => version.status === "DRAFT");
   const published = detail.versions.find(
     (version) => version.status === "PUBLISHED",
@@ -289,6 +292,10 @@ function toDetailView(detail: ManagedFormDetail) {
     updatedAt: detail.form.updatedAt.toISOString(),
     draftVersionNumber: draft?.versionNumber ?? null,
     publishedVersionNumber: published?.versionNumber ?? null,
+    embedSnippet:
+      detail.form.status === "ACTIVE" && published
+        ? buildFormEmbedSnippet(detail.form.slug, appBaseUrl)
+        : null,
     versions: detail.versions.map((version) => ({
       versionNumber: version.versionNumber,
       status: version.status,
@@ -296,6 +303,11 @@ function toDetailView(detail: ManagedFormDetail) {
       publishedAt: version.publishedAt?.toISOString() ?? null,
     })),
   };
+}
+
+export function buildFormEmbedSnippet(slug: string, appBaseUrl: string) {
+  const origin = new URL(appBaseUrl).origin;
+  return `<div data-magictrust-form="${slug}"></div>\n<script src="${origin}/embed.js" async></script>`;
 }
 
 function normalizeSlug(value: string) {

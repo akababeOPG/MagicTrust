@@ -164,6 +164,8 @@ describe("form management foundation", () => {
       session("ADMIN"),
       dependencies,
     );
+    const v1Snippet = (await getAdminForm(form.publicId, dependencies))
+      ?.embedSnippet;
     expect(await getPublicFormRuntime("contact-us", dependencies)).toEqual({
       html: "<main>Published v1</main>",
       css: "main { color: blue; }",
@@ -202,6 +204,9 @@ describe("form management foundation", () => {
       css: "main { color: red; }",
       javascript: "window.__draftVersion = 2;",
     });
+    expect(
+      (await getAdminForm(form.publicId, dependencies))?.embedSnippet,
+    ).toBe(v1Snippet);
 
     await archiveAdminForm(
       formRequest(`/admin/forms/${form.publicId}/archive`, {}),
@@ -318,6 +323,16 @@ describe("form management foundation", () => {
     expect(publishedHtml).toContain("Open public form");
     expect(publishedHtml).toContain('href="/forms/contact-us"');
     expect(publishedHtml).toContain('target="_blank"');
+    expect(published?.embedSnippet).toBe(
+      '<div data-magictrust-form="contact-us"></div>\n<script src="https://magictrust.test/embed.js" async></script>',
+    );
+    expect(published?.embedSnippet).not.toContain(form.publicId);
+    expect(published?.embedSnippet).not.toContain("version");
+    expect(publishedHtml).toContain("Embed form");
+    expect(publishedHtml).toContain("Copy snippet");
+    expect(
+      renderToStaticMarkup(<AdminFormDetail role="ADMIN" form={published!} />),
+    ).toContain("Copy snippet");
 
     await archiveAdminForm(
       formRequest(`/admin/forms/${form.publicId}/archive`, {}),
@@ -329,6 +344,7 @@ describe("form management foundation", () => {
     expect(
       renderToStaticMarkup(<AdminFormDetail role="ADMIN" form={archived!} />),
     ).not.toContain("Open public form");
+    expect(archived?.embedSnippet).toBeNull();
   });
 
   test("ADMIN opens the current draft editor without persisting preview state", async () => {
@@ -570,6 +586,7 @@ function createDependencies() {
     state,
     now: () => state.now,
     generatePublicId: () => `frm_${state.nextId}`,
+    appBaseUrl: "https://magictrust.test",
     store: createMemoryStore(state),
   };
 }

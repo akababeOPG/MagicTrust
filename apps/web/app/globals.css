@@ -1373,6 +1373,7 @@ button:disabled,
 .admin-form-summary,
 .admin-form-next-step,
 .admin-form-public-link,
+.admin-form-embed,
 .admin-form-archive {
   border: 1px solid var(--mt-border);
   border-radius: var(--mt-radius-card);
@@ -1441,6 +1442,7 @@ button:disabled,
 .admin-form-summary,
 .admin-form-next-step,
 .admin-form-public-link,
+.admin-form-embed,
 .admin-form-archive {
   display: grid;
   gap: var(--mt-space-7);
@@ -1486,6 +1488,44 @@ button:disabled,
 .admin-form-public-link > div {
   display: grid;
   gap: var(--mt-space-3);
+}
+
+.admin-form-embed {
+  display: grid;
+  gap: var(--mt-space-5);
+}
+
+.admin-form-embed > div:first-child {
+  display: grid;
+  gap: var(--mt-space-3);
+}
+
+.admin-form-embed pre {
+  max-width: 100%;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius-control);
+  background: var(--mt-sunken);
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--mt-space-6);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.admin-form-embed code {
+  font-family: var(--mt-font-mono);
+  font-size: 12px;
+}
+
+.admin-embed-copy-action {
+  align-items: center;
+  display: flex;
+  gap: var(--mt-space-5);
+}
+
+.admin-embed-copy-feedback {
+  color: var(--mt-text-muted);
+  font-size: 12px;
 }
 
 .admin-form-next-step > div {
@@ -1609,13 +1649,14 @@ button:disabled,
 
 /* Public form runtime */
 .public-form-runtime-page {
-  min-height: 100vh;
+  min-height: 0;
   padding: 0;
 }
 
 .public-form-runtime-frame {
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 200px;
   border: 0;
   background: var(--mt-surface);
   display: block;

@@ -1,6 +1,6 @@
-import React from "react";
-
 import type { PublishedFormRuntime } from "@magictrust/database";
+
+import { publicFormResizeBounds } from "./public-form-resize";
 
 const publicFormDocumentCspDirectives = [
   "default-src 'none'",
@@ -17,25 +17,11 @@ const publicFormDocumentCspDirectives = [
 
 export const publicFormRuntimeCsp = [
   "sandbox allow-scripts allow-forms",
-  "frame-ancestors 'self'",
+  "frame-ancestors *",
   ...publicFormDocumentCspDirectives,
 ].join("; ");
 
 const publicFormDocumentCsp = publicFormDocumentCspDirectives.join("; ");
-
-export function PublicFormFrame({ slug }: { slug: string }) {
-  return (
-    <main className="public-form-runtime-page">
-      <iframe
-        className="public-form-runtime-frame"
-        title="Public form"
-        sandbox="allow-scripts allow-forms"
-        referrerPolicy="no-referrer"
-        src={`/forms/${encodeURIComponent(slug)}/runtime`}
-      />
-    </main>
-  );
-}
 
 export function buildPublicFormRuntimeDocument(source: PublishedFormRuntime) {
   const css = source.css.replace(/<\/style/gi, "<\\/style");
@@ -60,6 +46,35 @@ export function buildPublicFormRuntimeDocument(source: PublishedFormRuntime) {
     event.preventDefault();
     showMessage("magictrust-submission-unavailable", "Form submission is not available yet.");
   }, true);
+
+  var lastHeight = 0;
+  function sendHeight() {
+    var body = document.body;
+    var root = document.documentElement;
+    var measured = Math.ceil(Math.max(
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      root ? root.scrollHeight : 0,
+      root ? root.offsetHeight : 0
+    ));
+    var height = Math.min(${publicFormResizeBounds.maximum}, Math.max(${publicFormResizeBounds.minimum}, measured));
+    if (height === lastHeight) return;
+    lastHeight = height;
+    window.parent.postMessage({ type: "magictrust:runtime-resize", height: height }, "*");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", sendHeight, { once: true });
+  } else {
+    window.setTimeout(sendHeight, 0);
+  }
+  window.addEventListener("load", sendHeight, { once: true });
+  if (typeof ResizeObserver === "function") {
+    var resizeObserver = new ResizeObserver(sendHeight);
+    resizeObserver.observe(document.documentElement);
+  } else {
+    window.setTimeout(sendHeight, 250);
+  }
 })();`;
 
   return `<!doctype html>

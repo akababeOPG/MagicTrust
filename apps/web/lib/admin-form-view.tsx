@@ -2,6 +2,7 @@ import Link from "next/link";
 import React from "react";
 
 import type { AdminSession } from "./admin-auth";
+import { CopyEmbedSnippetButton } from "./admin-embed-snippet";
 import {
   AdminConfirmSubmitButton,
   AdminSubmitButton,
@@ -257,6 +258,22 @@ export function AdminFormDetail({
           >
             Open public form
           </Link>
+        </section>
+      ) : null}
+
+      {form.embedSnippet ? (
+        <section
+          className="admin-form-embed"
+          aria-labelledby="embed-form-heading"
+        >
+          <div>
+            <h2 id="embed-form-heading">Embed form</h2>
+            <p>Add this snippet where you want the form to appear.</p>
+          </div>
+          <pre>
+            <code>{form.embedSnippet}</code>
+          </pre>
+          <CopyEmbedSnippetButton snippet={form.embedSnippet} />
         </section>
       ) : null}
 
