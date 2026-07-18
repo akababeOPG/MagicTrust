@@ -38,6 +38,7 @@ import {
   sendAdminDataAccessResponse,
   sendAdminConsumerNotification,
   startAdminRequestProcessing,
+  updateAdminRequestAssignment,
   updateAdminMutableData,
   updateAdminRequestStatus,
   uploadAdminRequestAttachment,
@@ -393,6 +394,242 @@ describe("admin dashboard", () => {
     expect(serialized).not.toContain("Send email");
     expect(detail).not.toHaveProperty("submittedData");
     expect(detail).not.toHaveProperty("requesterId");
+  });
+
+  test("new requests are unassigned and ADMIN can assign, reassign, and unassign", async () => {
+    const dependencies = createInMemoryDependencies();
+    const adminOne = dependencies.state.adminUsers[0]!;
+    const operator = dependencies.state.adminUsers[1]!;
+    const session = adminSession({
+      adminUserId: adminOne.id,
+      role: "ADMIN",
+    });
+
+    const initial = await getAdminRequestDetail(
+      "req_one",
+      dependencies,
+      session,
+    );
+
+    expect(initial?.assignment.assignedToAdminUserId).toBeNull();
+
+    const assigned = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", adminOne.id),
+      "req_one",
+      session,
+      dependencies,
+    );
+    const reassigned = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", operator.id),
+      "req_one",
+      session,
+      dependencies,
+    );
+    const unassigned = await updateAdminRequestAssignment(
+      adminAssignmentRequest("unassign"),
+      "req_one",
+      session,
+      dependencies,
+    );
+
+    expect([assigned.status, reassigned.status, unassigned.status]).toEqual([
+      303, 303, 303,
+    ]);
+    expect(dependencies.state.assignments.has("request-one")).toBe(false);
+    expect(dependencies.state.requests[0]?.status).toBe("SUBMITTED");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_ASSIGNED",
+      ),
+    ).toHaveLength(2);
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "REQUEST_ASSIGNED",
+          actorType: "ADMIN_USER",
+          actorId: adminOne.id,
+          data: {
+            assignedToAdminUserId: operator.id,
+            assignedByAdminUserId: adminOne.id,
+          },
+        }),
+        expect.objectContaining({
+          type: "REQUEST_UNASSIGNED",
+          actorType: "ADMIN_USER",
+          actorId: adminOne.id,
+          data: {
+            previouslyAssignedToAdminUserId: operator.id,
+            assignedByAdminUserId: adminOne.id,
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("inactive users cannot be assigned", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = dependencies.state.adminUsers[0]!;
+    const inactive = dependencies.state.adminUsers[2]!;
+
+    const response = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", inactive.id),
+      "req_one",
+      adminSession({ adminUserId: admin.id, role: "ADMIN" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "selected+assignee+is+not+available",
+    );
+    expect(dependencies.state.assignments.size).toBe(0);
+  });
+
+  test("duplicate assignment submissions do not create duplicate events", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = dependencies.state.adminUsers[0]!;
+    const session = adminSession({ adminUserId: admin.id, role: "ADMIN" });
+    const request = adminAssignmentRequest("assign", admin.id);
+
+    await updateAdminRequestAssignment(
+      request,
+      "req_one",
+      session,
+      dependencies,
+    );
+    await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", admin.id),
+      "req_one",
+      session,
+      dependencies,
+    );
+
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_ASSIGNED",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("OPERATOR may claim an unassigned request but cannot assign another user or steal ownership", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = dependencies.state.adminUsers[0]!;
+    const operator = dependencies.state.adminUsers[1]!;
+    const operatorSession = adminSession({
+      adminUserId: operator.id,
+      role: "OPERATOR",
+    });
+
+    const claimed = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign"),
+      "req_one",
+      operatorSession,
+      dependencies,
+    );
+    const assignOther = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", admin.id),
+      "req_two",
+      operatorSession,
+      dependencies,
+    );
+
+    expect(claimed.status).toBe(303);
+    expect(
+      dependencies.state.assignments.get("request-one")?.assignedToAdminUserId,
+    ).toBe(operator.id);
+    expect(assignOther.status).toBe(403);
+    expect(dependencies.state.assignments.has("request-two")).toBe(false);
+
+    await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", admin.id),
+      "req_two",
+      adminSession({ adminUserId: admin.id, role: "ADMIN" }),
+      dependencies,
+    );
+    const steal = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign"),
+      "req_two",
+      operatorSession,
+      dependencies,
+    );
+    const unassignOther = await updateAdminRequestAssignment(
+      adminAssignmentRequest("unassign"),
+      "req_two",
+      operatorSession,
+      dependencies,
+    );
+
+    expect(steal.status).toBe(403);
+    expect(unassignOther.status).toBe(403);
+    expect(
+      dependencies.state.assignments.get("request-two")?.assignedToAdminUserId,
+    ).toBe(admin.id);
+  });
+
+  test("VIEWER cannot assign requests", async () => {
+    const dependencies = createInMemoryDependencies();
+    const assignee = dependencies.state.adminUsers[1]!;
+
+    const response = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", assignee.id),
+      "req_one",
+      adminSession({ role: "VIEWER" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(403);
+    expect(dependencies.state.assignments.size).toBe(0);
+  });
+
+  test("assignment rejects cross-origin submissions", async () => {
+    const dependencies = createInMemoryDependencies();
+    const assignee = dependencies.state.adminUsers[0]!;
+
+    const response = await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", assignee.id, "https://evil.test"),
+      "req_one",
+      adminSession({ adminUserId: assignee.id, role: "ADMIN" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(403);
+    expect(dependencies.state.assignments.size).toBe(0);
+  });
+
+  test("assignedTo filters power My requests and Unassigned views", async () => {
+    const dependencies = createInMemoryDependencies();
+    const admin = dependencies.state.adminUsers[0]!;
+    const session = adminSession({ adminUserId: admin.id, role: "ADMIN" });
+    await updateAdminRequestAssignment(
+      adminAssignmentRequest("assign", admin.id),
+      "req_one",
+      session,
+      dependencies,
+    );
+
+    const mine = await listAdminRequests(
+      new URLSearchParams({ view: "my-requests", assignedTo: "me" }),
+      dependencies,
+      session,
+    );
+    const unassigned = await listAdminRequests(
+      new URLSearchParams({ view: "unassigned", assignedTo: "unassigned" }),
+      dependencies,
+      session,
+    );
+
+    expect(
+      mine.ok && mine.data.requests.map((request) => request.publicId),
+    ).toEqual(["req_one"]);
+    expect(
+      unassigned.ok &&
+        unassigned.data.requests.map((request) => request.publicId),
+    ).toEqual(["req_two"]);
+    expect(mine.ok && mine.data.requests[0]?.assignment).toEqual({
+      displayName: "Agustin",
+      isCurrentUser: true,
+    });
   });
 
   test("ADMIN can change status and actor id is derived from the admin session", async () => {
@@ -1792,6 +2029,34 @@ function createInMemoryDependencies(
       sentAt: createdAtOne,
     },
   ];
+  const adminUsers = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      emailEncrypted: encryptPii("agustin@onpointglobal.com"),
+      role: "ADMIN" as const,
+      active: true,
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      emailEncrypted: encryptPii("olivia@onpointglobal.com"),
+      role: "OPERATOR" as const,
+      active: true,
+    },
+    {
+      id: "33333333-3333-4333-8333-333333333333",
+      emailEncrypted: encryptPii("inactive@onpointglobal.com"),
+      role: "OPERATOR" as const,
+      active: false,
+    },
+  ];
+  const assignments = new Map<
+    string,
+    {
+      assignedToAdminUserId: string;
+      assignedAt: Date;
+      assignedByAdminUserId: string;
+    }
+  >();
   const state = {
     requests,
     events,
@@ -1800,6 +2065,8 @@ function createInMemoryDependencies(
     communications,
     accessTokens,
     identityTokens,
+    adminUsers,
+    assignments,
     sensitiveReads: 0,
     uploadedFiles: [] as Array<{
       storageKey: string;
@@ -1828,6 +2095,11 @@ function createInMemoryDependencies(
         completedAt: request.completedAt,
         createdAt: request.createdAt,
         updatedAt: request.updatedAt,
+        assignedToAdminUserId:
+          assignments.get(request.id)?.assignedToAdminUserId ?? null,
+        assignedAt: assignments.get(request.id)?.assignedAt ?? null,
+        assignedByAdminUserId:
+          assignments.get(request.id)?.assignedByAdminUserId ?? null,
         mutableData: request.mutableData,
         events: events
           .filter((event) => event.privacyRequestId === request.id)
@@ -1887,6 +2159,15 @@ function createInMemoryDependencies(
           latestResponseDeliveryStatus: null,
         }));
     },
+    async listActiveAssignableAdminUsers() {
+      return adminUsers.filter(
+        (user) =>
+          user.active && (user.role === "ADMIN" || user.role === "OPERATOR"),
+      );
+    },
+    async findAdminUsersByIds(ids) {
+      return adminUsers.filter((user) => ids.includes(user.id));
+    },
     async list(filters: RequestListFilters) {
       const rows = requests
         .filter((request) =>
@@ -1915,6 +2196,14 @@ function createInMemoryDependencies(
         )
         .filter((request) =>
           filters.createdTo ? request.createdAt < filters.createdTo : true,
+        )
+        .filter((request) =>
+          filters.assignedToAdminUserId === null
+            ? !assignments.has(request.id)
+            : filters.assignedToAdminUserId
+              ? assignments.get(request.id)?.assignedToAdminUserId ===
+                filters.assignedToAdminUserId
+              : true,
         )
         .filter((request) =>
           filters.cursor
@@ -1946,11 +2235,120 @@ function createInMemoryDependencies(
           completedAt: request.completedAt,
           createdAt: request.createdAt,
           updatedAt: request.updatedAt,
+          assignedToAdminUserId:
+            assignments.get(request.id)?.assignedToAdminUserId ?? null,
+          assignedAt: assignments.get(request.id)?.assignedAt ?? null,
+          assignedByAdminUserId:
+            assignments.get(request.id)?.assignedByAdminUserId ?? null,
         })),
         nextCursor:
           rows.length > filters.limit && last
             ? { createdAt: last.createdAt, id: last.id }
             : null,
+      };
+    },
+    async assignRequest(id, assigneeId, actor) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+      const assignee = adminUsers.find(
+        (user) =>
+          user.id === assigneeId &&
+          user.active &&
+          (user.role === "ADMIN" || user.role === "OPERATOR"),
+      );
+
+      if (!request) return { ok: false, code: "NOT_FOUND" };
+      if (!assignee) return { ok: false, code: "ASSIGNEE_NOT_FOUND" };
+
+      const current = assignments.get(request.id);
+
+      if (
+        actor.role === "VIEWER" ||
+        (actor.role === "OPERATOR" &&
+          (assigneeId !== actor.id ||
+            (current && current.assignedToAdminUserId !== actor.id)))
+      ) {
+        return { ok: false, code: "FORBIDDEN" };
+      }
+
+      if (current?.assignedToAdminUserId === assigneeId) {
+        return {
+          ok: true,
+          changed: false,
+          request: summaryFromPrivacyRequest(request, assignments),
+        };
+      }
+
+      const now = new Date("2026-07-03T00:00:00.000Z");
+      assignments.set(request.id, {
+        assignedToAdminUserId: assigneeId,
+        assignedAt: now,
+        assignedByAdminUserId: actor.id,
+      });
+      events.push({
+        id: `event-assigned-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: "REQUEST_ASSIGNED",
+        actorType: "ADMIN_USER",
+        actorId: actor.id,
+        data: {
+          assignedToAdminUserId: assigneeId,
+          assignedByAdminUserId: actor.id,
+        },
+        createdAt: now,
+      });
+
+      return {
+        ok: true,
+        changed: true,
+        request: summaryFromPrivacyRequest(request, assignments),
+      };
+    },
+    async unassignRequest(id, actor) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) return { ok: false, code: "NOT_FOUND" };
+
+      const current = assignments.get(request.id);
+
+      if (
+        actor.role === "VIEWER" ||
+        (actor.role === "OPERATOR" &&
+          current &&
+          current.assignedToAdminUserId !== actor.id)
+      ) {
+        return { ok: false, code: "FORBIDDEN" };
+      }
+
+      if (!current) {
+        return {
+          ok: true,
+          changed: false,
+          request: summaryFromPrivacyRequest(request, assignments),
+        };
+      }
+
+      assignments.delete(request.id);
+      events.push({
+        id: `event-unassigned-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: "REQUEST_UNASSIGNED",
+        actorType: "ADMIN_USER",
+        actorId: actor.id,
+        data: {
+          previouslyAssignedToAdminUserId: current.assignedToAdminUserId,
+          assignedByAdminUserId: actor.id,
+        },
+        createdAt: new Date("2026-07-03T00:00:00.000Z"),
+      });
+
+      return {
+        ok: true,
+        changed: true,
+        request: summaryFromPrivacyRequest(request, assignments),
       };
     },
     async recordAdminAttachmentDownloaded(requestId, input) {
@@ -2443,6 +2841,35 @@ function sourceFromSubmittedData(submittedData: JsonObject) {
     : null;
 }
 
+function summaryFromPrivacyRequest(
+  request: PrivacyRequest,
+  assignments: Map<
+    string,
+    {
+      assignedToAdminUserId: string;
+      assignedAt: Date;
+      assignedByAdminUserId: string;
+    }
+  >,
+) {
+  const assignment = assignments.get(request.id);
+
+  return {
+    id: request.id,
+    publicId: request.publicId,
+    requesterId: request.requesterId,
+    type: request.type,
+    status: request.status,
+    source: sourceFromSubmittedData(request.submittedData),
+    completedAt: request.completedAt,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    assignedToAdminUserId: assignment?.assignedToAdminUserId ?? null,
+    assignedAt: assignment?.assignedAt ?? null,
+    assignedByAdminUserId: assignment?.assignedByAdminUserId ?? null,
+  };
+}
+
 function adminFormRequest(
   action: "status" | "comment",
   fields: Record<string, string>,
@@ -2461,6 +2888,28 @@ function adminFormRequest(
       headers: {
         origin,
       },
+      body,
+    },
+  );
+}
+
+function adminAssignmentRequest(
+  action: "assign" | "unassign",
+  assigneeId?: string,
+  origin = "https://magictrust.test",
+) {
+  const body = new FormData();
+  body.set("action", action);
+
+  if (assigneeId) {
+    body.set("assigneeId", assigneeId);
+  }
+
+  return new Request(
+    "https://magictrust.test/admin/requests/req_one/assignment",
+    {
+      method: "POST",
+      headers: { origin },
       body,
     },
   );

@@ -67,6 +67,8 @@ describe("admin requests list UX", () => {
     });
 
     expect(html).toContain("Needs attention");
+    expect(html).toContain("My requests");
+    expect(html).toContain("Unassigned");
     expect(html).toContain("Waiting on requester");
     expect(html).toContain("In progress");
     expect(html).toContain("Completed");
@@ -74,6 +76,27 @@ describe("admin requests list UX", () => {
       'aria-current="page" href="/admin/requests?view=in-progress&amp;status=PROCESSING&amp;search=req_one"',
     );
     expect(html).toContain("search=req_one");
+  });
+
+  test("renders assignment in desktop and mobile results", () => {
+    const html = renderWorkspace();
+
+    expect(html.match(/Assigned to/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html).toContain("You");
+    expect(html).not.toContain("agustin@onpointglobal.com");
+  });
+
+  test("assignment filters follow role permissions", () => {
+    const admin = renderWorkspace({ role: "ADMIN" });
+    const operator = renderWorkspace({ role: "OPERATOR" });
+    const viewer = renderWorkspace({ role: "VIEWER" });
+
+    expect(admin).toContain('<option value="me">Me</option>');
+    expect(admin).toContain("Agustin (Admin)");
+    expect(operator).toContain('<option value="me">Me</option>');
+    expect(operator).not.toContain("Agustin (Admin)");
+    expect(viewer).not.toContain('<option value="me">Me</option>');
+    expect(viewer).toContain('<option value="unassigned">Unassigned</option>');
   });
 
   test("uses natural request type and next-step labels", () => {
@@ -120,6 +143,7 @@ describe("admin requests list UX", () => {
         view: "needs-attention",
         status: "VERIFIED",
         limit: "25",
+        assignedTo: "me",
       }),
       nextCursor: "opaque-cursor",
     });
@@ -128,6 +152,7 @@ describe("admin requests list UX", () => {
     expect(html).toContain("type=DATA_ACCESS");
     expect(html).toContain("view=needs-attention");
     expect(html).toContain("status=VERIFIED");
+    expect(html).toContain("assignedTo=me");
     expect(html).toContain("cursor=opaque-cursor");
     expect(html).not.toContain(">opaque-cursor<");
   });
@@ -191,8 +216,19 @@ function renderWorkspace({
                   },
                   ageDays: 0,
                   nextStep: "Start processing",
+                  assignment: {
+                    displayName: "Agustin",
+                    isCurrentUser: true,
+                  },
                 },
               ],
+          assignmentOptions: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              displayName: "Agustin",
+              role: "ADMIN",
+            },
+          ],
           pagination: {
             limit: 25,
             ...(nextCursor ? { nextCursor } : {}),

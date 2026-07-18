@@ -63,6 +63,8 @@ export const requestEventTypeEnum = pgEnum("request_event_type", [
   "CONSUMER_NOTIFICATION_SENT",
   "CONSUMER_NOTIFICATION_FAILED",
   "REQUEST_DATA_UPDATED",
+  "REQUEST_ASSIGNED",
+  "REQUEST_UNASSIGNED",
 ]);
 
 export const requestEventCategoryEnum = pgEnum("request_event_category", [
@@ -141,6 +143,15 @@ export const privacyRequests = pgTable(
     submittedDataHash: text("submitted_data_hash"),
     encryptionVersion: integer("encryption_version"),
     mutableData: jsonb("mutable_data").default({}).notNull(),
+    assignedToAdminUserId: uuid("assigned_to_admin_user_id").references(
+      () => adminUsers.id,
+      { onDelete: "restrict" },
+    ),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }),
+    assignedByAdminUserId: uuid("assigned_by_admin_user_id").references(
+      () => adminUsers.id,
+      { onDelete: "restrict" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -169,6 +180,9 @@ export const privacyRequests = pgTable(
       table.type,
       table.createdAt,
     ),
+    assignedToCreatedAtIdIdx: index(
+      "privacy_requests_assigned_to_created_at_id_idx",
+    ).on(table.assignedToAdminUserId, table.createdAt, table.id),
   }),
 );
 
@@ -627,6 +641,12 @@ export const apiClientScopesRelations = relations(
 export const adminUsersRelations = relations(adminUsers, ({ many }) => ({
   loginTokens: many(adminLoginTokens),
   sessions: many(adminSessions),
+  assignedRequests: many(privacyRequests, {
+    relationName: "requestAssignee",
+  }),
+  requestAssignments: many(privacyRequests, {
+    relationName: "requestAssignedBy",
+  }),
 }));
 
 export const adminLoginTokensRelations = relations(
@@ -652,6 +672,16 @@ export const privacyRequestsRelations = relations(
     requester: one(requesters, {
       fields: [privacyRequests.requesterId],
       references: [requesters.id],
+    }),
+    assignedToAdminUser: one(adminUsers, {
+      fields: [privacyRequests.assignedToAdminUserId],
+      references: [adminUsers.id],
+      relationName: "requestAssignee",
+    }),
+    assignedByAdminUser: one(adminUsers, {
+      fields: [privacyRequests.assignedByAdminUserId],
+      references: [adminUsers.id],
+      relationName: "requestAssignedBy",
     }),
     events: many(requestEvents),
     comments: many(requestComments),

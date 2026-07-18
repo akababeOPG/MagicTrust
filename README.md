@@ -147,6 +147,8 @@ ENCRYPTION_KEY=...
 
 In production, admin session cookies are marked `secure`.
 
+The request workspace at `/admin/requests` includes optional request assignment. `ADMIN` users can assign active administrators or operators; `OPERATOR` users can claim unassigned requests for themselves; `VIEWER` users remain read-only. **My requests** and **Unassigned** are URL-based workload views. Assignment is operational metadata only and never changes request status or sends a consumer notification.
+
 ## Public Intake
 
 The hosted public privacy request form runs at:

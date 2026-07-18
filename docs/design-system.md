@@ -40,11 +40,15 @@ The requests workspace is ordered around operator intent: unified exact search, 
 
 Workload views are navigation shortcuts over existing status filters; they do not introduce stored workflow state or additional count queries. The active view is identified by text and an accent indicator with `aria-current`.
 
-Desktop tables prioritize Request, Requester, Status, Next step, and View. Age is the first column removed as space tightens. On mobile, the table becomes stacked request cards containing the same operational identity, status, requester summary, received date, next step, and accessible View action. Actionable, waiting, and completed rows use restrained indicators without changing database ordering.
+Desktop tables prioritize Request, Requester, Status, Assigned to, Next step, and View. Assignment uses a short server-derived display name, `You`, or `Unassigned`; full admin email addresses are unnecessary. Age is the first column removed as space tightens. On mobile, the table becomes stacked request cards containing the same operational identity, status, requester summary, assignment, received date, next step, and accessible View action. Actionable, waiting, and completed rows use restrained indicators without changing database ordering.
+
+My requests and Unassigned are URL-derived workload views for ADMIN and OPERATOR. Assignment filtering remains secondary to exact request search and the current workflow state.
 
 ## Guided Request Detail
 
 The DATA_ACCESS detail workspace follows operational priority: a compact breadcrumb and request identity, progress, the current next step, requester/response/notes work areas, then collapsed activity history. The public ID is the primary heading, with the status badge alongside it and secondary actions kept separate. The next-step card is the single strongest action surface. Desktop uses an approximately 64/36 requester-to-response layout; tablet and mobile stack Requester, Response, then Internal notes.
+
+Assignment appears as compact ownership metadata beside the request identity and never competes with the next-step action. ADMIN receives a small assign/reassign menu, OPERATOR receives a secondary self-claim action only when allowed, and VIEWER receives read-only ownership state.
 
 Progress maps Received, Verified, Processing, Response ready, and Completed on a compact horizontal track. Completed stages use checkmarks, the current stage uses a bordered dot, and upcoming stages retain their step numbers; stage state remains available semantically without repeating captions below each label. Waiting requests show an interruption treatment. Rejected and cancelled requests preserve stages reached before closure without marking the workflow completed.
 

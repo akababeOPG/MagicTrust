@@ -16,8 +16,10 @@ import type {
 import { encryptPii, hashPii } from "@magictrust/privacy";
 import { and, desc, eq, gt, gte, inArray, isNull, lt, or } from "drizzle-orm";
 
+import type { AdminRole } from "./admin-auth-store";
 import type { createDatabase } from "./index";
 import {
+  adminUsers,
   privacyRequests,
   requestAccessSessions,
   requestAccessTokens,
@@ -42,6 +44,16 @@ export type RequestSummary = {
   completedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  assignedToAdminUserId?: string | null;
+  assignedAt?: Date | null;
+  assignedByAdminUserId?: string | null;
+};
+
+export type AdminUserAssignmentRecord = {
+  id: string;
+  emailEncrypted: string;
+  role: AdminRole;
+  active: boolean;
 };
 
 export type SafeRequestSource = {
@@ -108,6 +120,7 @@ export type RequestListFilters = {
   createdTo?: Date;
   updatedFrom?: Date;
   updatedTo?: Date;
+  assignedToAdminUserId?: string | null;
   cursor?: {
     createdAt: Date;
     id: string;
@@ -137,7 +150,18 @@ export type RequestRepository = {
   findConsumerNotificationTarget(
     id: string,
   ): Promise<ConsumerNotificationTarget | null>;
+  listActiveAssignableAdminUsers(): Promise<AdminUserAssignmentRecord[]>;
+  findAdminUsersByIds(ids: string[]): Promise<AdminUserAssignmentRecord[]>;
   list(filters: RequestListFilters): Promise<RequestListResult>;
+  assignRequest(
+    id: string,
+    assigneeId: string,
+    actor: AdminRequestAssignmentActor,
+  ): Promise<RequestAssignmentMutationResult>;
+  unassignRequest(
+    id: string,
+    actor: AdminRequestAssignmentActor,
+  ): Promise<RequestAssignmentMutationResult>;
   updateStatus(
     id: string,
     input: UpdateRequestStatusInput,
@@ -227,6 +251,18 @@ export type RequestRepository = {
     input: VerifyIdentityTokenInput,
   ): Promise<RequestSummary | null>;
 };
+
+export type AdminRequestAssignmentActor = {
+  id: string;
+  role: AdminRole;
+};
+
+export type RequestAssignmentMutationResult =
+  | { ok: true; request: RequestSummary; changed: boolean }
+  | {
+      ok: false;
+      code: "NOT_FOUND" | "ASSIGNEE_NOT_FOUND" | "FORBIDDEN";
+    };
 
 export type UpdateRequestStatusInput = {
   status: RequestStatus;
@@ -416,6 +452,9 @@ export function createRequestRepository(db: Database): RequestRepository {
           createdAt: privacyRequests.createdAt,
           updatedAt: privacyRequests.updatedAt,
           mutableData: privacyRequests.mutableData,
+          assignedToAdminUserId: privacyRequests.assignedToAdminUserId,
+          assignedAt: privacyRequests.assignedAt,
+          assignedByAdminUserId: privacyRequests.assignedByAdminUserId,
         })
         .from(privacyRequests)
         .where(
@@ -611,6 +650,36 @@ export function createRequestRepository(db: Database): RequestRepository {
 
       return request ?? null;
     },
+    async listActiveAssignableAdminUsers() {
+      return db
+        .select({
+          id: adminUsers.id,
+          emailEncrypted: adminUsers.emailEncrypted,
+          role: adminUsers.role,
+          active: adminUsers.active,
+        })
+        .from(adminUsers)
+        .where(
+          and(
+            eq(adminUsers.active, true),
+            inArray(adminUsers.role, ["ADMIN", "OPERATOR"]),
+          ),
+        )
+        .orderBy(adminUsers.role, adminUsers.createdAt);
+    },
+    async findAdminUsersByIds(ids) {
+      if (ids.length === 0) return [];
+
+      return db
+        .select({
+          id: adminUsers.id,
+          emailEncrypted: adminUsers.emailEncrypted,
+          role: adminUsers.role,
+          active: adminUsers.active,
+        })
+        .from(adminUsers)
+        .where(inArray(adminUsers.id, ids));
+    },
     async list(filters) {
       const conditions = [
         filters.publicId
@@ -640,6 +709,14 @@ export function createRequestRepository(db: Database): RequestRepository {
         filters.updatedTo
           ? lt(privacyRequests.updatedAt, filters.updatedTo)
           : undefined,
+        filters.assignedToAdminUserId === null
+          ? isNull(privacyRequests.assignedToAdminUserId)
+          : filters.assignedToAdminUserId
+            ? eq(
+                privacyRequests.assignedToAdminUserId,
+                filters.assignedToAdminUserId,
+              )
+            : undefined,
         filters.cursor
           ? or(
               lt(privacyRequests.createdAt, filters.cursor.createdAt),
@@ -662,6 +739,9 @@ export function createRequestRepository(db: Database): RequestRepository {
           completedAt: privacyRequests.completedAt,
           createdAt: privacyRequests.createdAt,
           updatedAt: privacyRequests.updatedAt,
+          assignedToAdminUserId: privacyRequests.assignedToAdminUserId,
+          assignedAt: privacyRequests.assignedAt,
+          assignedByAdminUserId: privacyRequests.assignedByAdminUserId,
         })
         .from(privacyRequests)
         .innerJoin(requesters, eq(privacyRequests.requesterId, requesters.id))
@@ -683,6 +763,9 @@ export function createRequestRepository(db: Database): RequestRepository {
           completedAt: row.completedAt,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
+          assignedToAdminUserId: row.assignedToAdminUserId,
+          assignedAt: row.assignedAt,
+          assignedByAdminUserId: row.assignedByAdminUserId,
         })),
         nextCursor:
           hasMore && last
@@ -692,6 +775,122 @@ export function createRequestRepository(db: Database): RequestRepository {
               }
             : null,
       };
+    },
+    async assignRequest(id, assigneeId, actor) {
+      return db.transaction(async (tx) => {
+        const [assignee] = await tx
+          .select({ id: adminUsers.id })
+          .from(adminUsers)
+          .where(
+            and(
+              eq(adminUsers.id, assigneeId),
+              eq(adminUsers.active, true),
+              inArray(adminUsers.role, ["ADMIN", "OPERATOR"]),
+            ),
+          )
+          .limit(1);
+
+        if (!assignee) {
+          return { ok: false, code: "ASSIGNEE_NOT_FOUND" };
+        }
+
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1)
+          .for("update");
+
+        if (!request) return { ok: false, code: "NOT_FOUND" };
+        if (actor.role === "VIEWER") {
+          return { ok: false, code: "FORBIDDEN" };
+        }
+        if (
+          actor.role === "OPERATOR" &&
+          (assigneeId !== actor.id ||
+            (request.assignedToAdminUserId !== null &&
+              request.assignedToAdminUserId !== actor.id))
+        ) {
+          return { ok: false, code: "FORBIDDEN" };
+        }
+        if (request.assignedToAdminUserId === assigneeId) {
+          return { ok: true, request, changed: false };
+        }
+
+        const now = new Date();
+        const [updated] = await tx
+          .update(privacyRequests)
+          .set({
+            assignedToAdminUserId: assigneeId,
+            assignedAt: now,
+            assignedByAdminUserId: actor.id,
+            updatedAt: now,
+          })
+          .where(eq(privacyRequests.id, request.id))
+          .returning(requestSummarySelection);
+
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: request.id,
+          type: "REQUEST_ASSIGNED",
+          actorType: "ADMIN_USER",
+          actorId: actor.id,
+          data: {
+            assignedToAdminUserId: assigneeId,
+            assignedByAdminUserId: actor.id,
+          },
+        });
+
+        return { ok: true, request: updated, changed: true };
+      });
+    },
+    async unassignRequest(id, actor) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1)
+          .for("update");
+
+        if (!request) return { ok: false, code: "NOT_FOUND" };
+        if (
+          actor.role === "VIEWER" ||
+          (actor.role === "OPERATOR" &&
+            request.assignedToAdminUserId !== null &&
+            request.assignedToAdminUserId !== actor.id)
+        ) {
+          return { ok: false, code: "FORBIDDEN" };
+        }
+        if (request.assignedToAdminUserId === null) {
+          return { ok: true, request, changed: false };
+        }
+
+        const previouslyAssignedToAdminUserId = request.assignedToAdminUserId;
+        const now = new Date();
+        const [updated] = await tx
+          .update(privacyRequests)
+          .set({
+            assignedToAdminUserId: null,
+            assignedAt: null,
+            assignedByAdminUserId: null,
+            updatedAt: now,
+          })
+          .where(eq(privacyRequests.id, request.id))
+          .returning(requestSummarySelection);
+
+        await createRequestEventAndEnqueueWebhooks(tx, {
+          privacyRequestId: request.id,
+          type: "REQUEST_UNASSIGNED",
+          actorType: "ADMIN_USER",
+          actorId: actor.id,
+          data: {
+            previouslyAssignedToAdminUserId,
+            assignedByAdminUserId: actor.id,
+          },
+        });
+
+        return { ok: true, request: updated, changed: true };
+      });
     },
     async updateStatus(id, input) {
       return db.transaction(async (tx) => {
@@ -1576,6 +1775,9 @@ const requestSummarySelection = {
   completedAt: privacyRequests.completedAt,
   createdAt: privacyRequests.createdAt,
   updatedAt: privacyRequests.updatedAt,
+  assignedToAdminUserId: privacyRequests.assignedToAdminUserId,
+  assignedAt: privacyRequests.assignedAt,
+  assignedByAdminUserId: privacyRequests.assignedByAdminUserId,
 };
 
 const accessTokenSelection = {

@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 const mocks = vi.hoisted(() => ({
   requireAdminRole: vi.fn(),
   updateAdminRequestStatus: vi.fn(),
+  updateAdminRequestAssignment: vi.fn(),
   createAdminRequestComment: vi.fn(),
   uploadAdminRequestAttachment: vi.fn(),
   sendAdminConsumerNotification: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/admin-auth", () => ({
 vi.mock("@/lib/admin-dashboard", () => ({
   createAdminDashboardDependencies: vi.fn(() => ({ kind: "dependencies" })),
   updateAdminRequestStatus: mocks.updateAdminRequestStatus,
+  updateAdminRequestAssignment: mocks.updateAdminRequestAssignment,
   createAdminRequestComment: mocks.createAdminRequestComment,
   uploadAdminRequestAttachment: mocks.uploadAdminRequestAttachment,
   sendAdminConsumerNotification: mocks.sendAdminConsumerNotification,
@@ -120,6 +122,27 @@ describe("admin action routes", () => {
       session,
       { kind: "dependencies" },
     );
+  });
+
+  test("assignment route requires an authorized admin role", async () => {
+    mocks.requireAdminRole.mockResolvedValueOnce(
+      Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+    );
+    const { POST } =
+      await import("../../app/admin/requests/[publicId]/assignment/route");
+
+    const response = await POST(
+      new Request("https://magictrust.test/admin/requests/req_one/assignment", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ publicId: "req_one" }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.requireAdminRole).toHaveBeenCalledWith(["ADMIN", "OPERATOR"], {
+      response: "json",
+    });
+    expect(mocks.updateAdminRequestAssignment).not.toHaveBeenCalled();
   });
 
   test("unauthenticated upload rejected", async () => {

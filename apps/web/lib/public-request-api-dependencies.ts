@@ -29,6 +29,18 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
         list() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        listActiveAssignableAdminUsers() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        findAdminUsersByIds() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        assignRequest() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
+        unassignRequest() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         updateStatus() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },

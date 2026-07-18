@@ -2821,6 +2821,18 @@ function createInMemoryDependencies(
   };
 
   const requestRepository: RequestRepository = {
+    async listActiveAssignableAdminUsers() {
+      return [];
+    },
+    async findAdminUsersByIds() {
+      return [];
+    },
+    async assignRequest() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
+    async unassignRequest() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
     async findAdminSensitiveData() {
       return null;
     },

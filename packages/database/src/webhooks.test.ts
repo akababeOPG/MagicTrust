@@ -237,6 +237,32 @@ describe("webhooks", () => {
     expect(serialized).not.toContain("sha256-secret");
   });
 
+  test("assignment webhook payloads use the built-in safe allowlist", () => {
+    const payload = buildWebhookPayload({
+      deliveryId: "delivery-assignment",
+      effectiveEventType: "REQUEST_ASSIGNED",
+      event: {
+        ...sampleEvent(),
+        type: "REQUEST_ASSIGNED",
+        data: {
+          assignedToAdminUserId: "admin-user-2",
+          assignedByAdminUserId: "admin-user-1",
+          email: "operator@example.com",
+          emailHash: "secret-hash",
+        },
+      },
+      request: sampleRequest(),
+    });
+
+    expect(payload.event.type).toBe("REQUEST_ASSIGNED");
+    expect(payload.data).toEqual({
+      assignedToAdminUserId: "admin-user-2",
+      assignedByAdminUserId: "admin-user-1",
+    });
+    expect(JSON.stringify(payload)).not.toContain("operator@example.com");
+    expect(JSON.stringify(payload)).not.toContain("secret-hash");
+  });
+
   test("custom event payload includes validated custom event data", () => {
     const payload = buildWebhookPayload({
       deliveryId: "delivery-1",

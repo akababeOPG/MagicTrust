@@ -21,7 +21,7 @@ export default async function AdminRequestsPage({ searchParams }: PageProps) {
   const result = await listAdminRequests(
     params,
     createAdminDashboardDependencies(),
-    session.role,
+    session,
   );
 
   return (

@@ -143,6 +143,9 @@ describe("public request API", () => {
     expect(serialized).not.toContain("attachments");
     expect(serialized).not.toContain("communications");
     expect(serialized).not.toContain("providerMessageId");
+    expect(serialized).not.toContain("assignedToAdminUserId");
+    expect(serialized).not.toContain("assignedByAdminUserId");
+    expect(serialized).not.toContain("assignedAt");
     expect(dependencies.state.requests[0]?.submittedData).toEqual({
       type: "DATA_ACCESS",
       source: {
@@ -1401,6 +1404,18 @@ function createInMemoryDependencies(
   };
 
   const requestRepository: RequestRepository = {
+    async listActiveAssignableAdminUsers() {
+      return [];
+    },
+    async findAdminUsersByIds() {
+      return [];
+    },
+    async assignRequest() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
+    async unassignRequest() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
     async findAdminSensitiveData() {
       return null;
     },

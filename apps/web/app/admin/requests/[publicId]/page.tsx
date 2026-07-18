@@ -54,7 +54,7 @@ export default async function AdminRequestDetailPage({
   const request = await getAdminRequestDetail(
     publicId,
     createAdminDashboardDependencies(),
-    session.role,
+    session,
   );
 
   if (!request) {
@@ -88,6 +88,8 @@ export default async function AdminRequestDetailPage({
           <Link href="/admin/requests">Back to requests</Link>
         </div>
       </header>
+
+      <RequestAssignmentControl request={request} role={session.role} />
 
       {successMessage ? (
         <section className="admin-card success-message" role="status">
@@ -703,6 +705,7 @@ function DataAccessRequestDetail({
             Received {formatDateTime(request.createdAt)} ·{" "}
             {formatRequestAge(ageDays)}
           </p>
+          <RequestAssignmentControl request={request} role={role} />
         </div>
         <div className="request-header-actions">
           {canAct && !isTerminalStatus(request.status) ? (
@@ -1020,6 +1023,104 @@ function DataAccessRequestDetail({
         </details>
       </section>
     </main>
+  );
+}
+
+function RequestAssignmentControl({
+  request,
+  role,
+}: {
+  request: AdminRequestDetailView;
+  role: "ADMIN" | "OPERATOR" | "VIEWER";
+}) {
+  const assignment = request.assignment ?? {
+    displayName: null,
+    isCurrentUser: false,
+    assignedToAdminUserId: null,
+    assignedAt: null,
+    options: [],
+  };
+  const assignedToCurrentUser = assignment.isCurrentUser;
+  const isAssigned = assignment.assignedToAdminUserId !== null;
+  const displayName = assignedToCurrentUser
+    ? "You"
+    : (assignment.displayName ?? "Unassigned");
+
+  return (
+    <div className="request-assignment" aria-label="Request assignment">
+      <div className="request-assignment-summary">
+        <span>Assigned to</span>
+        <strong>{displayName}</strong>
+      </div>
+
+      {role === "ADMIN" ? (
+        <details className="request-assignment-menu">
+          <summary>{isAssigned ? "Manage" : "Assign"}</summary>
+          <div className="request-assignment-panel">
+            <form
+              action={`/admin/requests/${request.publicId}/assignment`}
+              method="post"
+            >
+              <input type="hidden" name="action" value="assign" />
+              <label>
+                Assign to
+                <select
+                  name="assigneeId"
+                  required
+                  defaultValue={
+                    assignment.options.some(
+                      (option) =>
+                        option.id === assignment.assignedToAdminUserId,
+                    )
+                      ? (assignment.assignedToAdminUserId ?? "")
+                      : ""
+                  }
+                >
+                  <option value="">Select a user</option>
+                  {assignment.options.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.displayName} ({formatAdminRole(option.role)})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <AdminSubmitButton>
+                {isAssigned ? "Reassign" : "Assign"}
+              </AdminSubmitButton>
+            </form>
+            {isAssigned ? (
+              <form
+                action={`/admin/requests/${request.publicId}/assignment`}
+                method="post"
+              >
+                <input type="hidden" name="action" value="unassign" />
+                <AdminSubmitButton variant="secondary">
+                  Unassign
+                </AdminSubmitButton>
+              </form>
+            ) : null}
+          </div>
+        </details>
+      ) : role === "OPERATOR" && !isAssigned ? (
+        <form
+          action={`/admin/requests/${request.publicId}/assignment`}
+          method="post"
+        >
+          <input type="hidden" name="action" value="assign" />
+          <AdminSubmitButton variant="secondary">
+            Assign to me
+          </AdminSubmitButton>
+        </form>
+      ) : role === "OPERATOR" && assignedToCurrentUser ? (
+        <form
+          action={`/admin/requests/${request.publicId}/assignment`}
+          method="post"
+        >
+          <input type="hidden" name="action" value="unassign" />
+          <AdminSubmitButton variant="secondary">Unassign</AdminSubmitButton>
+        </form>
+      ) : null}
+    </div>
   );
 }
 
@@ -1352,6 +1453,11 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Response sent and request completed.",
     "This request is already completed.",
     "Status updated.",
+    "Request assigned.",
+    "Request unassigned.",
+    "Request is already assigned to that user.",
+    "Request is already unassigned.",
+    "The selected assignee is not available.",
     "Verification email could not be sent.",
     "The response email could not be sent. The request remains in processing.",
     "Select a response file before sending.",
@@ -1383,6 +1489,10 @@ function formatSubmissionSource(channel: string | null): string {
   if (channel === "FORM") return "Hosted privacy form";
   if (channel === "API") return "Internal API";
   return channel ? formatEnumLabel(channel) : "Source unavailable";
+}
+
+function formatAdminRole(role: "ADMIN" | "OPERATOR"): string {
+  return role === "ADMIN" ? "Admin" : "Operator";
 }
 
 function formatEnumLabel(value: string): string {

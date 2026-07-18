@@ -156,6 +156,22 @@ function AdminNavigation({ role }: { role: AdminSession["role"] }) {
       </div>
       <div className="mt-nav-group">
         <p className="mt-nav-label">Views</p>
+        {role !== "VIEWER" ? (
+          <>
+            <Link
+              className="mt-nav-item"
+              href="/admin/requests?view=my-requests&assignedTo=me"
+            >
+              My requests
+            </Link>
+            <Link
+              className="mt-nav-item"
+              href="/admin/requests?view=unassigned&assignedTo=unassigned"
+            >
+              Unassigned
+            </Link>
+          </>
+        ) : null}
         <Link
           className="mt-nav-item"
           href="/admin/requests?view=needs-attention&status=VERIFIED"

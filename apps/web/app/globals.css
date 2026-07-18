@@ -1168,7 +1168,7 @@ button:disabled,
   align-items: end;
   display: grid;
   gap: var(--mt-space-5);
-  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
   padding-top: var(--mt-space-5);
 }
 
@@ -1477,6 +1477,78 @@ button:disabled,
   display: flex;
   flex: none;
   gap: var(--mt-space-4);
+}
+
+.request-assignment {
+  position: relative;
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mt-space-4);
+  width: fit-content;
+}
+
+.request-assignment-summary {
+  display: grid;
+  gap: var(--mt-space-1);
+}
+
+.request-assignment-summary span {
+  color: var(--mt-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.request-assignment-summary strong {
+  color: var(--mt-ink);
+  font-size: 13px;
+}
+
+.request-assignment-menu {
+  position: relative;
+}
+
+.request-assignment-menu > summary {
+  color: var(--mt-accent-strong);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.request-assignment-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.request-assignment-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--mt-space-4));
+  left: 0;
+  width: min(320px, calc(100vw - 48px));
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius-md);
+  background: var(--mt-surface);
+  box-shadow: var(--mt-shadow-menu);
+  display: grid;
+  gap: var(--mt-space-5);
+  padding: var(--mt-space-6);
+}
+
+.request-assignment-panel form,
+.request-assignment-panel label {
+  display: grid;
+  gap: var(--mt-space-4);
+}
+
+.request-assignment-panel label {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-assignment-panel button {
+  width: 100%;
 }
 
 .request-more-actions {
@@ -2295,8 +2367,8 @@ dialog.mt-dialog {
 @media (max-width: 800px) and (min-width: 641px) {
   .request-table th:nth-child(3),
   .request-table td:nth-child(3),
-  .request-table th:nth-child(5),
-  .request-table td:nth-child(5) {
+  .request-table th:nth-child(6),
+  .request-table td:nth-child(6) {
     display: none;
   }
 

@@ -51,6 +51,26 @@ export function getInternalRequestApiDependencies(): InternalRequestApiDependenc
             "DATABASE_URL is required for internal request APIs.",
           );
         },
+        listActiveAssignableAdminUsers() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        findAdminUsersByIds() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        assignRequest() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
+        unassignRequest() {
+          throw new Error(
+            "DATABASE_URL is required for internal request APIs.",
+          );
+        },
         updateStatus() {
           throw new Error(
             "DATABASE_URL is required for internal request APIs.",

@@ -70,7 +70,10 @@ describe("admin sensitive request page", () => {
     expect(mocks.getAdminRequestDetail).toHaveBeenCalledWith(
       "req_one",
       { kind: "dependencies" },
-      "ADMIN",
+      expect.objectContaining({
+        adminUserId: "admin-user-1",
+        role: "ADMIN",
+      }),
     );
   });
 
@@ -92,7 +95,10 @@ describe("admin sensitive request page", () => {
     expect(mocks.getAdminRequestDetail).toHaveBeenCalledWith(
       "req_one",
       { kind: "dependencies" },
-      "VIEWER",
+      expect.objectContaining({
+        adminUserId: "admin-user-1",
+        role: "VIEWER",
+      }),
     );
   });
 

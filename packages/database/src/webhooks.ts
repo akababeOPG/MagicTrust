@@ -128,6 +128,8 @@ export const builtInWebhookEventTypes = [
   "CONSUMER_NOTIFICATION_SENT",
   "CONSUMER_NOTIFICATION_FAILED",
   "REQUEST_DATA_UPDATED",
+  "REQUEST_ASSIGNED",
+  "REQUEST_UNASSIGNED",
 ] as const;
 
 const builtInWebhookEventTypeSet = new Set<string>(builtInWebhookEventTypes);
@@ -687,6 +689,16 @@ function sanitizeWebhookEventData(event: {
       return pickJsonObject(event.data, ["previousStatus", "newStatus"]);
     case "REQUEST_DATA_UPDATED":
       return pickJsonObject(event.data, ["changedKeys", "reason"]);
+    case "REQUEST_ASSIGNED":
+      return pickJsonObject(event.data, [
+        "assignedToAdminUserId",
+        "assignedByAdminUserId",
+      ]);
+    case "REQUEST_UNASSIGNED":
+      return pickJsonObject(event.data, [
+        "previouslyAssignedToAdminUserId",
+        "assignedByAdminUserId",
+      ]);
     case "PUBLIC_COMMENT_ADDED":
     case "INTERNAL_COMMENT_ADDED":
       return pickJsonObject(event.data, ["commentId", "visibility"]);

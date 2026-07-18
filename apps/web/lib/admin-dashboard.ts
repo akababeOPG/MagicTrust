@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import {
   createDatabase,
   createRequestRepository,
+  type AdminUserAssignmentRecord,
   type AdminRequestListWorkflowData,
   type AdminRequestSensitiveData,
   type ConsumerNotificationType,
@@ -53,6 +54,7 @@ export type AdminDashboardDependencies = {
 
 export type AdminRequestListView = {
   requests: AdminRequestListItem[];
+  assignmentOptions: AdminAssignmentOption[];
   pagination: {
     limit: number;
     nextCursor?: string;
@@ -78,9 +80,24 @@ export type AdminRequestListItem = {
   };
   ageDays?: number;
   nextStep?: string;
+  assignment: {
+    displayName: string | null;
+    isCurrentUser: boolean;
+  };
+};
+
+export type AdminAssignmentOption = {
+  id: string;
+  displayName: string;
+  role: "ADMIN" | "OPERATOR";
 };
 
 export type AdminRequestDetailView = AdminRequestListItem & {
+  assignment: AdminRequestListItem["assignment"] & {
+    assignedToAdminUserId: string | null;
+    assignedAt: string | null;
+    options: AdminAssignmentOption[];
+  };
   requester?: {
     firstName: string | null;
     lastName: string | null;
@@ -149,6 +166,11 @@ type AdminListParseResult =
       message: string;
     };
 
+type AdminViewerContext = {
+  role: AdminSession["role"];
+  adminUserId: string | null;
+};
+
 const defaultAdminPageSize = 25;
 const maxAdminPageSize = 100;
 const maxUploadSizeBytes = 10 * 1024 * 1024;
@@ -187,6 +209,8 @@ const builtInEventTypes = new Set([
   "CONSUMER_NOTIFICATION_SENT",
   "CONSUMER_NOTIFICATION_FAILED",
   "REQUEST_DATA_UPDATED",
+  "REQUEST_ASSIGNED",
+  "REQUEST_UNASSIGNED",
 ]);
 const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;
 const maxAdminMutableDataBytes = 32 * 1024;
@@ -279,14 +303,38 @@ export function createAdminDashboardDependencies(): AdminDashboardDependencies {
 export async function listAdminRequests(
   searchParams: URLSearchParams,
   dependencies: AdminDashboardDependencies,
-  role: AdminSession["role"] = "VIEWER",
+  viewer:
+    | AdminSession["role"]
+    | Pick<AdminSession, "role" | "adminUserId"> = "VIEWER",
 ): Promise<
   { ok: true; data: AdminRequestListView } | { ok: false; message: string }
 > {
-  const parsed = parseAdminRequestListSearchParams(searchParams, role);
+  const context = adminViewerContext(viewer);
+  const parsed = parseAdminRequestListSearchParams(
+    searchParams,
+    context.role,
+    context.adminUserId,
+  );
 
   if (!parsed.ok) {
     return parsed;
+  }
+
+  const assignmentOptions =
+    context.role === "ADMIN"
+      ? normalizeAssignmentOptions(
+          await dependencies.requestRepository.listActiveAssignableAdminUsers(),
+        )
+      : [];
+
+  if (
+    typeof parsed.filters.assignedToAdminUserId === "string" &&
+    context.role === "ADMIN" &&
+    !assignmentOptions.some(
+      (option) => option.id === parsed.filters.assignedToAdminUserId,
+    )
+  ) {
+    return { ok: false, message: "Assigned user is not available." };
   }
 
   const result = await dependencies.requestRepository.list(parsed.filters);
@@ -298,14 +346,29 @@ export async function listAdminRequests(
   const workflowByRequest = new Map(
     workflowRows.map((row) => [row.requestId, row]),
   );
+  const assignedUsers =
+    context.role === "VIEWER"
+      ? []
+      : await dependencies.requestRepository.findAdminUsersByIds([
+          ...new Set(
+            result.requests
+              .map((request) => request.assignedToAdminUserId)
+              .filter((id): id is string => Boolean(id)),
+          ),
+        ]);
+  const assignedUserById = new Map(
+    assignedUsers.map((user) => [user.id, adminUserDisplayName(user)]),
+  );
 
   return {
     ok: true,
     data: normalizeAdminRequestList(
       result,
       parsed.filters.limit,
-      role,
+      context,
       workflowByRequest,
+      assignedUserById,
+      assignmentOptions,
       dependencies.now(),
     ),
   };
@@ -314,8 +377,11 @@ export async function listAdminRequests(
 export async function getAdminRequestDetail(
   publicId: string,
   dependencies: AdminDashboardDependencies,
-  role: AdminSession["role"] = "VIEWER",
+  viewer:
+    | AdminSession["role"]
+    | Pick<AdminSession, "role" | "adminUserId"> = "VIEWER",
 ): Promise<AdminRequestDetailView | null> {
+  const context = adminViewerContext(viewer);
   const request =
     await dependencies.requestRepository.findByIdOrPublicId(publicId);
 
@@ -323,9 +389,26 @@ export async function getAdminRequestDetail(
     return null;
   }
 
-  const detail = normalizeAdminRequestDetail(request);
+  const [assignedUser] =
+    context.role !== "VIEWER" && request.assignedToAdminUserId
+      ? await dependencies.requestRepository.findAdminUsersByIds([
+          request.assignedToAdminUserId,
+        ])
+      : [];
+  const assignmentOptions =
+    context.role === "ADMIN"
+      ? normalizeAssignmentOptions(
+          await dependencies.requestRepository.listActiveAssignableAdminUsers(),
+        )
+      : [];
+  const detail = normalizeAdminRequestDetail(
+    request,
+    context,
+    assignedUser ? adminUserDisplayName(assignedUser) : null,
+    assignmentOptions,
+  );
 
-  if (role !== "ADMIN" && role !== "OPERATOR") {
+  if (context.role !== "ADMIN" && context.role !== "OPERATOR") {
     return detail;
   }
 
@@ -401,6 +484,104 @@ export async function downloadAdminAttachment(
       "content-disposition": contentDispositionAttachment(attachment.fileName),
       "content-length": downloaded.sizeBytes.toString(),
     },
+  });
+}
+
+export async function updateAdminRequestAssignment(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
+  const parsed = z
+    .discriminatedUnion("action", [
+      z.object({
+        action: z.literal("assign"),
+        assigneeId: z.string().uuid().optional(),
+      }),
+      z.object({ action: z.literal("unassign") }),
+    ])
+    .safeParse({
+      action: formData.get("action"),
+      assigneeId:
+        typeof formData.get("assigneeId") === "string" &&
+        formData.get("assigneeId") !== ""
+          ? formData.get("assigneeId")
+          : undefined,
+    });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Assignment selection is invalid.",
+    });
+  }
+
+  if (
+    parsed.data.action === "assign" &&
+    adminSession.role === "OPERATOR" &&
+    parsed.data.assigneeId &&
+    parsed.data.assigneeId !== adminSession.adminUserId
+  ) {
+    return actionError(
+      "FORBIDDEN",
+      "Operators may assign requests only to themselves.",
+      403,
+    );
+  }
+
+  const actor = {
+    id: adminSession.adminUserId,
+    role: adminSession.role,
+  };
+  const result =
+    parsed.data.action === "unassign"
+      ? await dependencies.requestRepository.unassignRequest(publicId, actor)
+      : await dependencies.requestRepository.assignRequest(
+          publicId,
+          adminSession.role === "OPERATOR"
+            ? adminSession.adminUserId
+            : (parsed.data.assigneeId ?? ""),
+          actor,
+        );
+
+  if (!result.ok) {
+    if (result.code === "NOT_FOUND") {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+
+    if (result.code === "FORBIDDEN") {
+      return actionError(
+        "FORBIDDEN",
+        "You are not allowed to change this assignment.",
+        403,
+      );
+    }
+
+    return redirectToRequestDetail(request, publicId, {
+      error: "The selected assignee is not available.",
+    });
+  }
+
+  const assigned = parsed.data.action === "assign";
+
+  return redirectToRequestDetail(request, publicId, {
+    success: result.changed
+      ? assigned
+        ? "Request assigned."
+        : "Request unassigned."
+      : assigned
+        ? "Request is already assigned to that user."
+        : "Request is already unassigned.",
   });
 }
 
@@ -1437,6 +1618,7 @@ export function getValidAdminStatusDestinations(
 export function parseAdminRequestListSearchParams(
   searchParams: URLSearchParams,
   role: AdminSession["role"] = "VIEWER",
+  adminUserId: string | null = null,
 ): AdminListParseResult {
   const limit = parseLimit(searchParams.get("limit"));
 
@@ -1491,6 +1673,23 @@ export function parseAdminRequestListSearchParams(
     return cursor;
   }
 
+  const assignedTo = emptyToUndefined(searchParams.get("assignedTo"));
+  let assignedToAdminUserId: string | null | undefined;
+
+  if (assignedTo === "unassigned") {
+    assignedToAdminUserId = null;
+  } else if (assignedTo === "me") {
+    if (role === "VIEWER" || !adminUserId) {
+      return { ok: false, message: "Assigned user filter is not allowed." };
+    }
+    assignedToAdminUserId = adminUserId;
+  } else if (assignedTo) {
+    if (role !== "ADMIN" || !z.string().uuid().safeParse(assignedTo).success) {
+      return { ok: false, message: "Assigned user filter is not allowed." };
+    }
+    assignedToAdminUserId = assignedTo;
+  }
+
   const rawSearch = emptyToUndefined(
     searchParams.get("search") ?? searchParams.get("publicId"),
   );
@@ -1539,6 +1738,7 @@ export function parseAdminRequestListSearchParams(
       statuses: status.value ? [status.value] : undefined,
       createdFrom: createdFrom.value,
       createdTo: createdTo.value,
+      assignedToAdminUserId,
       cursor: cursor.value,
       limit: limit.value,
     },
@@ -1575,9 +1775,30 @@ export function buildAdminRequestListQuery(
 
 export function normalizeAdminRequestDetail(
   request: RequestDetails,
+  context: AdminViewerContext = { role: "VIEWER", adminUserId: null },
+  assignedToDisplayName: string | null = null,
+  assignmentOptions: AdminAssignmentOption[] = [],
 ): AdminRequestDetailView {
+  const effectiveAssignedToDisplayName = request.assignedToAdminUserId
+    ? (assignedToDisplayName ??
+      (context.role === "VIEWER" ? "Assigned" : "Admin user"))
+    : null;
+
   return {
-    ...normalizeAdminRequestListItem(request),
+    ...normalizeAdminRequestListItem(
+      request,
+      context,
+      effectiveAssignedToDisplayName,
+    ),
+    assignment: {
+      displayName: effectiveAssignedToDisplayName,
+      isCurrentUser:
+        Boolean(context.adminUserId) &&
+        request.assignedToAdminUserId === context.adminUserId,
+      assignedToAdminUserId: request.assignedToAdminUserId ?? null,
+      assignedAt: request.assignedAt?.toISOString() ?? null,
+      options: assignmentOptions,
+    },
     mutableData: request.mutableData,
     timeline: request.events.map((event) => ({
       id: event.id,
@@ -1813,17 +2034,27 @@ function stringValue(value: JsonValue | undefined): string | null {
 function normalizeAdminRequestList(
   result: RequestListResult,
   limit: number,
-  role: AdminSession["role"],
+  context: AdminViewerContext,
   workflowByRequest: Map<string, AdminRequestListWorkflowData>,
+  assignedUserById: Map<string, string>,
+  assignmentOptions: AdminAssignmentOption[],
   now: Date,
 ): AdminRequestListView {
   const response: AdminRequestListView = {
+    assignmentOptions,
     requests: result.requests.map((request) => {
       const workflow = workflowByRequest.get(request.id);
 
       return {
-        ...normalizeAdminRequestListItem(request),
-        requesterSummary: normalizeRequesterSummary(workflow, role),
+        ...normalizeAdminRequestListItem(
+          request,
+          context,
+          request.assignedToAdminUserId
+            ? (assignedUserById.get(request.assignedToAdminUserId) ??
+                (context.role === "VIEWER" ? "Assigned" : "Admin user"))
+            : null,
+        ),
+        requesterSummary: normalizeRequesterSummary(workflow, context.role),
         ageDays: Math.max(
           0,
           Math.floor(
@@ -1846,6 +2077,47 @@ function normalizeAdminRequestList(
   }
 
   return response;
+}
+
+function adminViewerContext(
+  viewer: AdminSession["role"] | Pick<AdminSession, "role" | "adminUserId">,
+): AdminViewerContext {
+  return typeof viewer === "string"
+    ? { role: viewer, adminUserId: null }
+    : { role: viewer.role, adminUserId: viewer.adminUserId };
+}
+
+function normalizeAssignmentOptions(
+  users: AdminUserAssignmentRecord[],
+): AdminAssignmentOption[] {
+  return users
+    .filter(
+      (
+        user,
+      ): user is AdminUserAssignmentRecord & {
+        role: "ADMIN" | "OPERATOR";
+      } => user.active && (user.role === "ADMIN" || user.role === "OPERATOR"),
+    )
+    .map((user) => ({
+      id: user.id,
+      displayName: adminUserDisplayName(user),
+      role: user.role,
+    }))
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function adminUserDisplayName(user: AdminUserAssignmentRecord): string {
+  const email = safelyDecryptPii(user.emailEncrypted);
+  const localPart = email?.split("@", 1)[0]?.trim();
+  const shortName = localPart
+    ?.split(/[._-]+/)
+    .find((part) => /^[A-Za-z][A-Za-z0-9]*$/.test(part));
+
+  if (!shortName) {
+    return user.role === "ADMIN" ? "Administrator" : "Operator";
+  }
+
+  return shortName.charAt(0).toUpperCase() + shortName.slice(1).toLowerCase();
 }
 
 export function deriveDataAccessNextStep(
@@ -1963,7 +2235,46 @@ function normalizeAdminRequestListItem(request: {
   completedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-}): AdminRequestListItem {
+  assignedToAdminUserId?: string | null;
+}): AdminRequestListItem;
+function normalizeAdminRequestListItem(
+  request: {
+    id: string;
+    publicId: string;
+    type: RequestType;
+    status: RequestStatus;
+    source?: {
+      channel: string | null;
+      siteKey: string | null;
+      formKey: string | null;
+    } | null;
+    completedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    assignedToAdminUserId?: string | null;
+  },
+  context?: AdminViewerContext,
+  assignedToDisplayName?: string | null,
+): AdminRequestListItem;
+function normalizeAdminRequestListItem(
+  request: {
+    id: string;
+    publicId: string;
+    type: RequestType;
+    status: RequestStatus;
+    source?: {
+      channel: string | null;
+      siteKey: string | null;
+      formKey: string | null;
+    } | null;
+    completedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    assignedToAdminUserId?: string | null;
+  },
+  context: AdminViewerContext = { role: "VIEWER", adminUserId: null },
+  assignedToDisplayName: string | null = null,
+): AdminRequestListItem {
   return {
     id: request.id,
     publicId: request.publicId,
@@ -1973,6 +2284,12 @@ function normalizeAdminRequestListItem(request: {
     createdAt: request.createdAt.toISOString(),
     updatedAt: request.updatedAt.toISOString(),
     completedAt: request.completedAt?.toISOString() ?? null,
+    assignment: {
+      displayName: assignedToDisplayName,
+      isCurrentUser:
+        Boolean(context.adminUserId) &&
+        request.assignedToAdminUserId === context.adminUserId,
+    },
   };
 }
 
@@ -2355,6 +2672,18 @@ function missingDatabaseRequestRepository(): RequestRepository {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     list() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    listActiveAssignableAdminUsers() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    findAdminUsersByIds() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    assignRequest() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    unassignRequest() {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     updateStatus() {

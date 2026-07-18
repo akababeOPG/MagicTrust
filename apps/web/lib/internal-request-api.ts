@@ -120,6 +120,8 @@ const builtInEventTypes = new Set([
   "CONSUMER_NOTIFICATION_SENT",
   "CONSUMER_NOTIFICATION_FAILED",
   "REQUEST_DATA_UPDATED",
+  "REQUEST_ASSIGNED",
+  "REQUEST_UNASSIGNED",
 ]);
 
 const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;

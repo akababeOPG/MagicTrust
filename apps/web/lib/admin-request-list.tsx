@@ -15,7 +15,8 @@ type AdminRequestListResult =
 type WorkloadView = {
   id: string;
   label: string;
-  status: RequestStatus;
+  status?: RequestStatus;
+  assignedTo?: "me" | "unassigned";
 };
 
 const workloadViews: WorkloadView[] = [
@@ -54,6 +55,7 @@ const preservedSearchFilterKeys = [
   "createdFrom",
   "createdTo",
   "view",
+  "assignedTo",
   "limit",
 ] as const;
 
@@ -75,6 +77,20 @@ export function AdminRequestListWorkspace({
   const activeFilterCount = countActiveFilters(params);
   const hasSearch = search.trim().length > 0;
   const hasFilters = activeFilterCount > 0;
+  const assignmentOptions = result.ok ? result.data.assignmentOptions : [];
+  const visibleWorkloadViews: WorkloadView[] = [
+    ...(role === "VIEWER"
+      ? []
+      : ([
+          { id: "my-requests", label: "My requests", assignedTo: "me" },
+          {
+            id: "unassigned",
+            label: "Unassigned",
+            assignedTo: "unassigned",
+          },
+        ] satisfies WorkloadView[])),
+    ...workloadViews,
+  ];
 
   return (
     <main className="admin-page requests-list-page">
@@ -180,6 +196,24 @@ export function AdminRequestListWorkspace({
               </select>
             </label>
             <label>
+              Assigned to
+              <select
+                name="assignedTo"
+                defaultValue={params.get("assignedTo") ?? ""}
+              >
+                <option value="">Anyone</option>
+                {role !== "VIEWER" ? <option value="me">Me</option> : null}
+                <option value="unassigned">Unassigned</option>
+                {role === "ADMIN"
+                  ? assignmentOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.displayName} ({formatRoleLabel(option.role)})
+                      </option>
+                    ))
+                  : null}
+              </select>
+            </label>
+            <label>
               Created from
               <input
                 name="createdFrom"
@@ -206,6 +240,7 @@ export function AdminRequestListWorkspace({
                       "status",
                       "createdFrom",
                       "createdTo",
+                      "assignedTo",
                       "view",
                       "cursor",
                     ],
@@ -223,19 +258,26 @@ export function AdminRequestListWorkspace({
         <Link
           className="workload-view-link"
           href={buildAdminListHref(params, {
-            remove: ["view", "status", "cursor"],
+            remove: ["view", "status", "assignedTo", "cursor"],
           })}
           aria-current={!activeView ? "page" : undefined}
         >
           All requests
         </Link>
-        {workloadViews.map((view) => (
+        {visibleWorkloadViews.map((view) => (
           <Link
             key={view.id}
             className="workload-view-link"
             href={buildAdminListHref(params, {
-              set: { view: view.id, status: view.status },
-              remove: ["cursor"],
+              set: {
+                view: view.id,
+                status: view.status,
+                assignedTo: view.assignedTo,
+              },
+              remove: [
+                "cursor",
+                ...(view.status ? ["assignedTo"] : ["status"]),
+              ],
             })}
             aria-current={activeView === view.id ? "page" : undefined}
           >
@@ -342,6 +384,7 @@ function RequestDesktopTable({
             <th scope="col">Requester</th>
             <th scope="col">Type</th>
             <th scope="col">Status</th>
+            <th scope="col">Assigned to</th>
             <th scope="col">Received</th>
             <th className="request-age-column" scope="col">
               Age
@@ -372,6 +415,9 @@ function RequestDesktopTable({
               <td>{formatRequestTypeLabel(request.type)}</td>
               <td>
                 <StatusBadge status={request.status} />
+              </td>
+              <td>
+                <AssignmentLabel request={request} />
               </td>
               <td>
                 <ReceivedDate value={request.createdAt} />
@@ -436,6 +482,10 @@ function RequestMobileCards({
                 <ReceivedDate value={request.createdAt} />
               </div>
               <div>
+                <span>Assigned to</span>
+                <AssignmentLabel request={request} />
+              </div>
+              <div>
                 <span>Next step</span>
                 <strong>
                   {request.nextStep ?? fallbackNextStepLabels[request.status]}
@@ -475,6 +525,20 @@ function RequesterSummary({
         </span>
       ) : null}
     </>
+  );
+}
+
+function AssignmentLabel({ request }: { request: AdminRequestListItem }) {
+  if (request.assignment.isCurrentUser) {
+    return <strong>You</strong>;
+  }
+
+  return (
+    <span
+      className={request.assignment.displayName ? undefined : "table-secondary"}
+    >
+      {request.assignment.displayName ?? "Unassigned"}
+    </span>
   );
 }
 
@@ -584,6 +648,10 @@ function formatSourceLabel(channel: string): string {
   return channel.charAt(0) + channel.slice(1).toLowerCase();
 }
 
+function formatRoleLabel(role: "ADMIN" | "OPERATOR"): string {
+  return role === "ADMIN" ? "Admin" : "Operator";
+}
+
 function requestPriority(
   status: RequestStatus,
 ): "actionable" | "waiting" | "completed" {
@@ -599,11 +667,22 @@ function requestPriority(
 }
 
 export function countActiveFilters(params: URLSearchParams): number {
-  const standardFilters = ["type", "createdFrom", "createdTo"].filter((key) =>
-    Boolean(params.get(key)),
-  ).length;
+  const standardFilters = [
+    "type",
+    "createdFrom",
+    "createdTo",
+    "assignedTo",
+  ].filter((key) => Boolean(params.get(key))).length;
 
-  return standardFilters + (params.get("view") || params.get("status") ? 1 : 0);
+  const workloadFilter = params.get("view")
+    ? params.get("assignedTo")
+      ? 0
+      : 1
+    : params.get("status")
+      ? 1
+      : 0;
+
+  return standardFilters + workloadFilter;
 }
 
 export function buildAdminListHref(
