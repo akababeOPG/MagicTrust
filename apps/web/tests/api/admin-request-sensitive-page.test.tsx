@@ -59,7 +59,7 @@ describe("admin sensitive request page", () => {
 
     expect(html).toContain("Requester");
     expect(html).toContain("john@example.com");
-    expect(html).toContain("Requester and original request");
+    expect(html).toContain("Requester and request");
     expect(html).toContain(
       "&lt;script&gt;alert(&quot;unsafe&quot;)&lt;/script&gt;",
     );
@@ -88,6 +88,7 @@ describe("admin sensitive request page", () => {
 
     expect(html).not.toContain("john@example.com");
     expect(html).not.toContain("Original Submission");
+    expect(html).toContain("Requester identity restricted");
     expect(mocks.getAdminRequestDetail).toHaveBeenCalledWith(
       "req_one",
       { kind: "dependencies" },
@@ -130,6 +131,30 @@ describe("admin sensitive request page", () => {
       "Send response and complete request",
     );
 
+    mocks.detail.timeline = [
+      {
+        id: "event-delivery-failed",
+        type: "CONSUMER_NOTIFICATION_FAILED",
+        category: "BUILT_IN",
+        actorType: "SYSTEM",
+        actorId: null,
+        createdAt: "2026-07-02T00:00:00.000Z",
+        data: {
+          notificationType: "FILE_AVAILABLE",
+          communicationId: "communication-one",
+        },
+      },
+    ];
+    const failedDelivery = await renderPage(AdminRequestDetailPage);
+    expect(failedDelivery).toContain("Response could not be sent");
+    expect(failedDelivery).toContain("Retry sending response");
+
+    mocks.detail.timeline = [];
+    mocks.detail.status = "WAITING_FOR_REQUESTER";
+    const waiting = await renderPage(AdminRequestDetailPage);
+    expect(waiting).toContain("Waiting for requester");
+    expect(waiting).toContain("Processing is paused");
+
     mocks.detail.status = "SUCCESS";
     mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
     const completed = await renderPage(AdminRequestDetailPage);
@@ -149,7 +174,192 @@ describe("admin sensitive request page", () => {
     expect(html).not.toContain("Add Comment");
     expect(html).not.toContain("Notify Consumer");
     expect(html).not.toContain("visibility");
+    expect(html).not.toContain("Additional submitted information");
+    expect(html).not.toContain("json-panel");
     expect(html).not.toMatch(/<script[^>]*>[^<]*john@example\.com/);
+  });
+
+  test("internal notes use a private composer without visibility controls", async () => {
+    mocks.detail.status = "PROCESSING";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("Notes are visible only to your internal team.");
+    expect(html).toContain("Add a note about processing this request...");
+    expect(html).toContain("Add note");
+    expect(html).not.toContain('name="visibility"');
+  });
+
+  test("response upload avoids technical visibility terminology", async () => {
+    mocks.detail.status = "PROCESSING";
+    mocks.detail.attachments = [];
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("No response file yet");
+    expect(html).toContain("This file will be securely available");
+    expect(html).toContain("Upload response file");
+    expect(html).not.toContain("PUBLIC");
+  });
+
+  test("delivered state renders masked safe metadata", async () => {
+    mocks.detail.status = "SUCCESS";
+    mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    mocks.detail.attachments = [responseAttachment()];
+    mocks.detail.timeline = [
+      {
+        id: "event-delivery",
+        type: "CONSUMER_NOTIFICATION_SENT",
+        category: "BUILT_IN",
+        actorType: "SYSTEM",
+        actorId: null,
+        createdAt: "2026-07-03T00:00:00.000Z",
+        data: {
+          notificationType: "FILE_AVAILABLE",
+          communicationId: "communication-one",
+          providerMessageId: "must-not-render",
+        },
+      },
+    ];
+    mocks.detail.communications = [
+      {
+        id: "communication-one",
+        status: "SENT",
+        sentAt: "2026-07-03T00:00:00.000Z",
+        recipientMasked: "j***n@example.com",
+        provider: "resend",
+      },
+    ];
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("Delivered successfully");
+    expect(html).toContain("response.json");
+    expect(html).toContain("j***n@example.com");
+    expect(html).not.toContain("must-not-render");
+    expect(html).not.toContain("providerMessageId");
+  });
+
+  test("activity history is collapsed and translates events without raw data", async () => {
+    mocks.detail.status = "PROCESSING";
+    mocks.detail.timeline = [
+      {
+        id: "event-processing",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-02T00:00:00.000Z",
+        data: {
+          newStatus: "PROCESSING",
+          storageKey: "private/storage/key",
+          token: "must-not-render",
+        },
+      },
+    ];
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain('<details class="activity-disclosure">');
+    expect(html).toContain("View activity history");
+    expect(html).toContain("Processing started");
+    expect(html).not.toContain("admin-user-secret");
+    expect(html).not.toContain("private/storage/key");
+    expect(html).not.toContain("must-not-render");
+  });
+
+  test.each([
+    ["REJECTED", "Request rejected"],
+    ["CANCELLED", "Request cancelled"],
+  ] as const)(
+    "renders the %s terminal summary without More actions",
+    async (status, title) => {
+      mocks.detail.status = status;
+      mocks.detail.timeline = [
+        {
+          id: "event-terminal",
+          type: "STATUS_CHANGED",
+          category: "BUILT_IN",
+          actorType: "ADMIN_USER",
+          actorId: "admin-user-1",
+          createdAt: "2026-07-02T00:00:00.000Z",
+          data: { newStatus: status, reason: "Safe closure reason." },
+        },
+      ];
+      const { default: AdminRequestDetailPage } =
+        await import("../../app/admin/requests/[publicId]/page");
+      const html = await renderPage(AdminRequestDetailPage);
+
+      expect(html).toContain(title);
+      expect(html).toContain("Safe closure reason.");
+      expect(html).not.toContain("More actions");
+    },
+  );
+
+  test("More actions follows active workflow state", async () => {
+    mocks.detail.status = "VERIFIED";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("More actions");
+    expect(html).toContain("Reject request");
+    expect(html).toContain("Cancel request");
+  });
+
+  test("uses the compact request identity hierarchy without changing actions", async () => {
+    mocks.detail.status = "VERIFIED";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+    const headerStart = html.indexOf(
+      '<header class="admin-header guided-request-header">',
+    );
+    const header = html.slice(
+      headerStart,
+      html.indexOf("</header>", headerStart),
+    );
+
+    expect(html).toContain(
+      '<nav class="request-detail-breadcrumb" aria-label="Request breadcrumb"><a href="/admin/requests">Requests</a>',
+    );
+    expect(header).toContain(
+      '<p class="guided-request-eyebrow">Data access request</p>',
+    );
+    expect(header).toContain("<h1>req_one</h1>");
+    expect(header).toContain(
+      '<span class="mt-status-badge" data-status="VERIFIED">',
+    );
+    expect(header).toContain("More actions");
+    expect(header.indexOf("<h1>req_one</h1>")).toBeLessThan(
+      header.indexOf('class="mt-status-badge"'),
+    );
+  });
+
+  test("guided detail keeps the mobile semantic section order", async () => {
+    mocks.detail.status = "PROCESSING";
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+    const landmarks = [
+      'class="admin-header guided-request-header"',
+      'class="request-progress-card"',
+      'class="admin-card next-step-card"',
+      'class="admin-card requester-request-card"',
+      'id="response"',
+      'class="admin-card internal-notes-card"',
+      'class="admin-card activity-history-card"',
+    ];
+
+    for (let index = 1; index < landmarks.length; index += 1) {
+      expect(html.indexOf(landmarks[index]!)).toBeGreaterThan(
+        html.indexOf(landmarks[index - 1]!),
+      );
+    }
   });
 
   test("admin request responses are private and not cacheable", async () => {
@@ -213,6 +423,17 @@ function requestDetail(options: { includeSensitive?: boolean } = {}) {
   }
 
   return detail;
+}
+
+function responseAttachment() {
+  return {
+    id: "attachment-1",
+    fileName: "response.json",
+    mimeType: "application/json",
+    sizeBytes: 100,
+    visibility: "PUBLIC",
+    createdAt: "2026-07-02T00:00:00.000Z",
+  };
 }
 
 async function renderPage(

@@ -14,6 +14,8 @@ import {
   AdminConfirmSubmitButton,
   AdminSubmitButton,
 } from "@/lib/admin-request-action-forms";
+import { RequestProgress } from "../../../../lib/admin-request-progress";
+import { StatusBadge } from "../../../../lib/admin-ui";
 import { commentVisibilities } from "@magictrust/domain";
 
 type PageProps = {
@@ -23,11 +25,11 @@ type PageProps = {
 
 const statusLabels = {
   SUBMITTED: "Submitted",
-  PENDING_VERIFICATION: "Pending verification",
+  PENDING_VERIFICATION: "Awaiting verification",
   VERIFIED: "Verified",
-  PROCESSING: "Processing",
-  WAITING_FOR_REQUESTER: "Waiting for requester",
-  SUCCESS: "Success",
+  PROCESSING: "In progress",
+  WAITING_FOR_REQUESTER: "Waiting on requester",
+  SUCCESS: "Completed",
   REJECTED: "Rejected",
   CANCELLED: "Cancelled",
 } as const;
@@ -79,15 +81,11 @@ export default async function AdminRequestDetailPage({
     <main className="admin-page">
       <header className="admin-header">
         <div>
-          <p className="eyebrow">MagicTrust Internal</p>
+          <p className="eyebrow">Request detail</p>
           <h1>{request.publicId}</h1>
-          <p>Authenticated role: {session.role}</p>
         </div>
         <div className="admin-actions">
           <Link href="/admin/requests">Back to requests</Link>
-          <form action="/api/admin/auth/logout" method="post">
-            <button type="submit">Log out</button>
-          </form>
         </div>
       </header>
 
@@ -117,9 +115,7 @@ export default async function AdminRequestDetailPage({
           <div>
             <dt>Status</dt>
             <dd>
-              <span className={`status-badge ${request.status}`}>
-                {statusLabels[request.status]}
-              </span>
+              <StatusBadge status={request.status} />
             </dd>
           </div>
           <div>
@@ -659,46 +655,78 @@ function DataAccessRequestDetail({
         (24 * 60 * 60 * 1000),
     ),
   );
-  const statusLabel = dataAccessStatusLabel(request.status);
   const terminalEvent = request.timeline.find(
     (event) =>
       event.type === "STATUS_CHANGED" &&
       event.data.newStatus === request.status,
   );
+  const verified =
+    request.status === "VERIFIED" ||
+    request.status === "PROCESSING" ||
+    request.status === "WAITING_FOR_REQUESTER" ||
+    request.status === "SUCCESS" ||
+    request.timeline.some(
+      (event) =>
+        event.type === "IDENTITY_VERIFIED" ||
+        (event.type === "STATUS_CHANGED" &&
+          event.data.newStatus === "VERIFIED"),
+    );
+  const processingStarted =
+    request.status === "PROCESSING" ||
+    request.status === "WAITING_FOR_REQUESTER" ||
+    request.status === "SUCCESS" ||
+    request.timeline.some(
+      (event) =>
+        event.type === "STATUS_CHANGED" &&
+        event.data.newStatus === "PROCESSING",
+    );
 
   return (
     <main className="admin-page guided-request-page">
+      <nav
+        className="request-detail-breadcrumb"
+        aria-label="Request breadcrumb"
+      >
+        <Link href="/admin/requests">Requests</Link>
+        <span aria-hidden="true">/</span>
+        <span>{request.publicId}</span>
+      </nav>
+
       <header className="admin-header guided-request-header">
-        <div>
-          <p className="eyebrow">Data access request</p>
-          <h1>{request.publicId}</h1>
-          <p>
-            {statusLabel} · Received {formatDateTime(request.createdAt)} ·{" "}
-            {ageDays === 1 ? "1 day old" : `${ageDays} days old`}
+        <div className="guided-request-identity">
+          <p className="guided-request-eyebrow">Data access request</p>
+          <div className="guided-request-title-row">
+            <h1>{request.publicId}</h1>
+            <StatusBadge status={request.status} />
+          </div>
+          <p className="guided-request-meta">
+            Received {formatDateTime(request.createdAt)} ·{" "}
+            {formatRequestAge(ageDays)}
           </p>
         </div>
-        <div className="admin-actions">
-          <Link href="/admin/requests">Back to requests</Link>
-          <form action="/api/admin/auth/logout" method="post">
-            <button type="submit">Log out</button>
-          </form>
+        <div className="request-header-actions">
+          {canAct && !isTerminalStatus(request.status) ? (
+            <DataAccessMoreActions publicId={request.publicId} />
+          ) : null}
         </div>
       </header>
 
       {successMessage ? (
-        <section className="admin-card success-message" role="status">
-          <p>{successMessage}</p>
-        </section>
+        <div className="mt-feedback mt-feedback-success" role="status">
+          {friendlyFeedback(successMessage, "success")}
+        </div>
       ) : null}
       {errorMessage ? (
-        <section className="admin-card error-message" role="alert">
-          <p>{errorMessage}</p>
-        </section>
+        <div className="mt-feedback mt-feedback-error" role="alert">
+          {friendlyFeedback(errorMessage, "error")}
+        </div>
       ) : null}
 
-      <DataAccessProgress
+      <RequestProgress
         status={request.status}
         responseReady={responseFile !== null}
+        verified={verified}
+        processingStarted={processingStarted}
       />
 
       <section
@@ -706,243 +734,336 @@ function DataAccessRequestDetail({
         aria-labelledby="next-step-heading"
       >
         <p className="eyebrow">Next step</p>
-        <DataAccessNextStep
-          request={request}
-          canAct={canAct}
-          responseFile={responseFile}
-          publicAttachments={publicAttachments}
-          deliveryFailed={deliveryFailed}
-          latestVerificationAt={latestVerification?.createdAt ?? null}
-          terminalEvent={terminalEvent}
-          deliveryCommunication={deliveryCommunication}
-        />
+        <div className="next-step-content">
+          <DataAccessNextStep
+            request={request}
+            canAct={canAct}
+            responseFile={responseFile}
+            publicAttachments={publicAttachments}
+            deliveryFailed={deliveryFailed}
+            latestVerificationAt={latestVerification?.createdAt ?? null}
+            terminalEvent={terminalEvent}
+            deliveryCommunication={deliveryCommunication}
+          />
+        </div>
       </section>
 
-      {!canAct ? (
-        <section className="admin-card" role="note">
-          <h2>Read-only access</h2>
-          <p>
-            VIEWER users can review request progress but cannot view requester
-            identity or perform workflow actions.
-          </p>
-        </section>
-      ) : null}
-
-      {request.requester && request.originalSubmission ? (
+      <div className="data-access-workspace">
         <section
-          className="admin-card"
+          className="admin-card requester-request-card"
           aria-labelledby="request-details-heading"
         >
-          <h2 id="request-details-heading">Requester and original request</h2>
-          <dl className="detail-grid">
+          <div className="guided-section-heading">
             <div>
-              <dt>First name</dt>
-              <dd>{request.requester.firstName ?? "Not provided"}</dd>
+              <h2 id="request-details-heading">Requester and request</h2>
+              <p>
+                Identity and the original request submitted by the consumer.
+              </p>
             </div>
+          </div>
+          {request.requester && request.originalSubmission ? (
+            <>
+              <dl className="requester-identity-grid">
+                <div>
+                  <dt>Name</dt>
+                  <dd>
+                    {[request.requester.firstName, request.requester.lastName]
+                      .filter(Boolean)
+                      .join(" ") || "Not provided"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Email</dt>
+                  <dd>{request.requester.email ?? "Not provided"}</dd>
+                </div>
+                <div>
+                  <dt>Phone</dt>
+                  <dd>{request.requester.phone ?? "Not provided"}</dd>
+                </div>
+              </dl>
+              <div className="original-request-block">
+                <div className="original-request-message">
+                  <span>Message</span>
+                  <p>
+                    {request.originalSubmission.message ??
+                      "No message was provided."}
+                  </p>
+                </div>
+                <dl className="original-request-meta">
+                  <div>
+                    <dt>Submitted</dt>
+                    <dd>{formatDateTime(request.createdAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Source</dt>
+                    <dd>
+                      <strong>
+                        {formatSubmissionSource(
+                          request.originalSubmission.source.channel,
+                        )}
+                      </strong>
+                      <span>
+                        {request.originalSubmission.source.siteKey ??
+                          "Source unavailable"}
+                      </span>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </>
+          ) : (
+            <div className="restricted-requester" role="note">
+              <strong>Requester identity restricted</strong>
+              <p>
+                Your role can review workflow progress but cannot view requester
+                identity or the original submission.
+              </p>
+            </div>
+          )}
+        </section>
+
+        <section
+          id="response"
+          className="admin-card response-card"
+          aria-labelledby="response-heading"
+        >
+          <div className="guided-section-heading">
             <div>
-              <dt>Last name</dt>
-              <dd>{request.requester.lastName ?? "Not provided"}</dd>
+              <h2 id="response-heading">Response</h2>
+              <p>
+                Files are stored privately and delivered through secure access.
+              </p>
             </div>
-            <div>
-              <dt>Email</dt>
-              <dd>{request.requester.email ?? "Not provided"}</dd>
+          </div>
+          {publicAttachments.length === 0 ? (
+            <div className="response-empty-state">
+              <span className="response-file-icon" aria-hidden="true">
+                <FileIcon />
+              </span>
+              <h3>No response file yet</h3>
+              <p>
+                Upload the completed response file when it is ready to be
+                securely delivered to the requester.
+              </p>
+              {canAct && request.status === "PROCESSING" ? (
+                <ResponseUploadForm publicId={request.publicId} />
+              ) : null}
             </div>
-            <div>
-              <dt>Phone</dt>
-              <dd>{request.requester.phone ?? "Not provided"}</dd>
+          ) : (
+            <div className="response-file-list">
+              {publicAttachments.map((attachment, index) => (
+                <article
+                  className="response-file-card"
+                  data-selected={index === 0 ? "true" : undefined}
+                  key={attachment.id}
+                >
+                  <span className="response-file-icon" aria-hidden="true">
+                    <FileIcon />
+                  </span>
+                  <div>
+                    <strong>{attachment.fileName}</strong>
+                    <span>
+                      {attachment.mimeType} ·{" "}
+                      {formatBytes(attachment.sizeBytes)}
+                    </span>
+                    <small>
+                      Uploaded {formatDateTime(attachment.createdAt)}
+                    </small>
+                  </div>
+                  <Link
+                    className="mt-button mt-button-secondary request-file-action"
+                    href={`/admin/requests/${request.publicId}/attachments/${attachment.id}/download`}
+                  >
+                    Download
+                  </Link>
+                </article>
+              ))}
             </div>
-            <div>
-              <dt>Submitted</dt>
-              <dd>{formatDateTime(request.createdAt)}</dd>
+          )}
+          {request.status === "SUCCESS" ? (
+            <div className="delivery-state delivery-state-success">
+              <strong>Delivered successfully</strong>
+              <dl>
+                <div>
+                  <dt>Delivered file</dt>
+                  <dd>{responseFile?.fileName ?? "Unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Sent</dt>
+                  <dd>
+                    {formatOptionalDateTime(
+                      deliveryCommunication?.sentAt ?? null,
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Recipient</dt>
+                  <dd>
+                    {deliveryCommunication?.recipientMasked ?? "Unavailable"}
+                  </dd>
+                </div>
+              </dl>
             </div>
-            <div>
-              <dt>Source</dt>
-              <dd>
-                {request.originalSubmission.source.channel ?? "Not provided"}
-              </dd>
+          ) : deliveryFailed ? (
+            <div className="delivery-state delivery-state-error" role="alert">
+              <strong>Delivery failed</strong>
+              <p>
+                The response could not be delivered. Review the next step and
+                try again.
+              </p>
+              <small>
+                Last attempted{" "}
+                {formatOptionalDateTime(latestDeliveryEvent?.createdAt ?? null)}
+              </small>
             </div>
-            <div>
-              <dt>Site</dt>
-              <dd>
-                {request.originalSubmission.source.siteKey ?? "Not provided"}
-              </dd>
+          ) : responseFile ? (
+            <div className="delivery-state delivery-state-ready">
+              <strong>Ready for secure delivery</strong>
+              <p>Select the response file in the next step and send it.</p>
             </div>
-            <div>
-              <dt>Form</dt>
-              <dd>
-                {request.originalSubmission.source.formKey ?? "Not provided"}
-              </dd>
-            </div>
-          </dl>
-          <h3>Original message</h3>
-          <p>
-            {request.originalSubmission.message ?? "No message was provided."}
-          </p>
-          {Object.keys(request.originalSubmission.submittedData).length > 0 ? (
-            <details>
-              <summary>Additional submitted information</summary>
-              <pre className="json-panel">
-                {JSON.stringify(
-                  request.originalSubmission.submittedData,
-                  null,
-                  2,
-                )}
-              </pre>
+          ) : null}
+          {role === "ADMIN" && internalAttachments.length > 0 ? (
+            <details className="internal-files-disclosure">
+              <summary>Internal files</summary>
+              <p>These files are not shared with the requester.</p>
+              <ul>
+                {internalAttachments.map((attachment) => (
+                  <li key={attachment.id}>{attachment.fileName}</li>
+                ))}
+              </ul>
             </details>
           ) : null}
         </section>
-      ) : null}
 
-      <section className="admin-card" aria-labelledby="workspace-heading">
-        <h2 id="workspace-heading">Processing workspace</h2>
-        <h3>Internal notes</h3>
-        {internalNotes.length === 0 ? (
-          <p>No internal notes yet.</p>
-        ) : (
-          <ol className="timeline-list">
-            {internalNotes.map((note) => (
-              <li key={note.id}>
-                <p>{note.body}</p>
-                <small>
-                  {actorCategory(note.actorType)} ·{" "}
-                  {formatDateTime(note.createdAt)}
-                </small>
-              </li>
-            ))}
-          </ol>
-        )}
-        {canAct && request.status === "PROCESSING" ? (
-          <form
-            className="admin-action-form"
-            action={`/admin/requests/${request.publicId}/internal-notes`}
-            method="post"
-          >
-            <label>
-              New internal note
-              <textarea name="body" required maxLength={5000} rows={4} />
-            </label>
-            <AdminSubmitButton>Add internal note</AdminSubmitButton>
-          </form>
-        ) : null}
-      </section>
-
-      <section className="admin-card" aria-labelledby="response-heading">
-        <h2 id="response-heading">Response and secure delivery</h2>
-        {publicAttachments.length === 0 ? (
-          <p>No response file has been uploaded.</p>
-        ) : (
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th>Type</th>
-                  <th>Size</th>
-                  <th>Uploaded</th>
-                  <th>Download</th>
-                </tr>
-              </thead>
-              <tbody>
-                {publicAttachments.map((attachment) => (
-                  <tr key={attachment.id}>
-                    <td>{attachment.fileName}</td>
-                    <td>{attachment.mimeType}</td>
-                    <td>{formatBytes(attachment.sizeBytes)}</td>
-                    <td>{formatDateTime(attachment.createdAt)}</td>
-                    <td>
-                      <Link
-                        href={`/admin/requests/${request.publicId}/attachments/${attachment.id}/download`}
-                      >
-                        Download
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <section
+          className="admin-card internal-notes-card"
+          aria-labelledby="internal-notes-heading"
+        >
+          <div className="guided-section-heading">
+            <div>
+              <h2 id="internal-notes-heading">Internal notes</h2>
+              <p>Notes are visible only to your internal team.</p>
+            </div>
           </div>
-        )}
-        {role === "ADMIN" && internalAttachments.length > 0 ? (
-          <details>
-            <summary>Internal evidence attachments</summary>
-            <ul>
-              {internalAttachments.map((attachment) => (
-                <li key={attachment.id}>{attachment.fileName}</li>
+          {internalNotes.length === 0 ? (
+            <div className="notes-empty-state">
+              <p>No internal notes yet.</p>
+            </div>
+          ) : (
+            <ol className="internal-note-feed">
+              {internalNotes.map((note) => (
+                <li key={note.id}>
+                  <div>
+                    <strong>{actorCategory(note.actorType)}</strong>
+                    <time dateTime={note.createdAt}>
+                      {formatDateTime(note.createdAt)}
+                    </time>
+                  </div>
+                  <p>{note.body}</p>
+                </li>
               ))}
-            </ul>
-          </details>
-        ) : null}
-      </section>
+            </ol>
+          )}
+          {canAct && request.status === "PROCESSING" ? (
+            <form
+              className="admin-action-form internal-note-composer"
+              action={`/admin/requests/${request.publicId}/internal-notes`}
+              method="post"
+            >
+              <label>
+                Add internal note
+                <textarea
+                  name="body"
+                  required
+                  maxLength={5000}
+                  rows={4}
+                  placeholder="Add a note about processing this request..."
+                />
+              </label>
+              <AdminSubmitButton>Add note</AdminSubmitButton>
+            </form>
+          ) : null}
+        </section>
+      </div>
 
-      <section className="admin-card" aria-labelledby="activity-heading">
-        <details>
-          <summary id="activity-heading">Activity history</summary>
+      <section className="admin-card activity-history-card">
+        <details className="activity-disclosure">
+          <summary id="activity-heading">
+            <span>
+              <strong>View activity history</strong>
+              <small>{request.timeline.length} recorded events</small>
+            </span>
+          </summary>
           {request.timeline.length === 0 ? (
             <p>No activity has been recorded.</p>
           ) : (
-            <ol className="timeline-list">
+            <ol
+              className="activity-timeline"
+              aria-labelledby="activity-heading"
+            >
               {request.timeline.map((event) => (
-                <li key={event.id}>
-                  <strong>{activityLabel(event.type)}</strong>
-                  <p>
-                    {actorCategory(event.actorType)} ·{" "}
-                    {formatDateTime(event.createdAt)}
-                  </p>
+                <li key={event.id} data-category={event.category}>
+                  <span className="activity-marker" aria-hidden="true" />
+                  <div>
+                    <strong>{activityLabel(event)}</strong>
+                    <p>
+                      {actorCategory(event.actorType)} ·{" "}
+                      <time dateTime={event.createdAt}>
+                        {formatDateTime(event.createdAt)}
+                      </time>
+                    </p>
+                  </div>
                 </li>
               ))}
             </ol>
           )}
         </details>
       </section>
-
-      {canAct && !isTerminalStatus(request.status) ? (
-        <section className="admin-card" aria-labelledby="more-actions-heading">
-          <details>
-            <summary id="more-actions-heading">More actions</summary>
-            <div className="admin-actions-grid">
-              <form
-                className="admin-action-form"
-                action={`/admin/requests/${request.publicId}/status`}
-                method="post"
-              >
-                <h3>Reject request</h3>
-                <p>
-                  Use when the request is invalid, duplicated, fraudulent,
-                  unsupported, or cannot be fulfilled.
-                </p>
-                <input type="hidden" name="newStatus" value="REJECTED" />
-                <label>
-                  Reason
-                  <textarea name="reason" required maxLength={2000} rows={3} />
-                </label>
-                <AdminConfirmSubmitButton confirmation="Reject this request?">
-                  Reject request
-                </AdminConfirmSubmitButton>
-              </form>
-              <form
-                className="admin-action-form"
-                action={`/admin/requests/${request.publicId}/status`}
-                method="post"
-              >
-                <h3>Cancel request</h3>
-                <p>
-                  Use when the request is withdrawn, administratively closed, or
-                  abandoned without a fulfillment decision.
-                </p>
-                <input type="hidden" name="newStatus" value="CANCELLED" />
-                <label>
-                  Reason
-                  <textarea name="reason" required maxLength={2000} rows={3} />
-                </label>
-                <AdminConfirmSubmitButton confirmation="Cancel this request?">
-                  Cancel request
-                </AdminConfirmSubmitButton>
-              </form>
-            </div>
-          </details>
-        </section>
-      ) : null}
     </main>
+  );
+}
+
+function DataAccessMoreActions({ publicId }: { publicId: string }) {
+  return (
+    <details className="request-more-actions">
+      <summary>
+        <span>More actions</span>
+      </summary>
+      <div className="request-more-actions-panel">
+        <form
+          className="admin-action-form"
+          action={`/admin/requests/${publicId}/status`}
+          method="post"
+        >
+          <h3>Reject request</h3>
+          <p>Close this request because it cannot be fulfilled.</p>
+          <input type="hidden" name="newStatus" value="REJECTED" />
+          <label>
+            Reason
+            <textarea name="reason" required maxLength={2000} rows={3} />
+          </label>
+          <AdminConfirmSubmitButton confirmation="Reject this request?">
+            Reject request
+          </AdminConfirmSubmitButton>
+        </form>
+        <form
+          className="admin-action-form"
+          action={`/admin/requests/${publicId}/status`}
+          method="post"
+        >
+          <h3>Cancel request</h3>
+          <p>Close a withdrawn, administrative, or abandoned request.</p>
+          <input type="hidden" name="newStatus" value="CANCELLED" />
+          <label>
+            Reason
+            <textarea name="reason" required maxLength={2000} rows={3} />
+          </label>
+          <AdminConfirmSubmitButton confirmation="Cancel this request?">
+            Cancel request
+          </AdminConfirmSubmitButton>
+        </form>
+      </div>
+    </details>
   );
 }
 
@@ -975,13 +1096,14 @@ function DataAccessNextStep({
           processed.
         </p>
         {latestVerificationAt ? (
-          <p>
+          <p className="next-step-context">
             Most recent verification email:{" "}
             {formatDateTime(latestVerificationAt)}
           </p>
         ) : null}
         {canAct ? (
           <form
+            className="next-step-action"
             action={`/admin/requests/${request.publicId}/resend-verification`}
             method="post"
           >
@@ -1000,6 +1122,7 @@ function DataAccessNextStep({
         </p>
         {canAct ? (
           <form
+            className="next-step-action"
             action={`/admin/requests/${request.publicId}/start-processing`}
             method="post"
           >
@@ -1016,7 +1139,11 @@ function DataAccessNextStep({
           Review the requester’s information, locate their data in the relevant
           systems, and prepare the response file.
         </p>
-        {canAct ? <ResponseUploadForm publicId={request.publicId} /> : null}
+        {canAct ? (
+          <a className="mt-button next-step-action" href="#response">
+            Upload response file
+          </a>
+        ) : null}
       </>
     );
   if (request.status === "PROCESSING" && responseFile)
@@ -1060,6 +1187,9 @@ function DataAccessNextStep({
             <label>
               Message to requester (optional)
               <textarea name="message" maxLength={2000} rows={4} />
+              <small>
+                This message will be included in the delivery email.
+              </small>
             </label>
             <AdminSubmitButton>
               {deliveryFailed
@@ -1075,7 +1205,7 @@ function DataAccessNextStep({
       <>
         <h2 id="next-step-heading">Request completed</h2>
         <p>The response was delivered securely to the requester.</p>
-        <dl className="detail-grid">
+        <dl className="next-step-completion-meta">
           <div>
             <dt>Completed</dt>
             <dd>{formatOptionalDateTime(request.completedAt)}</dd>
@@ -1118,7 +1248,7 @@ function DataAccessNextStep({
             ? terminalEvent.data.reason
             : "This request is closed."}
         </p>
-        <p>
+        <p className="next-step-context">
           {terminalEvent
             ? `${actorCategory(terminalEvent.actorType)} · ${formatDateTime(terminalEvent.createdAt)}`
             : null}
@@ -1151,10 +1281,6 @@ function ResponseUploadForm({ publicId }: { publicId: string }) {
       method="post"
       encType="multipart/form-data"
     >
-      <p>
-        The response file will be delivered securely to the requester. Uploading
-        does not send it automatically.
-      </p>
       <label>
         Response file
         <input
@@ -1163,88 +1289,13 @@ function ResponseUploadForm({ publicId }: { publicId: string }) {
           required
           accept="application/json,text/csv,application/pdf,text/plain,application/zip"
         />
+        <small>This file will be securely available to the requester.</small>
       </label>
       <AdminSubmitButton>Upload response file</AdminSubmitButton>
     </form>
   );
 }
 
-function DataAccessProgress({
-  status,
-  responseReady,
-}: {
-  status: AdminRequestDetailView["status"];
-  responseReady: boolean;
-}) {
-  const stages = [
-    "Received",
-    "Verified",
-    "Processing",
-    "Response ready",
-    "Completed",
-  ];
-  const current =
-    status === "PENDING_VERIFICATION" || status === "SUBMITTED"
-      ? 0
-      : status === "VERIFIED"
-        ? 1
-        : status === "PROCESSING"
-          ? responseReady
-            ? 3
-            : 2
-          : status === "SUCCESS"
-            ? 4
-            : 0;
-  const terminal = status === "REJECTED" || status === "CANCELLED";
-  return (
-    <section className="admin-card" aria-labelledby="progress-heading">
-      <h2 id="progress-heading">Progress</h2>
-      {terminal ? (
-        <p>
-          This request was {status.toLowerCase()} and did not complete the
-          standard fulfillment flow.
-        </p>
-      ) : null}
-      <ol className="request-progress">
-        {stages.map((stage, index) => {
-          const state =
-            !terminal && index < current
-              ? "Completed"
-              : !terminal && index === current
-                ? "Current"
-                : "Upcoming";
-          return (
-            <li key={stage} data-state={state.toLowerCase()}>
-              <span aria-hidden="true">
-                {state === "Completed" ? "✓" : state === "Current" ? "●" : "○"}
-              </span>
-              <strong>{stage}</strong>
-              <small>{state}</small>
-            </li>
-          );
-        })}
-      </ol>
-    </section>
-  );
-}
-
-function dataAccessStatusLabel(status: AdminRequestDetailView["status"]) {
-  return status === "PENDING_VERIFICATION"
-    ? "Waiting for verification"
-    : status === "VERIFIED"
-      ? "Ready to process"
-      : status === "PROCESSING"
-        ? "In progress"
-        : status === "SUCCESS"
-          ? "Completed"
-          : status === "WAITING_FOR_REQUESTER"
-            ? "Waiting for requester"
-            : status === "REJECTED"
-              ? "Rejected"
-              : status === "CANCELLED"
-                ? "Cancelled"
-                : "Received";
-}
 function isTerminalStatus(status: AdminRequestDetailView["status"]) {
   return (
     status === "SUCCESS" || status === "REJECTED" || status === "CANCELLED"
@@ -1259,19 +1310,79 @@ function actorCategory(actorType: string) {
         ? "System"
         : "Integration";
 }
-function activityLabel(type: string) {
+function activityLabel(event: AdminRequestDetailView["timeline"][number]) {
+  if (
+    event.type === "STATUS_CHANGED" &&
+    event.data.newStatus === "PROCESSING"
+  ) {
+    return "Processing started";
+  }
+
   const labels: Record<string, string> = {
-    REQUEST_CREATED: "Request received",
+    REQUEST_CREATED: "Request submitted",
     IDENTITY_VERIFICATION_SENT: "Verification email sent",
-    IDENTITY_VERIFIED: "Requester verified",
+    IDENTITY_VERIFIED: "Requester identity verified",
     STATUS_CHANGED: "Status updated",
     INTERNAL_COMMENT_ADDED: "Internal note added",
     PUBLIC_ATTACHMENT_ADDED: "Response file uploaded",
-    CONSUMER_NOTIFICATION_SENT: "Response delivered",
+    CONSUMER_NOTIFICATION_SENT: "Response email sent",
     CONSUMER_NOTIFICATION_FAILED: "Response delivery failed",
-    ADMIN_ATTACHMENT_DOWNLOADED: "Attachment downloaded",
+    CONSUMER_ATTACHMENT_DOWNLOADED: "Requester downloaded response",
+    ADMIN_ATTACHMENT_DOWNLOADED: "Response file downloaded by operator",
+    REQUEST_DATA_UPDATED: "Internal processing metadata updated",
   };
-  return labels[type] ?? "Request activity recorded";
+  return (
+    labels[event.type] ??
+    (event.category === "CUSTOM"
+      ? formatEnumLabel(event.type)
+      : "Request activity recorded")
+  );
+}
+
+function friendlyFeedback(message: string, kind: "success" | "error"): string {
+  const safeMessages = new Set([
+    "Verification email sent.",
+    "Verification email was already sent.",
+    "Processing started.",
+    "Processing has already started.",
+    "Internal note added.",
+    "Internal note already recorded.",
+    "Attachment uploaded.",
+    "Attachment upload was already recorded.",
+    "Response sent and request completed.",
+    "This request is already completed.",
+    "Status updated.",
+    "Verification email could not be sent.",
+    "The response email could not be sent. The request remains in processing.",
+    "Select a response file before sending.",
+    "Select a valid response file.",
+    "This request is not ready for response delivery.",
+    "This request is not ready to process.",
+    "Internal note is required.",
+    "File is required.",
+    "File is too large.",
+    "File MIME type is not supported.",
+  ]);
+
+  if (safeMessages.has(message)) return message;
+  return kind === "success"
+    ? "Request updated."
+    : "The request could not be updated. Try again.";
+}
+
+function formatRequestAge(ageDays: number): string {
+  if (ageDays <= 0) return "received today";
+  if (ageDays === 1) return "1 day old";
+  if (ageDays < 14) return `${ageDays} days old`;
+
+  const weeks = Math.floor(ageDays / 7);
+  return weeks === 1 ? "1 week old" : `${weeks} weeks old`;
+}
+
+function formatSubmissionSource(channel: string | null): string {
+  if (channel === "FORM") return "Hosted privacy form";
+  if (channel === "API") return "Internal API";
+  return channel ? formatEnumLabel(channel) : "Source unavailable";
 }
 
 function formatEnumLabel(value: string): string {
@@ -1299,6 +1410,20 @@ function formatBytes(value: number): string {
     unit: "byte",
     unitDisplay: "short",
   }).format(value);
+}
+
+function FileIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path
+        d="M6 3h8l4 4v14H6zM14 3v5h4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function firstParam(value: string | string[] | undefined): string | undefined {

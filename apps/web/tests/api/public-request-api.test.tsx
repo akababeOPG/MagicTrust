@@ -868,7 +868,7 @@ describe("public request API", () => {
       ],
       publicEvents: [],
     });
-    expect(html).toContain("Secure access verified");
+    expect(html).toContain("Secure request access");
     expect(serialized).not.toContain(request.id);
     expect(serialized).not.toContain("requesterId");
     expect(serialized).not.toContain("john@example.com");
