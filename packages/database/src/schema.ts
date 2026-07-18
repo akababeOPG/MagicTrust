@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   integer,
@@ -98,6 +98,14 @@ export const adminRoleEnum = pgEnum("admin_role", [
   "ADMIN",
   "OPERATOR",
   "VIEWER",
+]);
+
+export const formStatusEnum = pgEnum("form_status", ["ACTIVE", "ARCHIVED"]);
+
+export const formVersionStatusEnum = pgEnum("form_version_status", [
+  "DRAFT",
+  "PUBLISHED",
+  "ARCHIVED",
 ]);
 
 export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", [
@@ -349,14 +357,89 @@ export const adminSessions = pgTable(
   }),
 );
 
+export const forms = pgTable(
+  "forms",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    publicId: varchar("public_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    slug: varchar("slug", { length: 120 }).notNull(),
+    description: text("description"),
+    status: formStatusEnum("status").default("ACTIVE").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdByAdminUserId: uuid("created_by_admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "restrict" }),
+  },
+  (table) => ({
+    publicIdIdx: uniqueIndex("forms_public_id_idx").on(table.publicId),
+    slugIdx: uniqueIndex("forms_slug_idx").on(table.slug),
+    statusUpdatedAtIdx: index("forms_status_updated_at_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+  }),
+);
+
+export const formVersions = pgTable(
+  "form_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    formId: uuid("form_id")
+      .notNull()
+      .references(() => forms.id, { onDelete: "restrict" }),
+    versionNumber: integer("version_number").notNull(),
+    status: formVersionStatusEnum("status").default("DRAFT").notNull(),
+    html: text("html").notNull(),
+    css: text("css").notNull(),
+    javascript: text("javascript").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdByAdminUserId: uuid("created_by_admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "restrict" }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    publishedByAdminUserId: uuid("published_by_admin_user_id").references(
+      () => adminUsers.id,
+      { onDelete: "restrict" },
+    ),
+  },
+  (table) => ({
+    formVersionIdx: uniqueIndex("form_versions_form_version_idx").on(
+      table.formId,
+      table.versionNumber,
+    ),
+    oneDraftIdx: uniqueIndex("form_versions_one_draft_idx")
+      .on(table.formId)
+      .where(sql`${table.status} = 'DRAFT'`),
+    onePublishedIdx: uniqueIndex("form_versions_one_published_idx")
+      .on(table.formId)
+      .where(sql`${table.status} = 'PUBLISHED'`),
+    formCreatedAtIdx: index("form_versions_form_created_at_idx").on(
+      table.formId,
+      table.createdAt,
+    ),
+  }),
+);
+
 export const adminAuditEvents = pgTable(
   "admin_audit_events",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     type: varchar("type", { length: 64 }).notNull(),
-    targetAdminUserId: uuid("target_admin_user_id")
-      .notNull()
-      .references(() => adminUsers.id, { onDelete: "restrict" }),
+    targetAdminUserId: uuid("target_admin_user_id").references(
+      () => adminUsers.id,
+      { onDelete: "restrict" },
+    ),
+    formId: uuid("form_id").references(() => forms.id, {
+      onDelete: "restrict",
+    }),
     actorAdminUserId: uuid("actor_admin_user_id")
       .notNull()
       .references(() => adminUsers.id, { onDelete: "restrict" }),
@@ -372,6 +455,7 @@ export const adminAuditEvents = pgTable(
     actorAdminUserIdIdx: index("admin_audit_events_actor_admin_user_id_idx").on(
       table.actorAdminUserId,
     ),
+    formIdIdx: index("admin_audit_events_form_id_idx").on(table.formId),
     createdAtIdx: index("admin_audit_events_created_at_idx").on(
       table.createdAt,
     ),
@@ -688,6 +772,22 @@ export const adminUsersRelations = relations(adminUsers, ({ many }) => ({
   }),
   requestDueDatesSet: many(privacyRequests, {
     relationName: "requestDueDateSetBy",
+  }),
+  createdForms: many(forms),
+}));
+
+export const formsRelations = relations(forms, ({ one, many }) => ({
+  createdByAdminUser: one(adminUsers, {
+    fields: [forms.createdByAdminUserId],
+    references: [adminUsers.id],
+  }),
+  versions: many(formVersions),
+}));
+
+export const formVersionsRelations = relations(formVersions, ({ one }) => ({
+  form: one(forms, {
+    fields: [formVersions.formId],
+    references: [forms.id],
   }),
 }));
 

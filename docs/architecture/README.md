@@ -38,6 +38,31 @@ The backfill prints counts only and never prints plaintext payloads, recipients,
 - Emit auditable events for relevant future mutations.
 - Do not log PII.
 
+## Form Management Foundation
+
+MagicTrust separates a logical `Form` from its immutable published
+`FormVersion` artifacts. A form owns its stable name, slug, description, and
+active or archived state. Each version owns the HTML, CSS, and JavaScript
+source associated with one numbered revision.
+
+The initial lifecycle is:
+
+```text
+Create Form -> Draft v1 -> Publish v1 -> Create Draft v2 -> Publish v2
+                                                     |
+                                                     -> v1 Archived
+```
+
+Only one draft and one published version may exist for a form at a time.
+Publishing archives the previous published version transactionally. Published
+source is never edited in place; creating the next draft copies the current
+published source into a new version. Archiving a form preserves all historical
+versions while preventing new lifecycle changes.
+
+The foundation does not render or execute stored source. The planned HTML,
+CSS, and JavaScript editor, sandboxed preview, public form rendering, embed
+snippet, and deployment model are future capabilities and are not implemented.
+
 ## Request Model and Workflow Architecture
 
 MagicTrust keeps every privacy request in the same generic request model. A

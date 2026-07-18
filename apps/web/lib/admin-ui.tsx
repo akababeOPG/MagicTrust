@@ -46,7 +46,7 @@ export function AdminShell({
   session: AdminSession;
   children: ReactNode;
   topbarSlot?: ReactNode;
-  currentSection?: "requests" | "users";
+  currentSection?: "requests" | "forms" | "users";
 }) {
   return (
     <div className="mt-admin-shell">
@@ -68,7 +68,7 @@ export function AdminSidebar({
   currentSection = "requests",
 }: {
   session: AdminSession;
-  currentSection?: "requests" | "users";
+  currentSection?: "requests" | "forms" | "users";
 }) {
   return (
     <aside className="mt-admin-sidebar" aria-label="Admin navigation">
@@ -103,7 +103,7 @@ export function AdminTopbar({
 }: {
   session: AdminSession;
   searchSlot?: ReactNode;
-  currentSection?: "requests" | "users";
+  currentSection?: "requests" | "forms" | "users";
 }) {
   return (
     <header className="mt-admin-topbar">
@@ -137,7 +137,13 @@ export function AdminTopbar({
       <nav className="mt-breadcrumbs" aria-label="Breadcrumb">
         <span>Workspace</span>
         <span aria-hidden="true">/</span>
-        <strong>{currentSection === "users" ? "Users" : "Requests"}</strong>
+        <strong>
+          {currentSection === "users"
+            ? "Users"
+            : currentSection === "forms"
+              ? "Forms"
+              : "Requests"}
+        </strong>
       </nav>
       {searchSlot ? <div className="mt-topbar-search">{searchSlot}</div> : null}
       <span className="mt-topbar-spacer" />
@@ -162,7 +168,7 @@ function AdminNavigation({
   currentSection,
 }: {
   role: AdminSession["role"];
-  currentSection: "requests" | "users";
+  currentSection: "requests" | "forms" | "users";
 }) {
   return (
     <nav className="mt-sidebar-nav" aria-label="Workspace">
@@ -178,6 +184,18 @@ function AdminNavigation({
           <InboxIcon />
           <span>Requests</span>
         </Link>
+        {role !== "VIEWER" ? (
+          <Link
+            className={`mt-nav-item${
+              currentSection === "forms" ? " mt-nav-item-active" : ""
+            }`}
+            href="/admin/forms"
+            aria-current={currentSection === "forms" ? "page" : undefined}
+          >
+            <FormsIcon />
+            <span>Forms</span>
+          </Link>
+        ) : null}
       </div>
       <div className="mt-nav-group">
         <p className="mt-nav-label">Views</p>
@@ -351,6 +369,21 @@ function UserIcon() {
         stroke="currentColor"
         strokeWidth="1.7"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function FormsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path
+        d="M6 3.5h9l3 3V20.5H6zM15 3.5v3h3M9 11h6M9 15h6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

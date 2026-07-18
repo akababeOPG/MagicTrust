@@ -57,11 +57,17 @@ describe("MagicTrust admin UI", () => {
     expect(renderShell("OPERATOR")).not.toContain('href="/admin/users"');
     expect(renderShell("VIEWER")).not.toContain('href="/admin/users"');
   });
+
+  test("shows Forms navigation to ADMIN and OPERATOR only", () => {
+    expect(renderShell("ADMIN", "forms")).toContain('href="/admin/forms"');
+    expect(renderShell("OPERATOR", "forms")).toContain('href="/admin/forms"');
+    expect(renderShell("VIEWER")).not.toContain('href="/admin/forms"');
+  });
 });
 
 function renderShell(
   role: "ADMIN" | "OPERATOR" | "VIEWER",
-  currentSection: "requests" | "users" = "requests",
+  currentSection: "requests" | "forms" | "users" = "requests",
 ) {
   return renderToStaticMarkup(
     <AdminShell
