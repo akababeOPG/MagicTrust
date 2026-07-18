@@ -7,7 +7,7 @@ import type {
   RequestAccessToken,
   PrivacyRequest,
 } from "@magictrust/domain";
-import { deriveRequestSlaState } from "@magictrust/domain";
+import { deriveRequestSlaState, getRequestNextStep } from "@magictrust/domain";
 import type {
   RequestDetails,
   RequestListFilters,
@@ -29,7 +29,6 @@ import {
   addAdminInternalNote,
   createAdminRequestComment,
   createAdminCustomEvent,
-  deriveDataAccessNextStep,
   downloadAdminAttachment,
   getAdminRequestDetail,
   getValidAdminStatusDestinations,
@@ -89,34 +88,38 @@ describe("admin dashboard", () => {
       status,
     });
 
-    expect(deriveDataAccessNextStep(request("PENDING_VERIFICATION"))).toBe(
+    expect(getRequestNextStep(request("PENDING_VERIFICATION")).listLabel).toBe(
       "Waiting for verification",
     );
-    expect(deriveDataAccessNextStep(request("VERIFIED"))).toBe(
+    expect(getRequestNextStep(request("VERIFIED")).listLabel).toBe(
       "Start processing",
     );
-    expect(deriveDataAccessNextStep(request("PROCESSING"))).toBe(
+    expect(getRequestNextStep(request("PROCESSING")).listLabel).toBe(
       "Upload response file",
     );
     expect(
-      deriveDataAccessNextStep(request("PROCESSING"), {
-        hasPublicAttachment: true,
+      getRequestNextStep({
+        ...request("PROCESSING"),
+        hasPublicAttachments: true,
         latestResponseDeliveryStatus: null,
-      }),
+      }).listLabel,
     ).toBe("Send response");
     expect(
-      deriveDataAccessNextStep(request("PROCESSING"), {
-        hasPublicAttachment: true,
+      getRequestNextStep({
+        ...request("PROCESSING"),
+        hasPublicAttachments: true,
         latestResponseDeliveryStatus: "FAILED",
-      }),
+      }).listLabel,
     ).toBe("Retry sending response");
-    expect(deriveDataAccessNextStep(request("WAITING_FOR_REQUESTER"))).toBe(
+    expect(getRequestNextStep(request("WAITING_FOR_REQUESTER")).listLabel).toBe(
       "Waiting for requester",
     );
-    expect(deriveDataAccessNextStep(request("SUCCESS"))).toBe("Completed");
-    expect(deriveDataAccessNextStep(request("REJECTED"))).toBe("Rejected");
-    expect(deriveDataAccessNextStep(request("CANCELLED"))).toBe("Cancelled");
-    expect(deriveDataAccessNextStep(request("SUBMITTED"))).toBe(
+    expect(getRequestNextStep(request("SUCCESS")).listLabel).toBe("Completed");
+    expect(getRequestNextStep(request("REJECTED")).listLabel).toBe("Rejected");
+    expect(getRequestNextStep(request("CANCELLED")).listLabel).toBe(
+      "Cancelled",
+    );
+    expect(getRequestNextStep(request("SUBMITTED")).listLabel).toBe(
       "Review request",
     );
   });
@@ -946,7 +949,12 @@ describe("admin dashboard", () => {
         expect.objectContaining({ type: "STATUS_CHANGED" }),
       ]),
     );
-    expect(getValidAdminStatusDestinations("SUCCESS")).toEqual([]);
+    expect(
+      getValidAdminStatusDestinations({
+        type: "DATA_ACCESS",
+        status: "SUCCESS",
+      }),
+    ).toEqual([]);
   });
 
   test("reason required and length validated", async () => {
@@ -2044,6 +2052,59 @@ describe("admin dashboard", () => {
     ).toHaveLength(1);
   });
 
+  test("DATA_ACCESS completes and sends a completion email without attachments", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    dependencies.state.attachments.splice(0);
+
+    await sendAdminDataAccessResponse(
+      guidedRequest("send-response", new FormData()),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.requests[0]?.status).toBe("SUCCESS");
+    expect(dependencies.state.sentEmails).toHaveLength(1);
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Your request has been completed.",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+      "Secure access link:",
+    );
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "CONSUMER_NOTIFICATION_SENT",
+          data: expect.objectContaining({
+            notificationType: "REQUEST_COMPLETED",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("DATA_ACCESS completion email conditionally mentions secure response files", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "PROCESSING";
+    const body = new FormData();
+    body.set("attachmentId", "attachment-one");
+
+    await sendAdminDataAccessResponse(
+      guidedRequest("send-response", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Your request has been completed and response files are available securely.",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Secure access link:",
+    );
+  });
+
   test("failed guided response remains PROCESSING and cross-origin is rejected", async () => {
     const dependencies = createInMemoryDependencies({ emailShouldFail: true });
     dependencies.state.requests[0]!.status = "PROCESSING";
@@ -2066,6 +2127,32 @@ describe("admin dashboard", () => {
     expect(failed.status).toBe(303);
     expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
     expect(crossOrigin.status).toBe(403);
+  });
+
+  test("generic requests retain optional secure attachments", async () => {
+    const dependencies = createInMemoryDependencies();
+
+    await uploadAdminRequestAttachment(
+      adminUploadRequest({
+        file: new File(["response"], "general-response.txt", {
+          type: "text/plain",
+        }),
+        visibility: "PUBLIC",
+      }),
+      "req_two",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(dependencies.state.attachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: "request-two",
+          fileName: "general-response.txt",
+          visibility: "PUBLIC",
+        }),
+      ]),
+    );
   });
 
   test("resend verification creates a token and email without changing status", async () => {

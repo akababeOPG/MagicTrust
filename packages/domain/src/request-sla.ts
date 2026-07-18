@@ -1,4 +1,5 @@
 import type { RequestStatus } from "./types";
+import { isTerminalRequestStatus } from "./request-workflow";
 
 export const requestDueSoonWindowMs = 48 * 60 * 60 * 1000;
 
@@ -12,11 +13,6 @@ export const requestSlaStates = [
 
 export type RequestSlaState = (typeof requestSlaStates)[number];
 
-const terminalStatuses = new Set<RequestStatus>([
-  "SUCCESS",
-  "REJECTED",
-  "CANCELLED",
-]);
 const dayMs = 24 * 60 * 60 * 1000;
 
 export function deriveRequestSlaState(input: {
@@ -24,7 +20,7 @@ export function deriveRequestSlaState(input: {
   dueAt: Date | null;
   now: Date;
 }): RequestSlaState {
-  if (terminalStatuses.has(input.status)) return "COMPLETED";
+  if (isTerminalRequestStatus(input.status)) return "COMPLETED";
   if (!input.dueAt) return "NO_DUE_DATE";
   if (input.dueAt.getTime() < input.now.getTime()) return "OVERDUE";
   if (input.dueAt.getTime() <= input.now.getTime() + requestDueSoonWindowMs) {

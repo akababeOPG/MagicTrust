@@ -16,7 +16,14 @@ import {
 } from "@/lib/admin-request-action-forms";
 import { RequestProgress } from "../../../../lib/admin-request-progress";
 import { StatusBadge } from "../../../../lib/admin-ui";
-import { commentVisibilities } from "@magictrust/domain";
+import {
+  commentVisibilities,
+  getRequestNextStep,
+  getRequestWorkflowProgress,
+  getWorkflowDefinitionForRequest,
+  isTerminalRequestStatus,
+  type RequestWorkflowNextStep,
+} from "@magictrust/domain";
 
 type PageProps = {
   params: Promise<{ publicId: string }>;
@@ -62,11 +69,11 @@ export default async function AdminRequestDetailPage({
   }
 
   const canMutate = session.role === "ADMIN" || session.role === "OPERATOR";
-  const validStatuses = getValidAdminStatusDestinations(request.status);
+  const validStatuses = getValidAdminStatusDestinations(request);
   const successMessage = firstParam(messages?.success);
   const errorMessage = firstParam(messages?.error);
 
-  if (request.type === "DATA_ACCESS") {
+  if (getWorkflowDefinitionForRequest(request).id === "DATA_ACCESS_STANDARD") {
     return (
       <DataAccessRequestDetail
         request={request}
@@ -628,7 +635,8 @@ function DataAccessRequestDetail({
     (event) =>
       (event.type === "CONSUMER_NOTIFICATION_SENT" ||
         event.type === "CONSUMER_NOTIFICATION_FAILED") &&
-      event.data.notificationType === "FILE_AVAILABLE",
+      (event.data.notificationType === "FILE_AVAILABLE" ||
+        event.data.notificationType === "REQUEST_COMPLETED"),
   );
   const deliveryCommunicationId =
     typeof latestDeliveryEvent?.data.communicationId === "string"
@@ -682,6 +690,20 @@ function DataAccessRequestDetail({
         event.type === "STATUS_CHANGED" &&
         event.data.newStatus === "PROCESSING",
     );
+  const workflowContext = {
+    type: request.type,
+    status: request.status,
+    hasPublicAttachments: publicAttachments.length > 0,
+    latestResponseDeliveryStatus: latestDeliveryEvent
+      ? deliveryFailed
+        ? ("FAILED" as const)
+        : ("SENT" as const)
+      : null,
+    verified,
+    processingStarted,
+  };
+  const workflowProgress = getRequestWorkflowProgress(workflowContext);
+  const nextStep = getRequestNextStep(workflowContext);
 
   return (
     <main className="admin-page guided-request-page">
@@ -708,7 +730,7 @@ function DataAccessRequestDetail({
           <RequestOperationalMetadata request={request} role={role} />
         </div>
         <div className="request-header-actions">
-          {canAct && !isTerminalStatus(request.status) ? (
+          {canAct && !isTerminalRequestStatus(request.status) ? (
             <DataAccessMoreActions publicId={request.publicId} />
           ) : null}
         </div>
@@ -726,10 +748,8 @@ function DataAccessRequestDetail({
       ) : null}
 
       <RequestProgress
-        status={request.status}
-        responseReady={responseFile !== null}
-        verified={verified}
-        processingStarted={processingStarted}
+        steps={workflowProgress.steps}
+        interruption={workflowProgress.interruption}
       />
 
       <section
@@ -740,6 +760,7 @@ function DataAccessRequestDetail({
         <div className="next-step-content">
           <DataAccessNextStep
             request={request}
+            nextStep={nextStep}
             canAct={canAct}
             responseFile={responseFile}
             publicAttachments={publicAttachments}
@@ -843,12 +864,12 @@ function DataAccessRequestDetail({
               <span className="response-file-icon" aria-hidden="true">
                 <FileIcon />
               </span>
-              <h3>No response file yet</h3>
+              <h3>No response files</h3>
               <p>
-                Upload the completed response file when it is ready to be
-                securely delivered to the requester.
+                Add a file when the response includes downloadable material. A
+                file is not required to complete this request.
               </p>
-              {canAct && request.status === "PROCESSING" ? (
+              {canAct && nextStep.actionType === "SEND_RESPONSE" ? (
                 <ResponseUploadForm publicId={request.publicId} />
               ) : null}
             </div>
@@ -887,10 +908,12 @@ function DataAccessRequestDetail({
             <div className="delivery-state delivery-state-success">
               <strong>Delivered successfully</strong>
               <dl>
-                <div>
-                  <dt>Delivered file</dt>
-                  <dd>{responseFile?.fileName ?? "Unavailable"}</dd>
-                </div>
+                {responseFile ? (
+                  <div>
+                    <dt>Delivered file</dt>
+                    <dd>{responseFile.fileName}</dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>Sent</dt>
                   <dd>
@@ -1260,6 +1283,7 @@ function DataAccessMoreActions({ publicId }: { publicId: string }) {
 
 function DataAccessNextStep({
   request,
+  nextStep,
   canAct,
   responseFile,
   publicAttachments,
@@ -1269,6 +1293,7 @@ function DataAccessNextStep({
   deliveryCommunication,
 }: {
   request: AdminRequestDetailView;
+  nextStep: RequestWorkflowNextStep;
   canAct: boolean;
   responseFile: AdminRequestDetailView["attachments"][number] | null;
   publicAttachments: AdminRequestDetailView["attachments"];
@@ -1278,14 +1303,11 @@ function DataAccessNextStep({
   deliveryCommunication:
     AdminRequestDetailView["communications"][number] | null;
 }) {
-  if (request.status === "PENDING_VERIFICATION")
+  if (nextStep.actionType === "RESEND_VERIFICATION")
     return (
       <>
-        <h2 id="next-step-heading">Waiting for requester verification</h2>
-        <p>
-          The requester must verify their email before this request can be
-          processed.
-        </p>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
+        <p>{nextStep.description}</p>
         {latestVerificationAt ? (
           <p className="next-step-context">
             Most recent verification email:{" "}
@@ -1298,58 +1320,36 @@ function DataAccessNextStep({
             action={`/admin/requests/${request.publicId}/resend-verification`}
             method="post"
           >
-            <AdminSubmitButton>Resend verification email</AdminSubmitButton>
+            <AdminSubmitButton>
+              {nextStep.actionLabel ?? "Resend verification email"}
+            </AdminSubmitButton>
           </form>
         ) : null}
       </>
     );
-  if (request.status === "VERIFIED")
+  if (nextStep.actionType === "START_PROCESSING")
     return (
       <>
-        <h2 id="next-step-heading">Ready to process</h2>
-        <p>
-          The requester’s identity has been verified. Review the request and
-          begin fulfillment.
-        </p>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
+        <p>{nextStep.description}</p>
         {canAct ? (
           <form
             className="next-step-action"
             action={`/admin/requests/${request.publicId}/start-processing`}
             method="post"
           >
-            <AdminSubmitButton>Start processing</AdminSubmitButton>
+            <AdminSubmitButton>
+              {nextStep.actionLabel ?? "Start processing"}
+            </AdminSubmitButton>
           </form>
         ) : null}
       </>
     );
-  if (request.status === "PROCESSING" && !responseFile)
+  if (nextStep.actionType === "SEND_RESPONSE")
     return (
       <>
-        <h2 id="next-step-heading">Prepare the response</h2>
-        <p>
-          Review the requester’s information, locate their data in the relevant
-          systems, and prepare the response file.
-        </p>
-        {canAct ? (
-          <a className="mt-button next-step-action" href="#response">
-            Upload response file
-          </a>
-        ) : null}
-      </>
-    );
-  if (request.status === "PROCESSING" && responseFile)
-    return (
-      <>
-        <h2 id="next-step-heading">
-          {deliveryFailed
-            ? "Response could not be sent"
-            : "Response ready to send"}
-        </h2>
-        <p>
-          {deliveryFailed
-            ? "The response file is ready, but the email delivery failed. Review the error and try again."
-            : "The response file is ready to be delivered securely to the requester."}
-        </p>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
+        <p>{nextStep.description}</p>
         {deliveryFailed ? (
           <p role="alert">
             The email provider could not deliver the response message.
@@ -1361,20 +1361,27 @@ function DataAccessNextStep({
             action={`/admin/requests/${request.publicId}/send-response`}
             method="post"
           >
-            <label>
-              Response file
-              <select
-                name="attachmentId"
-                required
-                defaultValue={responseFile.id}
-              >
-                {publicAttachments.map((attachment) => (
-                  <option key={attachment.id} value={attachment.id}>
-                    {attachment.fileName}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {responseFile ? (
+              <label>
+                Response file
+                <select
+                  name="attachmentId"
+                  required
+                  defaultValue={responseFile.id}
+                >
+                  {publicAttachments.map((attachment) => (
+                    <option key={attachment.id} value={attachment.id}>
+                      {attachment.fileName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="next-step-context">
+                No downloadable files will be included. You can still complete
+                the request, or <a href="#response">add a response file</a>.
+              </p>
+            )}
             <label>
               Message to requester (optional)
               <textarea name="message" maxLength={2000} rows={4} />
@@ -1383,19 +1390,17 @@ function DataAccessNextStep({
               </small>
             </label>
             <AdminSubmitButton>
-              {deliveryFailed
-                ? "Retry sending response"
-                : "Send response and complete request"}
+              {nextStep.actionLabel ?? "Send response and complete request"}
             </AdminSubmitButton>
           </form>
         ) : null}
       </>
     );
-  if (request.status === "SUCCESS")
+  if (nextStep.key === "completed")
     return (
       <>
-        <h2 id="next-step-heading">Request completed</h2>
-        <p>The response was delivered securely to the requester.</p>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
+        <p>{nextStep.description}</p>
         <dl className="next-step-completion-meta">
           <div>
             <dt>Completed</dt>
@@ -1428,16 +1433,14 @@ function DataAccessNextStep({
         </dl>
       </>
     );
-  if (request.status === "REJECTED" || request.status === "CANCELLED")
+  if (nextStep.key === "rejected" || nextStep.key === "cancelled")
     return (
       <>
-        <h2 id="next-step-heading">
-          Request {request.status === "REJECTED" ? "rejected" : "cancelled"}
-        </h2>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
         <p>
           {typeof terminalEvent?.data.reason === "string"
             ? terminalEvent.data.reason
-            : "This request is closed."}
+            : nextStep.description}
         </p>
         <p className="next-step-context">
           {terminalEvent
@@ -1446,20 +1449,10 @@ function DataAccessNextStep({
         </p>
       </>
     );
-  if (request.status === "WAITING_FOR_REQUESTER")
-    return (
-      <>
-        <h2 id="next-step-heading">Waiting for requester</h2>
-        <p>
-          Processing is paused until the requester provides the required
-          information.
-        </p>
-      </>
-    );
   return (
     <>
-      <h2 id="next-step-heading">Review request</h2>
-      <p>Review the request details and determine the appropriate next step.</p>
+      <h2 id="next-step-heading">{nextStep.title}</h2>
+      <p>{nextStep.description}</p>
     </>
   );
 }
@@ -1487,11 +1480,6 @@ function ResponseUploadForm({ publicId }: { publicId: string }) {
   );
 }
 
-function isTerminalStatus(status: AdminRequestDetailView["status"]) {
-  return (
-    status === "SUCCESS" || status === "REJECTED" || status === "CANCELLED"
-  );
-}
 function actorCategory(actorType: string) {
   return actorType === "CONSUMER"
     ? "Requester"
@@ -1555,7 +1543,7 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Enter a valid due date and time in UTC.",
     "Verification email could not be sent.",
     "The response email could not be sent. The request remains in processing.",
-    "Select a response file before sending.",
+    "Response details are invalid.",
     "Select a valid response file.",
     "This request is not ready for response delivery.",
     "This request is not ready to process.",

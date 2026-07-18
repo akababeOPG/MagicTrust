@@ -1,105 +1,38 @@
-import type { RequestStatus } from "@magictrust/domain";
-import React from "react";
-
-export type RequestProgressStageState = "completed" | "current" | "upcoming";
-
-export type RequestProgressStage = {
-  label: string;
-  state: RequestProgressStageState;
-};
-
-const stageLabels = [
-  "Received",
-  "Verified",
-  "Processing",
-  "Response ready",
-  "Completed",
-] as const;
-
-export function getDataAccessProgress({
-  status,
-  responseReady,
-  verified = false,
-  processingStarted = false,
-}: {
-  status: RequestStatus;
-  responseReady: boolean;
-  verified?: boolean;
-  processingStarted?: boolean;
-}): RequestProgressStage[] {
-  if (status === "SUCCESS") {
-    return stageLabels.map((label) => ({ label, state: "completed" }));
-  }
-
-  if (status === "REJECTED" || status === "CANCELLED") {
-    const achievedIndex = responseReady
-      ? 3
-      : processingStarted
-        ? 2
-        : verified
-          ? 1
-          : 0;
-
-    return stageLabels.map((label, index) => ({
-      label,
-      state: index <= achievedIndex ? "completed" : "upcoming",
-    }));
-  }
-
-  if (status === "WAITING_FOR_REQUESTER") {
-    const currentIndex = responseReady
-      ? 3
-      : processingStarted
-        ? 2
-        : verified
-          ? 1
-          : 0;
-
-    return stagesWithCurrent(currentIndex);
-  }
-
-  if (status === "PENDING_VERIFICATION") return stagesWithCurrent(1);
-  if (status === "VERIFIED") return stagesWithCurrent(2);
-  if (status === "PROCESSING") return stagesWithCurrent(responseReady ? 3 : 2);
-
-  return stagesWithCurrent(0);
-}
+import type {
+  RequestWorkflowProgressState,
+  RequestWorkflowProgressStep,
+} from "@magictrust/domain";
+import React, { type CSSProperties } from "react";
 
 export function RequestProgress({
-  status,
-  responseReady,
-  verified,
-  processingStarted,
+  steps,
+  interruption = null,
 }: {
-  status: RequestStatus;
-  responseReady: boolean;
-  verified?: boolean;
-  processingStarted?: boolean;
+  steps: readonly RequestWorkflowProgressStep[];
+  interruption?: RequestWorkflowProgressState["interruption"];
 }) {
-  const stages = getDataAccessProgress({
-    status,
-    responseReady,
-    verified,
-    processingStarted,
-  });
-  const terminal = status === "REJECTED" || status === "CANCELLED";
-  const waiting = status === "WAITING_FOR_REQUESTER";
-
   return (
     <section className="request-progress-card" aria-label="Request progress">
-      {terminal ? (
+      {interruption === "CLOSED_BEFORE_COMPLETION" ? (
         <span className="request-progress-interruption request-progress-terminal">
           Closed before completion
         </span>
-      ) : waiting ? (
+      ) : interruption === "WAITING_FOR_REQUESTER" ? (
         <span className="request-progress-interruption">
           Waiting for requester
         </span>
       ) : null}
-      <ol className="request-progress">
-        {stages.map((stage, index) => (
+      <ol
+        className="request-progress"
+        style={
+          {
+            "--request-progress-step-count": steps.length,
+          } as CSSProperties
+        }
+      >
+        {steps.map((stage, index) => (
           <li
-            key={stage.label}
+            key={stage.id}
             data-state={stage.state}
             aria-label={`${stage.label}: ${stage.state}`}
             aria-current={stage.state === "current" ? "step" : undefined}
@@ -119,18 +52,6 @@ export function RequestProgress({
       </ol>
     </section>
   );
-}
-
-function stagesWithCurrent(currentIndex: number): RequestProgressStage[] {
-  return stageLabels.map((label, index) => ({
-    label,
-    state:
-      index < currentIndex
-        ? "completed"
-        : index === currentIndex
-          ? "current"
-          : "upcoming",
-  }));
 }
 
 function CheckIcon() {

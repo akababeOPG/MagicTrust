@@ -58,11 +58,11 @@ Progress maps Received, Verified, Processing, Response ready, and Completed on a
 
 Requester data and the original message are server-rendered only for ADMIN and OPERATOR roles. VIEWER receives a restricted state. Original submissions are presented as readable identity, message, submitted date, and source rather than technical JSON.
 
-Response states distinguish no file, ready for delivery, failed delivery, and delivered successfully. Files remain private, and the UI avoids storage terminology and attachment identifiers. Internal notes never expose visibility controls or actor IDs. Activity history is collapsed by default and translates audit events into human-readable labels without rendering raw event payloads, provider identifiers, hashes, or tokens.
+Response states distinguish no file, ready for delivery, failed delivery, and delivered successfully. A response file is optional: operators may complete a request without one, while any available public files remain private and are delivered through secure access. The UI avoids storage terminology and attachment identifiers. Internal notes never expose visibility controls or actor IDs. Activity history is collapsed by default and translates audit events into human-readable labels without rendering raw event payloads, provider identifiers, hashes, or tokens.
 
 ## Consumer Secure Access
 
-The secure consumer request page uses a centered, narrow layout without the admin shell. Its hierarchy is branding and secure-access context, the current request outcome, available response files, request details, then non-empty public updates. For completed data access requests, the response download is the primary action and appears before request metadata.
+The secure consumer request page uses a centered, narrow layout without the admin shell. Its hierarchy is branding and secure-access context, the current request outcome, available response files, request details, then non-empty public updates. For completed requests with public response files, the response download is the primary action and appears before request metadata.
 
 Only PUBLIC attachments are rendered. File cards translate MIME types and byte counts into natural file descriptions and human-readable sizes, retain descriptive download labels, and use the existing secure consumer download route. Empty response and update sections remain hidden.
 

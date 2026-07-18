@@ -37,3 +37,42 @@ The backfill prints counts only and never prints plaintext payloads, recipients,
 - Keep the original submitted request payload immutable when request storage is later implemented.
 - Emit auditable events for relevant future mutations.
 - Do not log PII.
+
+## Request Model and Workflow Architecture
+
+MagicTrust keeps every privacy request in the same generic request model. A
+request owns its requester, submitted and mutable data, assignment, due date,
+attachments, comments, events, and communications. These capabilities are not
+specialized by request type and do not require separate entities such as a data
+access request or data deletion request.
+
+The responsibilities are deliberately separate:
+
+- **Request type** describes what the consumer is asking MagicTrust to do.
+- **Workflow** describes how that request moves through processing stages.
+- **Capabilities** such as attachments, comments, communications, assignment,
+  SLA metadata, and events remain available to requests generally unless a true
+  domain or security rule says otherwise.
+
+Workflow definitions currently live in `@magictrust/domain` as framework-free,
+code-defined models. The v1 resolution path is:
+
+```text
+request.type -> workflow resolver -> code-defined workflow
+```
+
+`DATA_ACCESS` resolves to `DATA_ACCESS_STANDARD`. Other request types resolve to
+the temporary `GENERIC_REQUEST` workflow until their own processing definitions
+are introduced. Consumers use the resolver for stages, progress, next-step
+guidance, and allowed status transitions instead of scattering request-type
+checks across routes and components.
+
+Workflow definitions are not database-backed or user-configurable in v1. A
+future implementation can evolve the resolution path to:
+
+```text
+request.workflowId -> persisted workflow definition
+```
+
+That change will not require redesigning the generic request schema or its
+capabilities.

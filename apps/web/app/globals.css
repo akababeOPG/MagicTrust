@@ -1718,7 +1718,10 @@ button:disabled,
   position: relative;
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(
+    var(--request-progress-step-count),
+    minmax(0, 1fr)
+  );
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1728,8 +1731,8 @@ button:disabled,
   position: absolute;
   z-index: 0;
   top: 13px;
-  right: 10%;
-  left: 10%;
+  right: calc(50% / var(--request-progress-step-count));
+  left: calc(50% / var(--request-progress-step-count));
   height: 2px;
   background: var(--mt-border-strong);
   content: "";

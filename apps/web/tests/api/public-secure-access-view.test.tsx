@@ -63,6 +63,19 @@ describe("public secure access view", () => {
     expect(html.match(/>Download<\/a>/g)).toHaveLength(2);
   });
 
+  test("treats public response files as a generic request capability", () => {
+    const html = renderSecureAccess({
+      type: "GENERAL_INQUIRY",
+      status: "SUCCESS",
+      completedAt: "2026-07-18T12:00:00.000Z",
+      publicAttachments: [responseFile()],
+    });
+
+    expect(html).toContain("Your response is ready");
+    expect(html).toContain("Download response");
+    expect(html).not.toContain("data access request");
+  });
+
   test("hides empty updates and empty response UI while processing", () => {
     const html = renderSecureAccess({
       status: "PROCESSING",

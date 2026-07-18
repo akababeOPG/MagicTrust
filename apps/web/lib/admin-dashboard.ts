@@ -20,6 +20,9 @@ import {
   deriveRequestSlaState,
   formatDueDate,
   formatDueRelative,
+  getAllowedWorkflowTransitions,
+  getRequestNextStep,
+  getWorkflowDefinitionForRequest,
   requestStatuses,
   requestTypes,
   type JsonObject,
@@ -236,11 +239,6 @@ const builtInEventTypes = new Set([
 const customEventNamePattern = /^[A-Z][A-Z0-9_]{2,79}$/;
 const maxAdminMutableDataBytes = 32 * 1024;
 const maxCustomEventDataBytes = 16 * 1024;
-const terminalStatuses = new Set<RequestStatus>([
-  "SUCCESS",
-  "REJECTED",
-  "CANCELLED",
-]);
 const sensitiveEventKeys = new Set([
   "storagekey",
   "checksum",
@@ -725,7 +723,7 @@ export async function updateAdminRequestStatus(
     return actionError("NOT_FOUND", "Request not found.", 404);
   }
 
-  const validDestinations = getValidAdminStatusDestinations(existing.status);
+  const validDestinations = getValidAdminStatusDestinations(existing);
 
   if (!validDestinations.includes(parsed.data.newStatus)) {
     return redirectToRequestDetail(request, publicId, {
@@ -889,19 +887,16 @@ export async function startAdminRequestProcessing(
     return actionError("NOT_FOUND", "Request not found.", 404);
   }
 
-  if (existing.type !== "DATA_ACCESS") {
-    return redirectToRequestDetail(request, publicId, {
-      error: "This guided action is available for data access requests only.",
-    });
-  }
-
   if (existing.status === "PROCESSING") {
     return redirectToRequestDetail(request, publicId, {
       success: "Processing has already started.",
     });
   }
 
-  if (existing.status !== "VERIFIED") {
+  if (
+    getRequestNextStep(existing).actionType !== "START_PROCESSING" ||
+    !getAllowedWorkflowTransitions(existing).includes("PROCESSING")
+  ) {
     return redirectToRequestDetail(request, publicId, {
       error: "This request is not ready to process.",
     });
@@ -1393,19 +1388,26 @@ export async function sendAdminDataAccessResponse(
   }
 
   const formData = await safeFormData(request);
+
+  if (!formData) {
+    return actionError("VALIDATION_ERROR", "Request payload is invalid.", 400);
+  }
+
   const parsed = z
     .object({
-      attachmentId: z.string().trim().min(1),
+      attachmentId: z.string().trim().min(1).optional(),
       message: z.string().trim().max(2_000).optional(),
     })
     .safeParse({
-      attachmentId: formData?.get("attachmentId"),
-      message: emptyToUndefined(formData?.get("message")?.toString() ?? null),
+      attachmentId: emptyToUndefined(
+        formData.get("attachmentId")?.toString() ?? null,
+      ),
+      message: emptyToUndefined(formData.get("message")?.toString() ?? null),
     });
 
   if (!parsed.success) {
     return redirectToRequestDetail(request, publicId, {
-      error: "Select a response file before sending.",
+      error: "Response details are invalid.",
     });
   }
 
@@ -1416,7 +1418,16 @@ export async function sendAdminDataAccessResponse(
     return actionError("NOT_FOUND", "Request not found.", 404);
   }
 
-  if (existing.type !== "DATA_ACCESS") {
+  const publicAttachments = existing.attachments.filter(
+    (item) => item.visibility === "PUBLIC",
+  );
+  const nextStep = getRequestNextStep({
+    type: existing.type,
+    status: existing.status,
+    hasPublicAttachments: publicAttachments.length > 0,
+  });
+
+  if (getWorkflowDefinitionForRequest(existing).id !== "DATA_ACCESS_STANDARD") {
     return redirectToRequestDetail(request, publicId, {
       error:
         "Secure response delivery is available for data access requests only.",
@@ -1429,33 +1440,40 @@ export async function sendAdminDataAccessResponse(
     });
   }
 
-  if (existing.status !== "PROCESSING") {
+  if (
+    nextStep.actionType !== "SEND_RESPONSE" ||
+    !getAllowedWorkflowTransitions(existing).includes("SUCCESS")
+  ) {
     return redirectToRequestDetail(request, publicId, {
       error: "This request is not ready for response delivery.",
     });
   }
 
-  const attachment = existing.attachments.find(
-    (item) =>
-      item.id === parsed.data.attachmentId && item.visibility === "PUBLIC",
-  );
+  const attachment = parsed.data.attachmentId
+    ? publicAttachments.find((item) => item.id === parsed.data.attachmentId)
+    : (publicAttachments[0] ?? null);
 
-  if (!attachment) {
+  if (parsed.data.attachmentId && !attachment) {
     return redirectToRequestDetail(request, publicId, {
       error: "Select a valid response file.",
     });
   }
 
+  const notificationType = attachment ? "FILE_AVAILABLE" : "REQUEST_COMPLETED";
+
   const alreadyDelivered = existing.events.some(
     (event) =>
       event.type === "CONSUMER_NOTIFICATION_SENT" &&
-      event.data.notificationType === "FILE_AVAILABLE",
+      event.data.notificationType === notificationType,
   );
 
   if (!alreadyDelivered) {
     const notificationForm = new FormData();
-    notificationForm.set("type", "FILE_AVAILABLE");
-    notificationForm.set("attachmentId", attachment.id);
+    notificationForm.set("type", notificationType);
+
+    if (attachment) {
+      notificationForm.set("attachmentId", attachment.id);
+    }
 
     if (parsed.data.message) {
       notificationForm.set("message", parsed.data.message);
@@ -1707,13 +1725,9 @@ export async function createAdminCustomEvent(
 }
 
 export function getValidAdminStatusDestinations(
-  status: RequestStatus,
+  request: Pick<RequestDetails, "type" | "status">,
 ): RequestStatus[] {
-  if (terminalStatuses.has(status)) {
-    return [];
-  }
-
-  return requestStatuses.filter((candidate) => candidate !== status);
+  return getAllowedWorkflowTransitions(request);
 }
 
 export function parseAdminRequestListSearchParams(
@@ -2188,7 +2202,13 @@ function normalizeAdminRequestList(
               (24 * 60 * 60 * 1000),
           ),
         ),
-        nextStep: deriveDataAccessNextStep(request, workflow),
+        nextStep: getRequestNextStep({
+          type: request.type,
+          status: request.status,
+          hasPublicAttachments: workflow?.hasPublicAttachment ?? false,
+          latestResponseDeliveryStatus:
+            workflow?.latestResponseDeliveryStatus ?? null,
+        }).listLabel,
       };
     }),
     pagination: {
@@ -2246,47 +2266,6 @@ function adminUserDisplayName(user: AdminUserAssignmentRecord): string {
   return shortName.charAt(0).toUpperCase() + shortName.slice(1).toLowerCase();
 }
 
-export function deriveDataAccessNextStep(
-  request: Pick<RequestListResult["requests"][number], "type" | "status">,
-  workflow?: Pick<
-    AdminRequestListWorkflowData,
-    "hasPublicAttachment" | "latestResponseDeliveryStatus"
-  >,
-): string {
-  if (request.type !== "DATA_ACCESS") {
-    return naturalStatusLabel(request.status);
-  }
-
-  switch (request.status) {
-    case "PENDING_VERIFICATION":
-      return "Waiting for verification";
-    case "VERIFIED":
-      return "Start processing";
-    case "PROCESSING":
-      if (!workflow?.hasPublicAttachment) {
-        return "Upload response file";
-      }
-
-      if (workflow.latestResponseDeliveryStatus === "FAILED") {
-        return "Retry sending response";
-      }
-
-      return workflow.latestResponseDeliveryStatus === "SENT"
-        ? "Complete request"
-        : "Send response";
-    case "WAITING_FOR_REQUESTER":
-      return "Waiting for requester";
-    case "SUCCESS":
-      return "Completed";
-    case "REJECTED":
-      return "Rejected";
-    case "CANCELLED":
-      return "Cancelled";
-    case "SUBMITTED":
-      return "Review request";
-  }
-}
-
 function normalizeRequesterSummary(
   workflow: AdminRequestListWorkflowData | undefined,
   role: AdminSession["role"],
@@ -2325,27 +2304,6 @@ function maskPhoneNumber(value: string): string {
   const suffix = normalized.replace(/\D/g, "").slice(-4);
 
   return suffix ? `${"*".repeat(6)}${suffix}` : "Phone provided";
-}
-
-function naturalStatusLabel(status: RequestStatus): string {
-  switch (status) {
-    case "PENDING_VERIFICATION":
-      return "Waiting for verification";
-    case "VERIFIED":
-      return "Ready to process";
-    case "PROCESSING":
-      return "In progress";
-    case "WAITING_FOR_REQUESTER":
-      return "Waiting for requester";
-    case "SUCCESS":
-      return "Completed";
-    case "REJECTED":
-      return "Rejected";
-    case "CANCELLED":
-      return "Cancelled";
-    case "SUBMITTED":
-      return "Submitted";
-  }
 }
 
 function normalizeAdminRequestListItem(request: {
@@ -2699,12 +2657,25 @@ function notificationMessage(
     attachmentFileName: string | null;
   },
 ): string {
-  if (input.customMessage) {
-    return input.customMessage;
+  if (type === "FILE_AVAILABLE") {
+    const fileLine = input.attachmentFileName
+      ? `\n\nResponse file: ${input.attachmentFileName}`
+      : "";
+    const completion = `Your request has been completed and response files are available securely.${fileLine}`;
+    return input.customMessage
+      ? `${completion}\n\n${input.customMessage}`
+      : completion;
   }
 
-  if (type === "FILE_AVAILABLE" && input.attachmentFileName) {
-    return `A file is available for your request: ${input.attachmentFileName}`;
+  if (type === "REQUEST_COMPLETED") {
+    const completion = "Your request has been completed.";
+    return input.customMessage
+      ? `${completion}\n\n${input.customMessage}`
+      : completion;
+  }
+
+  if (input.customMessage) {
+    return input.customMessage;
   }
 
   return "Your request has been updated.";

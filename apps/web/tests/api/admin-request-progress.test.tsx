@@ -1,12 +1,13 @@
-import type { RequestStatus } from "@magictrust/domain";
+import {
+  getRequestWorkflowProgress,
+  type RequestStatus,
+  type RequestType,
+} from "@magictrust/domain";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import {
-  getDataAccessProgress,
-  RequestProgress,
-} from "../../lib/admin-request-progress";
+import { RequestProgress } from "../../lib/admin-request-progress";
 
 describe("DATA_ACCESS request progress", () => {
   test.each([
@@ -39,7 +40,7 @@ describe("DATA_ACCESS request progress", () => {
     "maps %s with responseReady=%s",
     (status, responseReady, states) => {
       expect(
-        getDataAccessProgress({ status, responseReady }).map(
+        progress({ status, hasPublicAttachments: responseReady }).steps.map(
           (stage) => stage.state,
         ),
       ).toEqual(states);
@@ -49,12 +50,12 @@ describe("DATA_ACCESS request progress", () => {
   test.each(["REJECTED", "CANCELLED"] as const)(
     "%s preserves achieved progress without implying completion",
     (status) => {
-      const stages = getDataAccessProgress({
+      const stages = progress({
         status,
-        responseReady: false,
+        hasPublicAttachments: false,
         verified: true,
         processingStarted: true,
-      });
+      }).steps;
 
       expect(stages.map((stage) => stage.state)).toEqual([
         "completed",
@@ -68,12 +69,15 @@ describe("DATA_ACCESS request progress", () => {
   );
 
   test("waiting state identifies the interruption and current stage semantically", () => {
+    const workflowProgress = progress({
+      status: "WAITING_FOR_REQUESTER",
+      verified: true,
+      processingStarted: true,
+    });
     const html = renderToStaticMarkup(
       <RequestProgress
-        status={"WAITING_FOR_REQUESTER" as RequestStatus}
-        responseReady={false}
-        verified
-        processingStarted
+        steps={workflowProgress.steps}
+        interruption={workflowProgress.interruption}
       />,
     );
 
@@ -83,12 +87,11 @@ describe("DATA_ACCESS request progress", () => {
   });
 
   test("renders one label per stage without repeated completion captions", () => {
+    const workflowProgress = progress({ status: "SUCCESS" });
     const html = renderToStaticMarkup(
       <RequestProgress
-        status={"SUCCESS" as RequestStatus}
-        responseReady
-        verified
-        processingStarted
+        steps={workflowProgress.steps}
+        interruption={workflowProgress.interruption}
       />,
     );
 
@@ -97,4 +100,42 @@ describe("DATA_ACCESS request progress", () => {
     expect(html).not.toContain("<small>");
     expect(html).toContain('aria-label="Received: completed"');
   });
+
+  test("supports a configurable number of workflow stages", () => {
+    const workflowProgress = progress({
+      type: "GENERAL_INQUIRY",
+      status: "PROCESSING",
+    });
+    const html = renderToStaticMarkup(
+      <RequestProgress
+        steps={workflowProgress.steps}
+        interruption={workflowProgress.interruption}
+      />,
+    );
+
+    expect(workflowProgress.steps).toHaveLength(3);
+    expect(html).toContain("--request-progress-step-count:3");
+    expect(html).toContain("Received");
+    expect(html).toContain("Processing");
+    expect(html).toContain("Completed");
+    expect(html).not.toContain("Response ready");
+  });
 });
+
+function progress(
+  overrides: {
+    type?: RequestType;
+    status?: RequestStatus;
+    hasPublicAttachments?: boolean;
+    verified?: boolean;
+    processingStarted?: boolean;
+  } = {},
+) {
+  return getRequestWorkflowProgress({
+    type: overrides.type ?? "DATA_ACCESS",
+    status: overrides.status ?? "SUBMITTED",
+    hasPublicAttachments: overrides.hasPublicAttachments ?? false,
+    verified: overrides.verified ?? false,
+    processingStarted: overrides.processingStarted ?? false,
+  });
+}

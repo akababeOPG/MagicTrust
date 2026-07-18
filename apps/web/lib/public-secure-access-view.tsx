@@ -172,15 +172,13 @@ function secureHeroCopy(access: PublicSecureAccessData): {
   title: string;
   description: string;
 } {
-  if (
-    access.type === "DATA_ACCESS" &&
-    access.status === "SUCCESS" &&
-    access.publicAttachments.length > 0
-  ) {
+  if (access.status === "SUCCESS" && access.publicAttachments.length > 0) {
     return {
       title: "Your response is ready",
       description:
-        "We've completed your data access request. You can securely download your response file below.",
+        access.publicAttachments.length === 1
+          ? "We've completed your request. You can securely download your response file below."
+          : "We've completed your request. You can securely download your response files below.",
     };
   }
 

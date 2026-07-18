@@ -149,9 +149,11 @@ describe("admin sensitive request page", () => {
 
     mocks.detail.status = "PROCESSING";
     mocks.detail.attachments = [];
-    expect(await renderPage(AdminRequestDetailPage)).toContain(
-      "Upload response file",
-    );
+    const noFile = await renderPage(AdminRequestDetailPage);
+    expect(noFile).toContain("Upload response file");
+    expect(noFile).toContain("Send response and complete request");
+    expect(noFile).toContain("No downloadable files will be included");
+    expect(noFile).not.toContain('name="attachmentId"');
 
     mocks.detail.attachments = [
       {
@@ -234,7 +236,8 @@ describe("admin sensitive request page", () => {
       await import("../../app/admin/requests/[publicId]/page");
     const html = await renderPage(AdminRequestDetailPage);
 
-    expect(html).toContain("No response file yet");
+    expect(html).toContain("No response files");
+    expect(html).toContain("A file is not required to complete this request.");
     expect(html).toContain("This file will be securely available");
     expect(html).toContain("Upload response file");
     expect(html).not.toContain("PUBLIC");
