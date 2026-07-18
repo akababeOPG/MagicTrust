@@ -37,6 +37,7 @@ import {
   listAdminRequests,
   parseAdminRequestListSearchParams,
   resendAdminIdentityVerification,
+  resumeAdminRequestProcessing,
   sendAdminDataAccessResponse,
   sendAdminConsumerNotification,
   startAdminRequestProcessing,
@@ -46,6 +47,7 @@ import {
   updateAdminRequestStatus,
   uploadAdminRequestAttachment,
   uploadAdminResponseFile,
+  waitAdminRequestForRequester,
 } from "../../lib/admin-dashboard";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-admin-dashboard";
@@ -2007,6 +2009,258 @@ describe("admin dashboard", () => {
         }),
       ]),
     );
+  });
+
+  test("CONVERSATIONAL_PROCESSING waits only after sending a required public message", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "PROCESSING";
+    const body = new FormData();
+    body.set("message", "Please provide the account reference number.");
+
+    const response = await waitAdminRequestForRequester(
+      guidedRequest("wait-for-requester", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(request.status).toBe("WAITING_FOR_REQUESTER");
+    expect(dependencies.state.comments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          visibility: "PUBLIC",
+          body: "Please provide the account reference number.",
+          actorType: "ADMIN_USER",
+          actorId: "admin-user-1",
+        }),
+      ]),
+    );
+    expect(dependencies.state.sentEmails).toHaveLength(1);
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Please provide the account reference number.",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "/requests/req_one/access?token=secure-token",
+    );
+    expect(dependencies.state.accessTokens).toHaveLength(1);
+    expect(dependencies.state.accessTokens[0]?.tokenHash).toBe(
+      hashAccessToken("secure-token"),
+    );
+    expect(dependencies.state.accessTokens[0]?.tokenHash).not.toBe(
+      "secure-token",
+    );
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "STATUS_CHANGED",
+          data: expect.objectContaining({
+            previousStatus: "PROCESSING",
+            newStatus: "WAITING_FOR_REQUESTER",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("CONVERSATIONAL_PROCESSING rejects an empty requester message", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "PROCESSING";
+    const body = new FormData();
+    body.set("message", "   ");
+
+    const response = await waitAdminRequestForRequester(
+      guidedRequest("wait-for-requester", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "Message+to+requester+is+required",
+    );
+    expect(request.status).toBe("PROCESSING");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+    expect(
+      dependencies.state.comments.filter(
+        (comment) => comment.actorType === "ADMIN_USER",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("failed requester notification remains PROCESSING and retry reuses side effects", async () => {
+    const dependencies = createInMemoryDependencies({ emailShouldFail: true });
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "PROCESSING";
+    const body = new FormData();
+    body.set("message", "Please confirm the affected service.");
+
+    const failed = await waitAdminRequestForRequester(
+      guidedRequest("wait-for-requester", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(failed.headers.get("location")).toContain(
+      "request+remains+in+processing",
+    );
+    expect(request.status).toBe("PROCESSING");
+
+    dependencies.state.emailShouldFail = false;
+    await waitAdminRequestForRequester(
+      guidedRequest("wait-for-requester", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(request.status).toBe("WAITING_FOR_REQUESTER");
+    expect(
+      dependencies.state.comments.filter(
+        (comment) => comment.body === "Please confirm the affected service.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.communications.filter(
+        (communication) =>
+          communication.subject ===
+          "More information is needed for your MagicTrust request",
+      ),
+    ).toHaveLength(1);
+    expect(dependencies.state.accessTokens).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "CONSUMER_NOTIFICATION_SENT",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("CONVERSATIONAL_PROCESSING resumes manually without emailing", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "WAITING_FOR_REQUESTER";
+
+    const response = await resumeAdminRequestProcessing(
+      guidedRequest("resume-processing"),
+      "req_one",
+      adminSession({ role: "OPERATOR" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(request.status).toBe("PROCESSING");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+    expect(dependencies.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "STATUS_CHANGED",
+          actorType: "ADMIN_USER",
+          data: expect.objectContaining({
+            previousStatus: "WAITING_FOR_REQUESTER",
+            newStatus: "PROCESSING",
+            reason: "Processing resumed from admin dashboard",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("CONVERSATIONAL_PROCESSING completion notifies, keeps its note internal, and succeeds", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "PROCESSING";
+    dependencies.state.attachments.splice(0);
+    const body = new FormData();
+    body.set("confirmed", "on");
+    body.set("completionNote", "Confirmed the inquiry was handled.");
+
+    await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(request.status).toBe("SUCCESS");
+    expect(dependencies.state.sentEmails).toHaveLength(1);
+    expect(dependencies.state.sentEmails[0]).toMatchObject({
+      subject: "Your request has been completed",
+      body: expect.stringContaining("Your request has been completed."),
+    });
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "Reference number: req_one",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).toContain(
+      "/requests/req_one/access?token=secure-token",
+    );
+    expect(dependencies.state.sentEmails[0]?.body).not.toContain(
+      "Confirmed the inquiry was handled.",
+    );
+    expect(dependencies.state.comments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          visibility: "INTERNAL",
+          body: "Confirmed the inquiry was handled.",
+        }),
+      ]),
+    );
+  });
+
+  test("failed CONVERSATIONAL_PROCESSING completion retries one communication and stays PROCESSING until sent", async () => {
+    const dependencies = createInMemoryDependencies({ emailShouldFail: true });
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "PROCESSING";
+    dependencies.state.attachments.splice(0);
+    const body = new FormData();
+    body.set("confirmed", "on");
+    body.set("completionNote", "Inquiry processing completed.");
+
+    await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(request.status).toBe("PROCESSING");
+
+    dependencies.state.emailShouldFail = false;
+    await completeAdminGuidedRequest(
+      guidedRequest("complete", body),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(request.status).toBe("SUCCESS");
+    expect(
+      dependencies.state.comments.filter(
+        (comment) => comment.body === "Inquiry processing completed.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dependencies.state.communications.filter(
+        (communication) =>
+          communication.subject === "Your request has been completed",
+      ),
+    ).toHaveLength(1);
+    expect(dependencies.state.accessTokens).toHaveLength(1);
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS",
+      ),
+    ).toHaveLength(1);
   });
 
   test("guided internal note is always INTERNAL", async () => {

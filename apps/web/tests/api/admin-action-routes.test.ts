@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   resendAdminIdentityVerification: vi.fn(),
   sendAdminDataAccessResponse: vi.fn(),
   completeAdminGuidedRequest: vi.fn(),
+  waitAdminRequestForRequester: vi.fn(),
+  resumeAdminRequestProcessing: vi.fn(),
 }));
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -34,6 +36,8 @@ vi.mock("@/lib/admin-dashboard", () => ({
   resendAdminIdentityVerification: mocks.resendAdminIdentityVerification,
   sendAdminDataAccessResponse: mocks.sendAdminDataAccessResponse,
   completeAdminGuidedRequest: mocks.completeAdminGuidedRequest,
+  waitAdminRequestForRequester: mocks.waitAdminRequestForRequester,
+  resumeAdminRequestProcessing: mocks.resumeAdminRequestProcessing,
 }));
 
 describe("admin action routes", () => {
@@ -92,6 +96,43 @@ describe("admin action routes", () => {
     expect(response.status).toBe(403);
     expect(mocks.createAdminRequestComment).not.toHaveBeenCalled();
   });
+
+  test.each([
+    [
+      "wait-for-requester",
+      "waitAdminRequestForRequester",
+      () =>
+        import("../../app/admin/requests/[publicId]/wait-for-requester/route"),
+    ],
+    [
+      "resume-processing",
+      "resumeAdminRequestProcessing",
+      () =>
+        import("../../app/admin/requests/[publicId]/resume-processing/route"),
+    ],
+  ] as const)(
+    "VIEWER cannot use the %s guided action",
+    async (route, action, loadRoute) => {
+      mocks.requireAdminRole.mockResolvedValueOnce(
+        Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+      );
+      const { POST } = await loadRoute();
+
+      const response = await POST(
+        new Request(`https://magictrust.test/admin/requests/req_one/${route}`, {
+          method: "POST",
+        }),
+        { params: Promise.resolve({ publicId: "req_one" }) },
+      );
+
+      expect(response.status).toBe(403);
+      expect(mocks.requireAdminRole).toHaveBeenCalledWith(
+        ["ADMIN", "OPERATOR"],
+        { response: "json" },
+      );
+      expect(mocks[action]).not.toHaveBeenCalled();
+    },
+  );
 
   test("authorized route derives actor from the admin session", async () => {
     const session = {

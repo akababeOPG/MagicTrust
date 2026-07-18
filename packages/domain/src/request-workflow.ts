@@ -29,6 +29,7 @@ export type RequestWorkflowProgressState = {
 export type RequestWorkflowActionType =
   | "RESEND_VERIFICATION"
   | "START_PROCESSING"
+  | "RESUME_PROCESSING"
   | "SEND_RESPONSE"
   | "COMPLETE_REQUEST"
   | "WAIT_FOR_REQUESTER"
@@ -42,6 +43,8 @@ export type RequestWorkflowNextStep = {
   listLabel: string;
   actionType: RequestWorkflowActionType;
   actionLabel: string | null;
+  secondaryActionType: RequestWorkflowActionType | null;
+  secondaryActionLabel: string | null;
   terminal: boolean;
 };
 
@@ -869,6 +872,10 @@ function getConversationalProcessingNextStep(
         description:
           "Continue processing the request. If more information is needed, wait for the requester. Otherwise, complete the request when ready.",
         listLabel: "Continue processing",
+        actionType: "COMPLETE_REQUEST",
+        actionLabel: "Complete request",
+        secondaryActionType: "WAIT_FOR_REQUESTER",
+        secondaryActionLabel: "Wait for requester",
       });
     case "WAITING_FOR_REQUESTER":
       return nextStep({
@@ -877,7 +884,8 @@ function getConversationalProcessingNextStep(
         description:
           "This request is waiting for additional information from the requester.",
         listLabel: "Waiting for requester",
-        actionType: "WAIT_FOR_REQUESTER",
+        actionType: "RESUME_PROCESSING",
+        actionLabel: "Resume processing",
       });
     case "SUCCESS":
       return nextStep({
@@ -912,15 +920,28 @@ function getConversationalProcessingNextStep(
 function nextStep(
   input: Omit<
     RequestWorkflowNextStep,
-    "actionLabel" | "actionType" | "terminal"
+    | "actionLabel"
+    | "actionType"
+    | "secondaryActionLabel"
+    | "secondaryActionType"
+    | "terminal"
   > &
     Partial<
-      Pick<RequestWorkflowNextStep, "actionLabel" | "actionType" | "terminal">
+      Pick<
+        RequestWorkflowNextStep,
+        | "actionLabel"
+        | "actionType"
+        | "secondaryActionLabel"
+        | "secondaryActionType"
+        | "terminal"
+      >
     >,
 ): RequestWorkflowNextStep {
   return {
     actionLabel: null,
     actionType: "NONE",
+    secondaryActionLabel: null,
+    secondaryActionType: null,
     terminal: false,
     ...input,
   };

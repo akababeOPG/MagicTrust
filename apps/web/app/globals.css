@@ -661,6 +661,10 @@ button:disabled,
   padding: var(--mt-space-2) 0 var(--mt-space-2) var(--mt-space-6);
 }
 
+.consumer-prominent-messages .consumer-updates-list li {
+  border-left-color: var(--mt-accent);
+}
+
 .consumer-updates-list li > div {
   align-items: baseline;
   display: flex;
@@ -1408,6 +1412,36 @@ button:disabled,
 
 .next-step-action {
   margin-top: var(--mt-space-3);
+}
+
+.next-step-secondary-action {
+  max-width: 620px;
+  border-top: 1px solid var(--mt-border-faint);
+  margin-top: var(--mt-space-3);
+  padding-top: var(--mt-space-5);
+}
+
+.next-step-secondary-action > summary {
+  width: fit-content;
+  min-height: 44px;
+  align-items: center;
+  border: 1px solid var(--mt-border-strong);
+  border-radius: var(--mt-radius-md);
+  background: var(--mt-surface);
+  color: var(--mt-ink);
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 700;
+  padding: var(--mt-space-3) var(--mt-space-6);
+}
+
+.next-step-secondary-action[open] > summary {
+  margin-bottom: var(--mt-space-5);
+}
+
+.next-step-secondary-action > summary:focus-visible {
+  outline: 3px solid var(--mt-accent-focus-ring);
+  outline-offset: 2px;
 }
 
 .next-step-context {
@@ -2742,6 +2776,8 @@ dialog.mt-dialog {
   }
 
   .next-step-action,
+  .next-step-secondary-action,
+  .next-step-secondary-action > summary,
   .next-step-content form button {
     width: 100%;
   }

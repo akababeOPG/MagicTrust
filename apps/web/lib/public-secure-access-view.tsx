@@ -1,4 +1,8 @@
-import type { RequestStatus, RequestType } from "@magictrust/domain";
+import {
+  getWorkflowDefinitionForRequest,
+  type RequestStatus,
+  type RequestType,
+} from "@magictrust/domain";
 import React from "react";
 
 import { MagicTrustWordmark } from "./admin-ui";
@@ -25,7 +29,14 @@ export function PublicSecureAccessView(input: {
 
   const hero = secureHeroCopy(input.access);
   const attachments = input.access.publicAttachments;
-  const updates = secureUpdates(input.access);
+  const conversationalWaiting =
+    getWorkflowDefinitionForRequest(input.access).id ===
+      "CONVERSATIONAL_PROCESSING" &&
+    input.access.status === "WAITING_FOR_REQUESTER";
+  const requesterMessages = conversationalWaiting
+    ? secureRequesterMessages(input.access)
+    : [];
+  const updates = secureUpdates(input.access, requesterMessages.length > 0);
 
   return (
     <main className="consumer-secure-page">
@@ -43,6 +54,31 @@ export function PublicSecureAccessView(input: {
             Reference: <strong>{input.access.publicId}</strong>
           </p>
         </header>
+
+        {requesterMessages.length > 0 ? (
+          <section
+            className="consumer-updates-section consumer-prominent-messages"
+            aria-labelledby="consumer-message-heading"
+          >
+            <div className="consumer-section-heading">
+              <h2 id="consumer-message-heading">Latest message</h2>
+              <p>Review the information requested for your request.</p>
+            </div>
+            <ol className="consumer-updates-list">
+              {requesterMessages.map((message) => (
+                <li key={message.key}>
+                  <div>
+                    <strong>{message.label}</strong>
+                    <time dateTime={message.createdAt}>
+                      {formatDate(message.createdAt)}
+                    </time>
+                  </div>
+                  <p>{message.body}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
 
         {attachments.length > 0 ? (
           <section
@@ -176,6 +212,12 @@ function secureHeroCopy(access: PublicSecureAccessData): {
     return dataDeletionSecureHeroCopy(access);
   }
 
+  const conversationalCopy = conversationalProcessingSecureHeroCopy(access);
+
+  if (conversationalCopy) {
+    return conversationalCopy;
+  }
+
   const directProcessingCopy = directProcessingCompletedHeroCopy(access);
 
   if (directProcessingCopy) {
@@ -242,6 +284,32 @@ function secureHeroCopy(access: PublicSecureAccessData): {
         description: "We'll review your request and keep you updated here.",
       };
   }
+}
+
+function conversationalProcessingSecureHeroCopy(
+  access: PublicSecureAccessData,
+): { title: string; description: string } | null {
+  if (
+    getWorkflowDefinitionForRequest(access).id !== "CONVERSATIONAL_PROCESSING"
+  ) {
+    return null;
+  }
+
+  if (access.status === "WAITING_FOR_REQUESTER") {
+    return {
+      title: "We need more information",
+      description: "Please review the latest message about your request.",
+    };
+  }
+
+  if (access.status === "SUCCESS") {
+    return {
+      title: "Your request is complete",
+      description: "Your request has been completed.",
+    };
+  }
+
+  return null;
 }
 
 const directProcessingCompletedCopy: Partial<
@@ -328,14 +396,23 @@ function latestPublicComment(access: PublicSecureAccessData): string | null {
   );
 }
 
-function secureUpdates(access: PublicSecureAccessData) {
-  return [
-    ...access.publicComments.map((comment, index) => ({
+function secureRequesterMessages(access: PublicSecureAccessData) {
+  return [...access.publicComments]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .map((comment, index) => ({
       key: `comment:${comment.createdAt}:${index}`,
       label: "Message from MagicTrust",
       body: comment.body,
       createdAt: comment.createdAt,
-    })),
+    }));
+}
+
+function secureUpdates(
+  access: PublicSecureAccessData,
+  excludeComments = false,
+) {
+  return [
+    ...(excludeComments ? [] : secureRequesterMessages(access)),
     ...access.publicEvents.map((event, index) => ({
       key: `event:${event.createdAt}:${index}`,
       label: formatNaturalName(event.type),

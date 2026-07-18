@@ -74,9 +74,15 @@ components.
 `CONVERSATIONAL_PROCESSING` follows Received, Processing, Waiting for
 requester, and Completed. Its `PROCESSING` and `WAITING_FOR_REQUESTER` states
 may repeat without adding workflow state outside the generic request. This
-foundation does not add requester reply handling, message composition, or a
-new completion flow; attachments, comments, assignment, SLA data, events, and
-communications remain generic request capabilities.
+workflow exposes three guided actions: wait for the requester, resume
+processing, and complete the request. Waiting requires one public message and a
+successful secure email notification before status changes. Completion uses
+the shared confirmation, optional internal note, consumer notification, and
+delivery-before-success pattern. Failed sends leave the request in processing;
+retries reuse the existing public message and communication instead of creating
+duplicates. Requester reply ingestion remains manual in v1. Attachments,
+comments, assignment, SLA data, events, and communications remain generic
+request capabilities.
 
 `DIRECT_PROCESSING` uses one shared guided completion path for all mapped
 request types. From `PROCESSING`, an authorized operator confirms the internal

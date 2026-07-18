@@ -71,9 +71,48 @@ describe("public secure access view", () => {
       publicAttachments: [responseFile()],
     });
 
-    expect(html).toContain("Your response is ready");
+    expect(html).toContain("Your request is complete");
+    expect(html).toContain("Your request has been completed.");
     expect(html).toContain("Download response");
     expect(html).not.toContain("data access request");
+  });
+
+  test("prioritizes public messages while a conversational request waits", () => {
+    const html = renderSecureAccess({
+      type: "GENERAL_INQUIRY",
+      status: "WAITING_FOR_REQUESTER",
+      publicComments: [
+        {
+          body: "Please confirm the service involved in your inquiry.",
+          createdAt: "2026-07-18T12:00:00.000Z",
+        },
+      ],
+      publicEvents: [
+        {
+          type: "PUBLIC_FOLLOW_UP_REQUESTED",
+          data: { actorId: "admin-secret", internalNote: "private" },
+          createdAt: "2026-07-18T12:05:00.000Z",
+        },
+      ],
+    });
+
+    expect(html).toContain("We need more information");
+    expect(html).toContain(
+      "Please review the latest message about your request.",
+    );
+    expect(html).toContain("Latest message");
+    expect(html).toContain(
+      "Please confirm the service involved in your inquiry.",
+    );
+    expect(html.indexOf("Latest message")).toBeLessThan(
+      html.indexOf("Request details"),
+    );
+    expect(
+      html.match(/Please confirm the service involved in your inquiry\./g),
+    ).toHaveLength(1);
+    expect(html).not.toContain("admin-secret");
+    expect(html).not.toContain("internalNote");
+    expect(html).not.toContain("private");
   });
 
   test("renders DATA_DELETION completion copy without an empty files section", () => {

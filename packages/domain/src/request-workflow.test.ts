@@ -142,7 +142,10 @@ describe("request workflow definitions", () => {
       description:
         "Continue processing the request. If more information is needed, wait for the requester. Otherwise, complete the request when ready.",
       listLabel: "Continue processing",
-      actionType: "NONE",
+      actionType: "COMPLETE_REQUEST",
+      actionLabel: "Complete request",
+      secondaryActionType: "WAIT_FOR_REQUESTER",
+      secondaryActionLabel: "Wait for requester",
     });
     expect(
       getRequestNextStep(conversational("WAITING_FOR_REQUESTER")),
@@ -151,6 +154,8 @@ describe("request workflow definitions", () => {
       description:
         "This request is waiting for additional information from the requester.",
       listLabel: "Waiting for requester",
+      actionType: "RESUME_PROCESSING",
+      actionLabel: "Resume processing",
     });
     expect(getRequestNextStep(conversational("SUCCESS"))).toMatchObject({
       title: "Request completed",

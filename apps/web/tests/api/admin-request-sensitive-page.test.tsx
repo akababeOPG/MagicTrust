@@ -356,9 +356,12 @@ describe("admin sensitive request page", () => {
     );
     expect(processing).toContain('aria-label="Processing: current"');
     expect(processing).toContain("Upload response file");
-    expect(processing).not.toContain(
-      'action="/admin/requests/req_one/complete"',
+    expect(processing).toContain('action="/admin/requests/req_one/complete"');
+    expect(processing).toContain(
+      'action="/admin/requests/req_one/wait-for-requester"',
     );
+    expect(processing).toContain("Message to requester");
+    expect(processing).toContain("Wait for requester");
 
     mocks.detail.status = "WAITING_FOR_REQUESTER";
     const waiting = await renderPage(AdminRequestDetailPage);
@@ -366,6 +369,10 @@ describe("admin sensitive request page", () => {
       "This request is waiting for additional information from the requester.",
     );
     expect(waiting).toContain('aria-label="Waiting for requester: current"');
+    expect(waiting).toContain(
+      'action="/admin/requests/req_one/resume-processing"',
+    );
+    expect(waiting).toContain("Resume processing");
 
     mocks.detail.status = "PROCESSING";
     const resumed = await renderPage(AdminRequestDetailPage);
@@ -534,6 +541,65 @@ describe("admin sensitive request page", () => {
     expect(html).toContain("Deletion request completed");
     expect(html).not.toContain("admin-user-secret");
     expect(html).not.toContain("REQUEST_COMPLETED");
+  });
+
+  test("CONVERSATIONAL_PROCESSING activity uses guided lifecycle labels", async () => {
+    mocks.detail.type = "GENERAL_INQUIRY";
+    mocks.detail.status = "SUCCESS";
+    mocks.detail.completedAt = "2026-07-03T00:00:00.000Z";
+    mocks.detail.timeline = [
+      {
+        id: "event-completed",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-03T00:00:00.000Z",
+        data: { previousStatus: "PROCESSING", newStatus: "SUCCESS" },
+      },
+      {
+        id: "event-resumed",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-02T14:00:00.000Z",
+        data: {
+          previousStatus: "WAITING_FOR_REQUESTER",
+          newStatus: "PROCESSING",
+        },
+      },
+      {
+        id: "event-waiting",
+        type: "STATUS_CHANGED",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-02T12:00:00.000Z",
+        data: {
+          previousStatus: "PROCESSING",
+          newStatus: "WAITING_FOR_REQUESTER",
+        },
+      },
+      {
+        id: "event-notified",
+        type: "CONSUMER_NOTIFICATION_SENT",
+        category: "BUILT_IN",
+        actorType: "ADMIN_USER",
+        actorId: "admin-user-secret",
+        createdAt: "2026-07-02T12:00:00.000Z",
+        data: { notificationType: "REQUEST_UPDATED" },
+      },
+    ];
+    const { default: AdminRequestDetailPage } =
+      await import("../../app/admin/requests/[publicId]/page");
+    const html = await renderPage(AdminRequestDetailPage);
+
+    expect(html).toContain("Waiting for requester");
+    expect(html).toContain("Processing resumed");
+    expect(html).toContain("Request completed");
+    expect(html).toContain("Requester notified");
+    expect(html).not.toContain("admin-user-secret");
   });
 
   test.each([

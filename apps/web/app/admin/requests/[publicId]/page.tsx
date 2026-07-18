@@ -1357,6 +1357,24 @@ function GuidedRequestNextStep({
         ) : null}
       </>
     );
+  if (nextStep.actionType === "RESUME_PROCESSING")
+    return (
+      <>
+        <h2 id="next-step-heading">{nextStep.title}</h2>
+        <p>{nextStep.description}</p>
+        {canAct ? (
+          <form
+            className="next-step-action"
+            action={`/admin/requests/${request.publicId}/resume-processing`}
+            method="post"
+          >
+            <AdminSubmitButton>
+              {nextStep.actionLabel ?? "Resume processing"}
+            </AdminSubmitButton>
+          </form>
+        ) : null}
+      </>
+    );
   if (nextStep.actionType === "COMPLETE_REQUEST")
     return (
       <>
@@ -1390,6 +1408,30 @@ function GuidedRequestNextStep({
               {nextStep.actionLabel ?? "Complete request"}
             </AdminConfirmSubmitButton>
           </form>
+        ) : null}
+        {canAct && nextStep.secondaryActionType === "WAIT_FOR_REQUESTER" ? (
+          <details className="next-step-secondary-action">
+            <summary>
+              {nextStep.secondaryActionLabel ?? "Wait for requester"}
+            </summary>
+            <form
+              className="admin-action-form"
+              action={`/admin/requests/${request.publicId}/wait-for-requester`}
+              method="post"
+            >
+              <label>
+                Message to requester
+                <textarea name="message" required maxLength={2000} rows={4} />
+                <small>
+                  This public message will be emailed and shown through secure
+                  request access.
+                </small>
+              </label>
+              <AdminSubmitButton variant="secondary">
+                {nextStep.secondaryActionLabel ?? "Wait for requester"}
+              </AdminSubmitButton>
+            </form>
+          </details>
         ) : null}
       </>
     );
@@ -1554,9 +1596,34 @@ function activityLabel(
     if (event.type === "CONSUMER_NOTIFICATION_SENT") {
       return "Requester notified";
     }
+    if (event.type === "CONSUMER_NOTIFICATION_FAILED") {
+      return "Requester notification failed";
+    }
   }
 
   if (workflowId === "DIRECT_PROCESSING") {
+    if (event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS") {
+      return "Request completed";
+    }
+    if (event.type === "CONSUMER_NOTIFICATION_SENT") {
+      return "Requester notified";
+    }
+  }
+
+  if (workflowId === "CONVERSATIONAL_PROCESSING") {
+    if (
+      event.type === "STATUS_CHANGED" &&
+      event.data.newStatus === "WAITING_FOR_REQUESTER"
+    ) {
+      return "Waiting for requester";
+    }
+    if (
+      event.type === "STATUS_CHANGED" &&
+      event.data.previousStatus === "WAITING_FOR_REQUESTER" &&
+      event.data.newStatus === "PROCESSING"
+    ) {
+      return "Processing resumed";
+    }
     if (event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS") {
       return "Request completed";
     }
@@ -1644,6 +1711,10 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Verification email was already sent.",
     "Processing started.",
     "Processing has already started.",
+    "Processing resumed.",
+    "Processing has already resumed.",
+    "Requester notified. The request is now waiting for a response.",
+    "Request is already waiting for the requester.",
     "Internal note added.",
     "Internal note already recorded.",
     "Attachment uploaded.",
@@ -1674,6 +1745,11 @@ function friendlyFeedback(message: string, kind: "success" | "error"): string {
     "Confirm that this request has been processed.",
     "Completion notification could not be sent. The request remains in processing.",
     "This request is not ready to process.",
+    "This request cannot wait for the requester right now.",
+    "This request is not waiting for processing to resume.",
+    "Message to requester is required.",
+    "The requester message could not be sent. The request remains in processing. Try again.",
+    "The failed notification could not be retried.",
     "Internal note is required.",
     "File is required.",
     "File is too large.",

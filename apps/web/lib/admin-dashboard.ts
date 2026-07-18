@@ -209,6 +209,8 @@ const notificationTypes = [
   "REQUEST_REJECTED",
   "FILE_AVAILABLE",
 ] as const;
+const conversationalWaitingSubject =
+  "More information is needed for your MagicTrust request";
 const builtInEventTypes = new Set([
   "CUSTOM_EVENT",
   "REQUEST_CREATED",
@@ -915,6 +917,189 @@ export async function startAdminRequestProcessing(
   });
 }
 
+export async function waitAdminRequestForRequester(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const formData = await safeFormData(request);
+  const parsed = z
+    .object({ message: z.string().trim().min(1).max(2_000) })
+    .safeParse({ message: formData?.get("message") });
+
+  if (!parsed.success) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "Message to requester is required.",
+    });
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (existing.status === "WAITING_FOR_REQUESTER") {
+    return redirectToRequestDetail(request, publicId, {
+      success: "Request is already waiting for the requester.",
+    });
+  }
+
+  const nextStep = getRequestNextStep(existing);
+  const workflow = getWorkflowDefinitionForRequest(existing);
+
+  if (
+    workflow.id !== "CONVERSATIONAL_PROCESSING" ||
+    nextStep.secondaryActionType !== "WAIT_FOR_REQUESTER" ||
+    !getAllowedWorkflowTransitions(existing).includes("WAITING_FOR_REQUESTER")
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This request cannot wait for the requester right now.",
+    });
+  }
+
+  const retryCommunication = findFailedNotificationCommunication(existing, {
+    notificationType: "REQUEST_UPDATED",
+    subject: conversationalWaitingSubject,
+    actorId: adminSession.adminUserId,
+    message: parsed.data.message,
+  });
+
+  if (!retryCommunication) {
+    const comment = await dependencies.requestRepository.addComment(
+      existing.id,
+      {
+        visibility: "PUBLIC",
+        body: parsed.data.message,
+        actorType: "ADMIN_USER",
+        actorId: adminSession.adminUserId,
+      },
+    );
+
+    if (!comment) {
+      return actionError("NOT_FOUND", "Request not found.", 404);
+    }
+  }
+
+  const notificationForm = new FormData();
+  notificationForm.set("type", "REQUEST_UPDATED");
+  const notificationRequest = new Request(request.url, {
+    method: "POST",
+    headers: { origin: new URL(request.url).origin },
+    body: notificationForm,
+  });
+  const delivery = await sendAdminConsumerNotification(
+    notificationRequest,
+    publicId,
+    adminSession,
+    dependencies,
+    {
+      subject: conversationalWaitingSubject,
+      message: parsed.data.message,
+      status: "WAITING_FOR_REQUESTER",
+      includeSecureAccessLink: true,
+      retryCommunicationId: retryCommunication?.id,
+    },
+  );
+  const location = delivery.headers.get("location");
+  const delivered =
+    delivery.status === 303 &&
+    location !== null &&
+    new URL(location).searchParams.has("success");
+
+  if (!delivered) {
+    return redirectToRequestDetail(request, publicId, {
+      error:
+        "The requester message could not be sent. The request remains in processing. Try again.",
+    });
+  }
+
+  const updated = await dependencies.requestRepository.updateStatus(
+    existing.id,
+    {
+      status: "WAITING_FOR_REQUESTER",
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+      reason: "Waiting for requester response",
+    },
+  );
+
+  if (!updated) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Requester notified. The request is now waiting for a response.",
+  });
+}
+
+export async function resumeAdminRequestProcessing(
+  request: Request,
+  publicId: string,
+  adminSession: AdminSession,
+  dependencies: AdminDashboardDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  const existing =
+    await dependencies.requestRepository.findByIdOrPublicId(publicId);
+
+  if (!existing) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (
+    existing.status === "PROCESSING" &&
+    existing.events.some(
+      (event) =>
+        event.type === "STATUS_CHANGED" &&
+        event.data.previousStatus === "WAITING_FOR_REQUESTER" &&
+        event.data.newStatus === "PROCESSING",
+    )
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      success: "Processing has already resumed.",
+    });
+  }
+
+  if (
+    getWorkflowDefinitionForRequest(existing).id !==
+      "CONVERSATIONAL_PROCESSING" ||
+    getRequestNextStep(existing).actionType !== "RESUME_PROCESSING" ||
+    !getAllowedWorkflowTransitions(existing).includes("PROCESSING")
+  ) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "This request is not waiting for processing to resume.",
+    });
+  }
+
+  const updated = await dependencies.requestRepository.updateStatus(
+    existing.id,
+    {
+      status: "PROCESSING",
+      actorType: "ADMIN_USER",
+      actorId: adminSession.adminUserId,
+      reason: "Processing resumed from admin dashboard",
+    },
+  );
+
+  if (!updated) {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    success: "Processing resumed.",
+  });
+}
+
 export async function resendAdminIdentityVerification(
   request: Request,
   publicId: string,
@@ -1199,6 +1384,8 @@ export async function sendAdminConsumerNotification(
     subject: string;
     message: string;
     status?: RequestStatus;
+    includeSecureAccessLink?: boolean;
+    retryCommunicationId?: string;
   },
 ): Promise<Response> {
   if (!isSameOriginRequest(request)) {
@@ -1236,6 +1423,22 @@ export async function sendAdminConsumerNotification(
 
   if (!existing) {
     return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  const retryCommunication = overrides?.retryCommunicationId
+    ? (existing.communications.find(
+        (communication) =>
+          communication.id === overrides.retryCommunicationId &&
+          communication.status === "FAILED" &&
+          communication.actorType === "ADMIN_USER" &&
+          communication.actorId === adminSession.adminUserId,
+      ) ?? null)
+    : null;
+
+  if (overrides?.retryCommunicationId && !retryCommunication) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "The failed notification could not be retried.",
+    });
   }
 
   const target =
@@ -1290,6 +1493,13 @@ export async function sendAdminConsumerNotification(
       id: attachment.id,
       fileName: attachment.fileName,
     };
+  }
+
+  if (
+    !retryCommunication &&
+    (parsed.data.type === "FILE_AVAILABLE" ||
+      overrides?.includeSecureAccessLink)
+  ) {
     const token = dependencies.generateToken();
     const accessToken =
       await dependencies.requestRepository.createConsumerNotificationAccessToken(
@@ -1316,23 +1526,32 @@ export async function sendAdminConsumerNotification(
     });
   const subject =
     overrides?.subject ?? notificationSubject(parsed.data.type, existing);
-  const body = notificationBody({
-    publicId: existing.publicId,
-    status: overrides?.status ?? existing.status,
-    message,
-    trackingUrl,
-    secureAccessUrl,
-  });
+  const body =
+    retryCommunication?.body ??
+    notificationBody({
+      publicId: existing.publicId,
+      status: overrides?.status ?? existing.status,
+      message,
+      trackingUrl,
+      secureAccessUrl,
+    });
+
+  if (retryCommunication && retryCommunication.subject !== subject) {
+    return redirectToRequestDetail(request, publicId, {
+      error: "The failed notification could not be retried.",
+    });
+  }
 
   const communication =
-    await dependencies.requestRepository.createCommunication(existing.id, {
+    retryCommunication ??
+    (await dependencies.requestRepository.createCommunication(existing.id, {
       recipient,
       subject,
       body,
       provider: dependencies.emailProvider.provider,
       actorType: "ADMIN_USER",
       actorId: adminSession.adminUserId,
-    });
+    }));
 
   if (!communication) {
     return actionError("NOT_FOUND", "Request not found.", 404);
@@ -1555,9 +1774,8 @@ export async function completeAdminGuidedRequest(
     return actionError("NOT_FOUND", "Request not found.", 404);
   }
 
-  const completion = guidedCompletionConfig(
-    getWorkflowDefinitionForRequest(existing).id,
-  );
+  const workflowId = getWorkflowDefinitionForRequest(existing).id;
+  const completion = guidedCompletionConfig(workflowId);
 
   if (!completion) {
     return redirectToRequestDetail(request, publicId, {
@@ -1644,6 +1862,14 @@ export async function completeAdminGuidedRequest(
       )
     );
   });
+  const retryCommunication =
+    workflowId === "CONVERSATIONAL_PROCESSING"
+      ? findFailedNotificationCommunication(existing, {
+          notificationType,
+          subject: completion.subject,
+          actorId: adminSession.adminUserId,
+        })
+      : null;
 
   if (!alreadyNotified) {
     const notificationForm = new FormData();
@@ -1669,6 +1895,8 @@ export async function completeAdminGuidedRequest(
           ? completion.messageWithFiles
           : completion.messageWithoutFiles,
         status: "SUCCESS",
+        includeSecureAccessLink: completion.includeSecureAccessLink,
+        retryCommunicationId: retryCommunication?.id,
       },
     );
     const location = delivery.headers.get("location");
@@ -1711,6 +1939,7 @@ type GuidedCompletionConfig = {
   subject: string;
   messageWithoutFiles: string;
   messageWithFiles: string;
+  includeSecureAccessLink: boolean;
   statusReason: string;
   successMessage: string;
 };
@@ -1726,6 +1955,7 @@ function guidedCompletionConfig(
       messageWithoutFiles: "Your data deletion request has been completed.",
       messageWithFiles:
         "Your data deletion request has been completed.\n\nResponse files are available securely.",
+      includeSecureAccessLink: false,
       statusReason: "Deletion request completed from admin dashboard",
       successMessage: "Deletion request completed.",
     };
@@ -1738,6 +1968,20 @@ function guidedCompletionConfig(
       messageWithoutFiles: "Your request has been completed.",
       messageWithFiles:
         "Your request has been completed.\n\nResponse files are available securely.",
+      includeSecureAccessLink: false,
+      statusReason: "Request completed from admin dashboard",
+      successMessage: "Request completed.",
+    };
+  }
+
+  if (workflowId === "CONVERSATIONAL_PROCESSING") {
+    return {
+      confirmationError: "Confirm that this request has been processed.",
+      subject: "Your request has been completed",
+      messageWithoutFiles: "Your request has been completed.",
+      messageWithFiles:
+        "Your request has been completed.\n\nResponse files are available securely.",
+      includeSecureAccessLink: true,
       statusReason: "Request completed from admin dashboard",
       successMessage: "Request completed.",
     };
@@ -2927,6 +3171,47 @@ function notificationBody(input: {
   }
 
   return lines.join("\n");
+}
+
+function findFailedNotificationCommunication(
+  request: Pick<RequestDetails, "events" | "communications">,
+  input: {
+    notificationType: ConsumerNotificationType;
+    subject: string;
+    actorId: string;
+    message?: string;
+  },
+): RequestDetails["communications"][number] | null {
+  const failedEvents = request.events
+    .filter(
+      (event) =>
+        event.type === "CONSUMER_NOTIFICATION_FAILED" &&
+        event.actorType === "ADMIN_USER" &&
+        event.actorId === input.actorId &&
+        event.data.notificationType === input.notificationType,
+    )
+    .sort(
+      (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
+    );
+
+  for (const event of failedEvents) {
+    const communicationId = event.data.communicationId;
+
+    if (typeof communicationId !== "string") continue;
+
+    const communication = request.communications.find(
+      (item) =>
+        item.id === communicationId &&
+        item.status === "FAILED" &&
+        item.subject === input.subject &&
+        (!input.message ||
+          item.body.includes(`\n\n${input.message}\n\nTrack your request:`)),
+    );
+
+    if (communication) return communication;
+  }
+
+  return null;
 }
 
 function parseJsonObject(
