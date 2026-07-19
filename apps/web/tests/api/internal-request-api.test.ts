@@ -1206,6 +1206,187 @@ describe("internal request API", () => {
     expect(body.request.completedAt).toEqual(expect.any(String));
   });
 
+  test("processing result SUCCESS delivers completion before changing status", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(
+      api,
+      validCreateRequestBody({ type: "DATA_ACCESS" }),
+    );
+    await setProcessing(api, created.publicId);
+
+    const response = await api.reportProcessingResult(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-result`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            outcome: "SUCCESS",
+            reason: "Downstream privacy operation completed",
+          }),
+        },
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.request.status).toBe("SUCCESS");
+    expect(dependencies.state.sentEmails).toHaveLength(1);
+    expect(dependencies.state.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["CONSUMER_NOTIFICATION_SENT", "STATUS_CHANGED"]),
+    );
+    const deliveryIndex = dependencies.state.events.findIndex(
+      (event) => event.type === "CONSUMER_NOTIFICATION_SENT",
+    );
+    const successIndex = dependencies.state.events.findIndex(
+      (event) =>
+        event.type === "STATUS_CHANGED" && event.data.newStatus === "SUCCESS",
+    );
+    expect(deliveryIndex).toBeLessThan(successIndex);
+  });
+
+  test("failed completion delivery leaves status non-SUCCESS and retries without duplicate artifacts", async () => {
+    const options = { emailShouldFail: true };
+    const dependencies = createInMemoryDependencies(options);
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(
+      api,
+      validCreateRequestBody({ type: "DATA_ACCESS" }),
+    );
+    await setProcessing(api, created.publicId);
+    const request = () =>
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-result`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": "processor-completion-retry" },
+          body: JSON.stringify({ outcome: "SUCCESS" }),
+        },
+      );
+
+    const failed = await api.reportProcessingResult(
+      request(),
+      created.publicId,
+    );
+    expect(failed.status).toBe(502);
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(dependencies.state.communications).toHaveLength(1);
+
+    options.emailShouldFail = false;
+    const retried = await api.reportProcessingResult(
+      request(),
+      created.publicId,
+    );
+    expect(retried.status).toBe(200);
+    expect(dependencies.state.requests[0]?.status).toBe("SUCCESS");
+    expect(dependencies.state.communications).toHaveLength(1);
+    expect(dependencies.state.accessTokens).toHaveLength(0);
+    expect(dependencies.state.sentEmails).toHaveLength(1);
+  });
+
+  test("processing result REJECTED uses the terminal status behavior", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(
+      api,
+      validCreateRequestBody({ type: "UNSUBSCRIBE" }),
+    );
+    await setProcessing(api, created.publicId);
+
+    const response = await api.reportProcessingResult(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-result`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            outcome: "REJECTED",
+            reason: "Request could not be fulfilled",
+          }),
+        },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(dependencies.state.requests[0]?.status).toBe("REJECTED");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+  });
+
+  test("processing result can complete an eligible request without an explicit PROCESSING update", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(
+      api,
+      validCreateRequestBody({ type: "UNSUBSCRIBE" }),
+    );
+
+    const response = await api.reportProcessingResult(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-result`,
+        { method: "POST", body: JSON.stringify({ outcome: "SUCCESS" }) },
+      ),
+      created.publicId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(dependencies.state.requests[0]?.status).toBe("SUCCESS");
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "STATUS_CHANGED",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ newStatus: "PROCESSING" }),
+      }),
+      expect.objectContaining({
+        data: expect.objectContaining({ newStatus: "SUCCESS" }),
+      }),
+    ]);
+  });
+
+  test("processing result enforces authentication, scope, and outcome", async () => {
+    const scopedOut = createInternalRequestApi(
+      createInMemoryDependencies({ scopes: ["requests:update"] }),
+    );
+    const invalidKeyApi = createInternalRequestApi(
+      createInMemoryDependencies(),
+    );
+    const invalidOutcomeApi = createInternalRequestApi(
+      createInMemoryDependencies(),
+    );
+
+    const missingScope = await scopedOut.reportProcessingResult(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_test/processing-result",
+        { method: "POST", body: JSON.stringify({ outcome: "SUCCESS" }) },
+      ),
+      "req_test",
+    );
+    const invalidKey = await invalidKeyApi.reportProcessingResult(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_test/processing-result",
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": "invalid-key" },
+          body: JSON.stringify({ outcome: "SUCCESS" }),
+        },
+      ),
+      "req_test",
+    );
+    const invalidOutcome = await invalidOutcomeApi.reportProcessingResult(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_test/processing-result",
+        { method: "POST", body: JSON.stringify({ outcome: "CANCELLED" }) },
+      ),
+      "req_test",
+    );
+
+    expect(missingScope.status).toBe(403);
+    expect(invalidKey.status).toBe(401);
+    expect(invalidOutcome.status).toBe(400);
+  });
+
   test("returns 401 for unauthorized mutable data update", async () => {
     const api = createInternalRequestApi(createInMemoryDependencies());
     const response = await api.updateMutableData(
@@ -2840,6 +3021,22 @@ async function getRequestDetail(
   const body = await response.json();
 
   return body.request;
+}
+
+async function setProcessing(
+  api: ReturnType<typeof createInternalRequestApi>,
+  id: string,
+) {
+  return api.updateStatus(
+    authenticatedRequest(
+      `https://magictrust.test/api/v1/requests/${id}/status`,
+      {
+        method: "POST",
+        body: JSON.stringify(validStatusUpdateBody()),
+      },
+    ),
+    id,
+  );
 }
 
 function extractAccessTokenFromEmail(

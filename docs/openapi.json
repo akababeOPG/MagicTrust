@@ -4,7 +4,7 @@
     "title": "MagicTrust Internal API",
     "version": "1.0.0",
     "summary": "System-to-system privacy request integration API",
-    "description": "The implemented MagicTrust Internal API v1. Authenticate with the `x-api-key` header using a database-backed API client key in the form `mt_live_<random-secret>`. The standard `Authorization` header is not used by these routes. Each operation lists its required API client scope. Mutating operations also require an `Idempotency-Key`; records remain replayable for 24 hours. Repeating the same key and request returns the original response with `Idempotency-Replayed: true`, while reusing a key for a different request returns `409 IDEMPOTENCY_KEY_REUSED`."
+    "description": "The implemented MagicTrust Internal API v1. Authenticate with the `x-api-key` header using a database-backed API client key in the form `mt_live_<random-secret>`. The standard `Authorization` header is not used by these routes. Each operation lists its required API client scope. Mutating operations also require an `Idempotency-Key`; records remain replayable for 24 hours. Repeating the same key and request returns the original response with `Idempotency-Replayed: true`, while reusing a key for a different request returns `409 IDEMPOTENCY_KEY_REUSED`. A processing-result completion delivery failure is retryable with the same key and is not stored until completion succeeds."
   },
   "servers": [
     {
@@ -283,7 +283,7 @@
       "post": {
         "tags": ["Requests"],
         "summary": "Update request status",
-        "description": "Sets any currently supported request status, updates completedAt for terminal statuses, and records STATUS_CHANGED. This endpoint currently validates the status enum but does not enforce workflow transition rules.",
+        "description": "Lower-level status mutation capability for advanced integrations. Sets any currently supported request status, updates completedAt for terminal statuses, and records STATUS_CHANGED. It validates the status enum but does not enforce workflow transition rules. Processors should normally report final outcomes through POST /api/v1/requests/{id}/processing-result instead of setting SUCCESS directly.",
         "operationId": "updateRequestStatus",
         "x-required-scope": "requests:update",
         "parameters": [
@@ -336,6 +336,80 @@
           "404": { "$ref": "#/components/responses/NotFound" },
           "409": { "$ref": "#/components/responses/IdempotencyConflict" },
           "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/processing-result": {
+      "post": {
+        "tags": ["Requests"],
+        "summary": "Report a processor outcome",
+        "description": "Reports the downstream business outcome without exposing arbitrary workflow transitions. For SUCCESS, MagicTrust owns workflow completion: it delivers the workflow-specific consumer notification, reuses existing completion artifacts on retry, and only then changes the request to SUCCESS. DATA_ACCESS completion permits zero public files and includes existing public files through secure access when present. If delivery fails, the request remains non-SUCCESS and the same Idempotency-Key and payload can safely retry. REJECTED uses the existing terminal status and audit behavior and does not send a success notification.",
+        "operationId": "reportRequestProcessingResult",
+        "x-required-scope": "requests:processing-result:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessingResultInput"
+              },
+              "examples": {
+                "success": {
+                  "value": {
+                    "outcome": "SUCCESS",
+                    "reason": "Downstream privacy operation completed"
+                  }
+                },
+                "rejected": {
+                  "value": {
+                    "outcome": "REJECTED",
+                    "reason": "Request could not be fulfilled"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Outcome applied. For SUCCESS, completion delivery succeeded before the returned request became SUCCESS.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestSummaryResponse"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": {
+            "description": "Required consumer completion delivery failed. The request remains non-SUCCESS; retry the identical request with the same Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": {
+                  "error": {
+                    "code": "COMPLETION_DELIVERY_FAILED",
+                    "message": "Completion notification could not be delivered."
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1038,6 +1112,15 @@
           "actor": { "$ref": "#/components/schemas/Actor" },
           "reason": { "type": ["string", "null"], "minLength": 1 }
         }
+      },
+      "ProcessingResultInput": {
+        "type": "object",
+        "required": ["outcome"],
+        "properties": {
+          "outcome": { "type": "string", "enum": ["SUCCESS", "REJECTED"] },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        },
+        "additionalProperties": false
       },
       "MutableDataUpdateInput": {
         "type": "object",

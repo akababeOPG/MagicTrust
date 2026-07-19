@@ -19,7 +19,8 @@ Consumer
   -> MagicTrust Request
   -> Internal Processing Service
   -> External or internal processing
-  -> MagicTrust status/result update
+  -> MagicTrust processing result
+  -> MagicTrust workflow completion and consumer communication
 ```
 
 ## Requests to Process
@@ -69,11 +70,13 @@ GET /api/v1/requests?type=DATA_ACCESS,DATA_DELETION&status=VERIFIED&limit=25&cur
    Request from `GET /api/v1/requests/{id}/processing-data`. Use the returned
    `publicId` as the stable integration reference; Request routes accept either
    `publicId` or the internal request `id`.
-3. Perform the privacy operation outside MagicTrust.
-4. Mark the Request `PROCESSING` with the existing status endpoint when
+3. Optionally mark the Request `PROCESSING` with the existing status endpoint
    appropriate for the worker lifecycle.
-5. Report `SUCCESS` when the operation succeeds, or `REJECTED` when the Request
-   has a rejected business outcome.
+4. Perform the privacy operation outside MagicTrust.
+5. POST the `SUCCESS` or `REJECTED` business outcome to
+   `/api/v1/requests/{id}/processing-result`.
+6. MagicTrust completes the workflow and handles consumer-facing completion
+   behavior.
 
 The processing-data endpoint requires `requests:processing-data:read` and is
 the authorized source for decrypted requester fields and the complete original
@@ -90,15 +93,16 @@ and available managed-form provenance. The response is private and not
 cacheable. Reading it does not change request status, assignment, events, SLA,
 or communications.
 
-Retry failed status mutations with the same `Idempotency-Key` and payload.
+The processor owns the downstream operation. MagicTrust owns final workflow
+completion, final status, and consumer completion communication.
 
 The status endpoint currently validates that a status is supported, but does
 not enforce workflow transition rules. Integrations should follow the expected
 lifecycles:
 
 ```text
-DATA_ACCESS / DATA_DELETION: VERIFIED -> PROCESSING -> SUCCESS
-UNSUBSCRIBE / DO_NOT_CONTACT: SUBMITTED -> PROCESSING -> SUCCESS
+DATA_ACCESS / DATA_DELETION: VERIFIED -> PROCESSING -> processing result
+UNSUBSCRIBE / DO_NOT_CONTACT: SUBMITTED -> PROCESSING -> processing result
 ```
 
 `REJECTED` and `CANCELLED` are terminal alternatives. Other supported statuses
@@ -126,49 +130,59 @@ Content-Type: application/json
 For `API_CLIENT` actors, MagicTrust derives the audit actor ID from the
 authenticated API client. A caller-provided actor ID is not used.
 
-## Completing a Request
+## Reporting the Processing Result
 
-Use the same status endpoint to mark successful completion:
+Use `POST /api/v1/requests/{id}/processing-result` with the
+`requests:processing-result:write` scope:
 
 ```http
-POST /api/v1/requests/req_example/status
+POST /api/v1/requests/req_example/processing-result
 x-api-key: mt_live_<api-client-secret>
 Idempotency-Key: req_example-success-001
 Content-Type: application/json
 
 {
-  "status": "SUCCESS",
-  "actor": {
-    "type": "API_CLIENT"
-  },
+  "outcome": "SUCCESS",
   "reason": "Downstream privacy operation completed"
 }
 ```
 
-`SUCCESS` is terminal and sets `completedAt`. The status update does not send a
-consumer email automatically.
+MagicTrust resolves the request workflow, sends the centralized completion
+notification, and changes the request to `SUCCESS` only after successful
+delivery. `DATA_ACCESS` may complete with zero public files; when public files
+already exist, the completion communication provides secure access as it does
+for operator completion. `DATA_DELETION`, `UNSUBSCRIBE`, and `DO_NOT_CONTACT`
+use the existing centralized completion wording.
+
+If required completion delivery fails, the endpoint returns a normalized error
+and leaves the request non-`SUCCESS`. Retry the same payload with the same
+`Idempotency-Key`; MagicTrust reuses failed completion artifacts so it does not
+duplicate communications, public comments, access tokens, or completion
+history.
 
 ## Rejecting a Request
 
-Use the same endpoint with `REJECTED`:
+Use the processing-result endpoint with `REJECTED`:
 
 ```http
-POST /api/v1/requests/req_example/status
+POST /api/v1/requests/req_example/processing-result
 x-api-key: mt_live_<api-client-secret>
 Idempotency-Key: req_example-rejected-001
 Content-Type: application/json
 
 {
-  "status": "REJECTED",
-  "actor": {
-    "type": "API_CLIENT"
-  },
+  "outcome": "REJECTED",
   "reason": "Request could not be fulfilled"
 }
 ```
 
-`reason` is an implemented optional non-empty string and is stored in the
+`reason` is optional and is stored in the
 `STATUS_CHANGED` event. `REJECTED` is terminal and sets `completedAt`.
+No success communication is sent.
+
+`POST /api/v1/requests/{id}/status` remains available as a lower-level status
+mutation capability for advanced integrations and for optionally setting
+`PROCESSING`; it is not the preferred processor completion API.
 
 ## Idempotency and Retries
 
@@ -178,6 +192,9 @@ not. Idempotency records are retained for 24 hours for each API client.
 - Retrying the same method, route, and payload with the same key returns the
   original response and `Idempotency-Replayed: true` without repeating the
   mutation.
+- A processing-result completion delivery failure is retryable with the same
+  key and is not stored as the final idempotent response; completion artifacts
+  are reused until delivery succeeds.
 - Reusing a key with a different request returns `409` with
   `IDEMPOTENCY_KEY_REUSED`.
 - Use a distinct stable key for each lifecycle operation, such as starting,
@@ -191,6 +208,7 @@ The primary processing loop needs only:
 - `requests:processing-data:read` to retrieve decrypted requester identity and
   the immutable original submission.
 - `requests:update` to update status.
+- `requests:processing-result:write` to report the terminal processor outcome.
 
 Send the database-backed API client key as:
 

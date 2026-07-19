@@ -62,6 +62,11 @@ describe("Internal API OpenAPI documentation", () => {
         "app/api/v1/requests/[id]/status/route.ts",
       ],
       [
+        "/api/v1/requests/{id}/processing-result",
+        "post",
+        "app/api/v1/requests/[id]/processing-result/route.ts",
+      ],
+      [
         "/api/v1/requests/{id}/comments",
         "post",
         "app/api/v1/requests/[id]/comments/route.ts",
@@ -103,7 +108,7 @@ describe("Internal API OpenAPI documentation", () => {
       ],
     ] as const;
 
-    expect(documentedRoutes).toHaveLength(13);
+    expect(documentedRoutes).toHaveLength(14);
 
     for (const [path, method, routeFile] of documentedRoutes) {
       expect(

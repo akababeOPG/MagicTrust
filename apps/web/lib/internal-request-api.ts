@@ -5,6 +5,9 @@ import {
   commentVisibilities,
   createPrivacyRequest,
   decryptOriginalSubmittedData,
+  getAllowedWorkflowTransitions,
+  getRequestNextStep,
+  getWorkflowDefinitionForRequest,
   requestStatuses,
   requestTypes,
 } from "@magictrust/domain";
@@ -32,6 +35,7 @@ import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { z } from "zod";
 
 import { authenticateInternalApiRequest } from "./internal-api-auth";
+import { guidedCompletionConfig } from "./guided-completion";
 
 export type InternalRequestApiDependencies = {
   apiKey: string | null;
@@ -93,6 +97,11 @@ const updateStatusSchema = z.object({
   status: z.enum(requestStatuses),
   actor: actorSchema,
   reason: z.string().min(1).nullable().optional(),
+});
+
+const processingResultSchema = z.object({
+  outcome: z.enum(["SUCCESS", "REJECTED"]),
+  reason: z.string().trim().min(1).max(2_000).optional(),
 });
 
 const updateMutableDataSchema = z.object({
@@ -380,6 +389,35 @@ export function createInternalRequestApi(
         auth.apiClient,
         (preparedRequest) =>
           updateStatus(preparedRequest, id, dependencies, auth.apiClient),
+      );
+    },
+
+    async reportProcessingResult(
+      request: Request,
+      id: string,
+    ): Promise<Response> {
+      const auth = await authorize(
+        request,
+        dependencies,
+        "requests:processing-result:write",
+      );
+
+      if (auth.response) {
+        return auth.response;
+      }
+
+      return withIdempotency(
+        request,
+        dependencies,
+        auth.apiClient,
+        (preparedRequest) =>
+          reportProcessingResult(
+            preparedRequest,
+            id,
+            dependencies,
+            auth.apiClient,
+          ),
+        { storeServerErrors: false },
       );
     },
 
@@ -701,6 +739,280 @@ async function updateStatus(
         includeCompletedAt: true,
       }),
     });
+  } catch {
+    return serverError();
+  }
+}
+
+async function reportProcessingResult(
+  request: Request,
+  id: string,
+  dependencies: InternalRequestApiDependencies,
+  apiClient: AuthenticatedApiClient,
+): Promise<Response> {
+  const parsed = processingResultSchema.safeParse(await readJson(request));
+
+  if (!parsed.success) return validationError();
+
+  let existing: RequestDetails | null;
+
+  try {
+    existing = await dependencies.requestRepository.findByIdOrPublicId(id);
+  } catch {
+    return serverError();
+  }
+
+  if (!existing) return notFound();
+
+  if (parsed.data.outcome === "REJECTED") {
+    try {
+      const updated = await dependencies.requestRepository.updateStatus(
+        existing.id,
+        {
+          status: "REJECTED",
+          actorType: "API_CLIENT",
+          actorId: apiClient.id,
+          reason: parsed.data.reason ?? "Processor reported rejection",
+        },
+      );
+
+      return updated
+        ? Response.json({
+            request: normalizeRequestSummary(updated, {
+              includeCompletedAt: true,
+            }),
+          })
+        : notFound();
+    } catch {
+      return serverError();
+    }
+  }
+
+  if (existing.status === "SUCCESS") {
+    return Response.json({
+      request: normalizeRequestSummary(existing, { includeCompletedAt: true }),
+    });
+  }
+
+  if (
+    !["DATA_ACCESS", "DATA_DELETION", "UNSUBSCRIBE", "DO_NOT_CONTACT"].includes(
+      existing.type,
+    )
+  ) {
+    return validationError(
+      "Processing results are not supported for this request type.",
+    );
+  }
+
+  if (getRequestNextStep(existing).actionType === "START_PROCESSING") {
+    try {
+      const processing = await dependencies.requestRepository.updateStatus(
+        existing.id,
+        {
+          status: "PROCESSING",
+          actorType: "API_CLIENT",
+          actorId: apiClient.id,
+          reason: "Processor reported processing outcome",
+        },
+      );
+      if (!processing) return notFound();
+      existing = { ...existing, ...processing };
+    } catch {
+      return serverError();
+    }
+  }
+
+  const workflow = getWorkflowDefinitionForRequest(existing);
+  const publicAttachment =
+    existing.attachments.find((item) => item.visibility === "PUBLIC") ?? null;
+  const nextStep = getRequestNextStep({
+    ...existing,
+    hasPublicAttachments: publicAttachment !== null,
+  });
+
+  if (
+    !["SEND_RESPONSE", "COMPLETE_REQUEST"].includes(nextStep.actionType) ||
+    !getAllowedWorkflowTransitions(existing).includes("SUCCESS")
+  ) {
+    return Response.json(
+      {
+        error: {
+          code: "INVALID_WORKFLOW_STATE",
+          message: "This request is not ready for completion.",
+        },
+      },
+      { status: 409 },
+    );
+  }
+
+  const completion = guidedCompletionConfig(workflow.id);
+  const notificationType = publicAttachment
+    ? "FILE_AVAILABLE"
+    : "REQUEST_COMPLETED";
+  const subject =
+    completion?.subject ?? notificationSubject(notificationType, existing);
+  const message = publicAttachment
+    ? (completion?.messageWithFiles ??
+      `Your request has been completed and response files are available securely.\n\nResponse file: ${publicAttachment.fileName}`)
+    : (completion?.messageWithoutFiles ?? "Your request has been completed.");
+  const alreadyDelivered = existing.events.some((event) => {
+    const communicationId = event.data.communicationId;
+    return (
+      event.type === "CONSUMER_NOTIFICATION_SENT" &&
+      event.data.notificationType === notificationType &&
+      typeof communicationId === "string" &&
+      existing.communications.some(
+        (item) =>
+          item.id === communicationId &&
+          item.subject === subject &&
+          item.status === "SENT",
+      )
+    );
+  });
+
+  if (!alreadyDelivered) {
+    const failedCommunication = existing.communications.find((item) => {
+      if (
+        item.status !== "FAILED" ||
+        item.subject !== subject ||
+        item.actorType !== "API_CLIENT" ||
+        item.actorId !== apiClient.id
+      ) {
+        return false;
+      }
+
+      return existing.events.some(
+        (event) =>
+          event.type === "CONSUMER_NOTIFICATION_FAILED" &&
+          event.data.notificationType === notificationType &&
+          event.data.communicationId === item.id,
+      );
+    });
+    const target =
+      await dependencies.requestRepository.findConsumerNotificationTarget(
+        existing.id,
+      );
+
+    if (!target?.requesterEmailEncrypted) {
+      return Response.json(
+        {
+          error: {
+            code: "COMPLETION_DELIVERY_FAILED",
+            message: "Completion notification could not be delivered.",
+          },
+        },
+        { status: 502 },
+      );
+    }
+
+    let recipient: string;
+    try {
+      recipient = decryptPii(target.requesterEmailEncrypted);
+    } catch {
+      return serverError();
+    }
+
+    let secureAccessUrl: string | null = null;
+    if (
+      !failedCommunication &&
+      (publicAttachment || completion?.includeSecureAccessLink)
+    ) {
+      const token = generateSecureToken();
+      const accessToken =
+        await dependencies.requestRepository.createConsumerNotificationAccessToken(
+          existing.id,
+          {
+            tokenHash: hashAccessToken(token),
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          },
+        );
+      if (!accessToken) return notFound();
+      secureAccessUrl = `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existing.publicId}/access?token=${encodeURIComponent(token)}`;
+    }
+
+    const body =
+      failedCommunication?.body ??
+      notificationBody({
+        publicId: existing.publicId,
+        status: "SUCCESS",
+        message,
+        trackingUrl: `${dependencies.appBaseUrl.replace(/\/$/, "")}/requests/${existing.publicId}`,
+        secureAccessUrl,
+      });
+    const communication =
+      failedCommunication ??
+      (await dependencies.requestRepository.createCommunication(existing.id, {
+        recipient,
+        subject,
+        body,
+        provider: dependencies.emailProvider.provider,
+        actorType: "API_CLIENT",
+        actorId: apiClient.id,
+      }));
+
+    if (!communication) return notFound();
+
+    try {
+      const sent = await dependencies.emailProvider.sendEmail({
+        to: recipient,
+        subject,
+        body,
+      });
+      const marked =
+        await dependencies.requestRepository.markConsumerNotificationSent(
+          existing.id,
+          communication.id,
+          {
+            notificationType,
+            providerMessageId: sent.providerMessageId,
+            actorType: "API_CLIENT",
+            actorId: apiClient.id,
+          },
+        );
+      if (!marked) return notFound();
+    } catch {
+      await dependencies.requestRepository.markConsumerNotificationFailed(
+        existing.id,
+        communication.id,
+        {
+          notificationType,
+          errorMessage: "Email provider failed to send the notification.",
+          actorType: "API_CLIENT",
+          actorId: apiClient.id,
+        },
+      );
+      return Response.json(
+        {
+          error: {
+            code: "COMPLETION_DELIVERY_FAILED",
+            message: "Completion notification could not be delivered.",
+          },
+        },
+        { status: 502 },
+      );
+    }
+  }
+
+  try {
+    const updated = await dependencies.requestRepository.updateStatus(
+      existing.id,
+      {
+        status: "SUCCESS",
+        actorType: "API_CLIENT",
+        actorId: apiClient.id,
+        reason:
+          parsed.data.reason ??
+          completion?.statusReason.replace(" from admin dashboard", "") ??
+          "Processor reported successful completion",
+      },
+    );
+    return updated
+      ? Response.json({
+          request: normalizeRequestSummary(updated, {
+            includeCompletedAt: true,
+          }),
+        })
+      : notFound();
   } catch {
     return serverError();
   }
@@ -1283,6 +1595,7 @@ async function withIdempotency(
   dependencies: InternalRequestApiDependencies,
   apiClient: AuthenticatedApiClient,
   operation: (request: Request) => Promise<Response>,
+  options: { storeServerErrors?: boolean } = {},
 ): Promise<Response> {
   const idempotencyKey = request.headers.get("Idempotency-Key")?.trim();
 
@@ -1333,6 +1646,9 @@ async function withIdempotency(
   }
 
   const response = await operation(prepared.request);
+  if (options.storeServerErrors === false && response.status >= 500) {
+    return response;
+  }
   const responseBody = (await response.clone().json()) as JsonValue;
   await dependencies.idempotencyStore.create({
     idempotencyKey,

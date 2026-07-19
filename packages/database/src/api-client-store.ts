@@ -12,6 +12,7 @@ export const apiClientScopesList = [
   "requests:processing-data:read",
   "requests:create",
   "requests:update",
+  "requests:processing-result:write",
   "comments:write",
   "attachments:write",
   "attachments:read",
