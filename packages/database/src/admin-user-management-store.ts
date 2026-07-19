@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
 import type {
@@ -6,7 +6,7 @@ import type {
   AdminUser,
   CreateAdminUserInput,
 } from "./admin-auth-store";
-import { adminAuditEvents, adminUsers } from "./schema";
+import { adminAuditEvents, adminSessions, adminUsers } from "./schema";
 
 type Database = ReturnType<typeof createDatabase>;
 
@@ -15,6 +15,8 @@ export const adminAuditEventTypes = [
   "ADMIN_USER_ROLE_CHANGED",
   "ADMIN_USER_ACTIVATED",
   "ADMIN_USER_DEACTIVATED",
+  "ADMIN_USER_PASSWORD_SET",
+  "ADMIN_USER_PASSWORD_RESET",
   "FORM_CREATED",
   "FORM_ARCHIVED",
   "FORM_VERSION_CREATED",
@@ -29,11 +31,16 @@ export type AdminUserListFilters = {
   active?: boolean;
 };
 
+export type ManagedAdminUserListItem = AdminUser & {
+  hasPassword: boolean;
+};
+
 export type AdminUserManagementErrorCode =
   | "ACTOR_NOT_AUTHORIZED"
   | "ADMIN_USER_ALREADY_EXISTS"
   | "ADMIN_USER_NOT_FOUND"
   | "LAST_ACTIVE_ADMIN"
+  | "SELF_PASSWORD_CHANGE_NOT_ALLOWED"
   | "SELF_DEACTIVATION"
   | "SELF_DEMOTION";
 
@@ -41,7 +48,11 @@ export type AdminUserManagementResult =
   | { ok: true; user: AdminUser; changed: boolean }
   | { ok: false; code: AdminUserManagementErrorCode };
 
-export type CreateManagedAdminUserInput = CreateAdminUserInput & {
+export type CreateManagedAdminUserInput = Omit<
+  CreateAdminUserInput,
+  "passwordHash"
+> & {
+  passwordHash: string;
   actorAdminUserId: string;
   now: Date;
 };
@@ -60,8 +71,17 @@ export type SetManagedAdminUserActiveInput = {
   now: Date;
 };
 
+export type SetManagedAdminUserPasswordInput = {
+  targetAdminUserId: string;
+  actorAdminUserId: string;
+  passwordHash: string;
+  now: Date;
+};
+
 export type AdminUserManagementStore = {
-  listAdminUsers(filters: AdminUserListFilters): Promise<AdminUser[]>;
+  listAdminUsers(
+    filters: AdminUserListFilters,
+  ): Promise<ManagedAdminUserListItem[]>;
   createAdminUser(
     input: CreateManagedAdminUserInput,
   ): Promise<AdminUserManagementResult>;
@@ -70,6 +90,9 @@ export type AdminUserManagementStore = {
   ): Promise<AdminUserManagementResult>;
   setAdminUserActive(
     input: SetManagedAdminUserActiveInput,
+  ): Promise<AdminUserManagementResult>;
+  setAdminUserPassword(
+    input: SetManagedAdminUserPasswordInput,
   ): Promise<AdminUserManagementResult>;
 };
 
@@ -86,7 +109,10 @@ export function createAdminUserManagementStore(
       ].filter((condition) => condition !== undefined);
 
       return db
-        .select(adminUserSelection)
+        .select({
+          ...adminUserSelection,
+          hasPassword: sql<boolean>`${adminUsers.passwordHash} is not null`,
+        })
         .from(adminUsers)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(adminUsers.createdAt), desc(adminUsers.id));
@@ -106,7 +132,7 @@ export function createAdminUserManagementStore(
           .values({
             emailEncrypted: input.emailEncrypted,
             emailHash: input.emailHash,
-            passwordHash: input.passwordHash ?? null,
+            passwordHash: input.passwordHash,
             role: input.role,
             active: true,
             createdAt: input.now,
@@ -233,6 +259,56 @@ export function createAdminUserManagementStore(
         return { ok: true, user: updated, changed: true };
       });
     },
+    async setAdminUserPassword(input) {
+      return db.transaction(async (tx) => {
+        const activeAdmins = await lockActiveAdmins(tx);
+
+        if (
+          !activeAdmins.some((admin) => admin.id === input.actorAdminUserId)
+        ) {
+          return { ok: false, code: "ACTOR_NOT_AUTHORIZED" };
+        }
+
+        if (input.targetAdminUserId === input.actorAdminUserId) {
+          return { ok: false, code: "SELF_PASSWORD_CHANGE_NOT_ALLOWED" };
+        }
+
+        const target = await lockAdminUserPassword(tx, input.targetAdminUserId);
+
+        if (!target) {
+          return { ok: false, code: "ADMIN_USER_NOT_FOUND" };
+        }
+
+        const [updated] = await tx
+          .update(adminUsers)
+          .set({ passwordHash: input.passwordHash, updatedAt: input.now })
+          .where(eq(adminUsers.id, target.id))
+          .returning(adminUserSelection);
+
+        await tx
+          .update(adminSessions)
+          .set({ revokedAt: input.now })
+          .where(
+            and(
+              eq(adminSessions.adminUserId, target.id),
+              isNull(adminSessions.revokedAt),
+            ),
+          );
+
+        await insertAdminAuditEvent(tx, {
+          type:
+            target.passwordHash === null
+              ? "ADMIN_USER_PASSWORD_SET"
+              : "ADMIN_USER_PASSWORD_RESET",
+          targetAdminUserId: target.id,
+          actorAdminUserId: input.actorAdminUserId,
+          data: {},
+          createdAt: input.now,
+        });
+
+        return { ok: true, user: updated, changed: true };
+      });
+    },
   };
 }
 
@@ -253,6 +329,23 @@ async function lockAdminUser(
 ): Promise<AdminUser | null> {
   const [adminUser] = await tx
     .select(adminUserSelection)
+    .from(adminUsers)
+    .where(eq(adminUsers.id, adminUserId))
+    .limit(1)
+    .for("update");
+
+  return adminUser ?? null;
+}
+
+async function lockAdminUserPassword(
+  tx: AdminTransaction,
+  adminUserId: string,
+): Promise<{ id: string; passwordHash: string | null } | null> {
+  const [adminUser] = await tx
+    .select({
+      id: adminUsers.id,
+      passwordHash: adminUsers.passwordHash,
+    })
     .from(adminUsers)
     .where(eq(adminUsers.id, adminUserId))
     .limit(1)

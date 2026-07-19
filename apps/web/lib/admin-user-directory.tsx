@@ -44,7 +44,7 @@ export function AdminUserDirectory({
           <div className="admin-add-user-panel">
             <div>
               <h2>Add user</h2>
-              <p>Create access through the existing magic-link sign-in.</p>
+              <p>Create access with an initial password.</p>
             </div>
             <form
               className="admin-user-form"
@@ -70,6 +70,28 @@ export function AdminUserDirectory({
                     </option>
                   ))}
                 </select>
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  name="password"
+                  autoComplete="new-password"
+                  minLength={10}
+                  maxLength={72}
+                  required
+                />
+              </label>
+              <label>
+                Confirm password
+                <input
+                  type="password"
+                  name="passwordConfirmation"
+                  autoComplete="new-password"
+                  minLength={10}
+                  maxLength={72}
+                  required
+                />
               </label>
               <AdminSubmitButton>Add user</AdminSubmitButton>
             </form>
@@ -156,7 +178,7 @@ function AdminUserResults({
           <h2 id="users-heading">
             {users.length} {users.length === 1 ? "user" : "users"}
           </h2>
-          <p>Active users can sign in with a MagicTrust login link.</p>
+          <p>Active users with a password can sign in to MagicTrust.</p>
         </div>
       </div>
 
@@ -257,6 +279,50 @@ function AdminUserActions({
     <details className="admin-user-actions-menu">
       <summary>Manage</summary>
       <div className="admin-user-actions-panel">
+        <details className="admin-user-password-disclosure">
+          <summary>
+            {user.hasPassword ? "Reset password" : "Set password"}
+          </summary>
+          <div className="admin-user-password-panel">
+            <div>
+              <h3>Set new password?</h3>
+              <p>This will replace the user&apos;s current password.</p>
+            </div>
+            <form
+              action={`/admin/users/${encodeURIComponent(user.id)}/password`}
+              method="post"
+            >
+              <label>
+                New password
+                <input
+                  type="password"
+                  name="password"
+                  autoComplete="new-password"
+                  minLength={10}
+                  maxLength={72}
+                  required
+                />
+              </label>
+              <label>
+                Confirm new password
+                <input
+                  type="password"
+                  name="passwordConfirmation"
+                  autoComplete="new-password"
+                  minLength={10}
+                  maxLength={72}
+                  required
+                />
+              </label>
+              <AdminConfirmSubmitButton
+                confirmation="Set new password? This will replace the user's current password and sign them out."
+                variant="secondary"
+              >
+                {user.hasPassword ? "Reset password" : "Set password"}
+              </AdminConfirmSubmitButton>
+            </form>
+          </div>
+        </details>
         <form
           action={`/admin/users/${encodeURIComponent(user.id)}/role`}
           method="post"

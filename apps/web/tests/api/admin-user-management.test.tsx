@@ -1,11 +1,16 @@
 import type {
+  AdminAuthStore,
   AdminAuditEventType,
   AdminRole,
   AdminUser,
   AdminUserManagementStore,
 } from "@magictrust/database";
 import { prepareAdminUserCreateInput } from "@magictrust/database";
-import { decryptPii } from "@magictrust/privacy";
+import {
+  decryptPii,
+  hashAdminPassword,
+  verifyAdminPassword,
+} from "@magictrust/privacy";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
@@ -18,7 +23,9 @@ import {
   changeManagedAdminUserStatus,
   createManagedAdminUser,
   listManagedAdminUsers,
+  setManagedAdminUserPassword,
 } from "../../lib/admin-user-management";
+import { createAdminAuthService } from "../../lib/admin-auth";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-admin-users";
 
@@ -35,6 +42,13 @@ type ManagementState = {
   audits: AuditRecord[];
   assignments: Array<{ requestId: string; adminUserId: string }>;
   historicalActorReferences: Array<{ eventId: string; adminUserId: string }>;
+  passwordHashes: Map<string, string | null>;
+  sessions: Array<{
+    id: string;
+    adminUserId: string;
+    revokedAt: Date | null;
+  }>;
+  sentEmails: string[];
   nextId: number;
   now: Date;
 };
@@ -48,6 +62,8 @@ describe("admin user management", () => {
         formRequest("/admin/users/create", {
           email: `New.${role}@OnPointGlobal.com`,
           role,
+          password: "initial-password-123",
+          passwordConfirmation: "initial-password-123",
         }),
         adminSession("admin-actor"),
         dependencies,
@@ -58,6 +74,12 @@ describe("admin user management", () => {
 
       expect(response.status).toBe(303);
       expect(created).toMatchObject({ role, active: true });
+      const passwordHash = dependencies.state.passwordHashes.get(created!.id);
+      expect(passwordHash).toEqual(expect.any(String));
+      expect(passwordHash).not.toContain("initial-password-123");
+      await expect(
+        verifyAdminPassword("initial-password-123", passwordHash ?? null),
+      ).resolves.toBe(true);
       expect(created?.emailEncrypted).not.toContain("OnPointGlobal.com");
       expect(decryptPii(created!.emailEncrypted)).toBe(
         `new.${role.toLowerCase()}@onpointglobal.com`,
@@ -71,8 +93,38 @@ describe("admin user management", () => {
       expect(JSON.stringify(dependencies.state.audits)).not.toContain(
         "onpointglobal.com",
       );
+      expect(JSON.stringify(dependencies.state.audits)).not.toContain(
+        "initial-password-123",
+      );
+      expect(dependencies.state.sentEmails).toHaveLength(0);
     },
   );
+
+  test("newly created user can authenticate immediately", async () => {
+    const dependencies = createDependencies();
+    await createManagedAdminUser(
+      formRequest("/admin/users/create", {
+        email: "new.operator@onpointglobal.com",
+        role: "OPERATOR",
+        password: "initial-password-123",
+        passwordConfirmation: "initial-password-123",
+      }),
+      adminSession("admin-actor"),
+      dependencies,
+    );
+
+    const result = await createManagedAuthService(
+      dependencies.state,
+    ).authenticateWithPassword({
+      email: "NEW.OPERATOR@onpointglobal.com",
+      password: "initial-password-123",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      session: { role: "OPERATOR" },
+    });
+  });
 
   test("duplicate normalized email is rejected", async () => {
     const dependencies = createDependencies();
@@ -80,6 +132,8 @@ describe("admin user management", () => {
       formRequest("/admin/users/create", {
         email: "duplicate@onpointglobal.com",
         role: "VIEWER",
+        password: "initial-password-123",
+        passwordConfirmation: "initial-password-123",
       }),
       adminSession("admin-actor"),
       dependencies,
@@ -89,6 +143,8 @@ describe("admin user management", () => {
       formRequest("/admin/users/create", {
         email: " DUPLICATE@onpointglobal.com ",
         role: "OPERATOR",
+        password: "another-password-123",
+        passwordConfirmation: "another-password-123",
       }),
       adminSession("admin-actor"),
       dependencies,
@@ -102,15 +158,55 @@ describe("admin user management", () => {
     expect(dependencies.state.audits).toHaveLength(1);
   });
 
+  test("short and mismatched creation passwords are rejected safely", async () => {
+    const dependencies = createDependencies();
+    const short = await createManagedAdminUser(
+      formRequest("/admin/users/create", {
+        email: "short@onpointglobal.com",
+        role: "VIEWER",
+        password: "short",
+        passwordConfirmation: "short",
+      }),
+      adminSession("admin-actor"),
+      dependencies,
+    );
+    const mismatch = await createManagedAdminUser(
+      formRequest("/admin/users/create", {
+        email: "mismatch@onpointglobal.com",
+        role: "VIEWER",
+        password: "valid-password-123",
+        passwordConfirmation: "different-password-123",
+      }),
+      adminSession("admin-actor"),
+      dependencies,
+    );
+
+    expect(short.headers.get("location")).toContain(
+      "Password+must+be+at+least+10+characters",
+    );
+    expect(mismatch.headers.get("location")).toContain(
+      "Passwords+do+not+match",
+    );
+    expect(dependencies.state.users).toHaveLength(1);
+    expect(dependencies.state.audits).toHaveLength(0);
+  });
+
   test("lists decrypted emails only for the authorized server view", async () => {
     const dependencies = createDependencies();
-    await createUser(
+    const operator = await createUser(
       dependencies.state,
       "operator@onpointglobal.com",
+      "OPERATOR",
+      "operator-password-123",
+    );
+    await createUser(
+      dependencies.state,
+      "legacy-operator@onpointglobal.com",
       "OPERATOR",
     );
     const encrypted = dependencies.state.users[1]!.emailEncrypted;
     const hash = dependencies.state.users[1]!.emailHash;
+    const passwordHash = dependencies.state.passwordHashes.get(operator.id)!;
 
     const result = await listManagedAdminUsers(
       new URLSearchParams({ role: "OPERATOR", status: "ACTIVE" }),
@@ -124,10 +220,15 @@ describe("admin user management", () => {
       />,
     );
 
-    expect(result.ok && result.users).toHaveLength(1);
+    expect(result.ok && result.users).toHaveLength(2);
     expect(html).toContain("operator@onpointglobal.com");
     expect(html).not.toContain(encrypted);
     expect(html).not.toContain(hash);
+    expect(html).not.toContain(passwordHash);
+    expect(html).toContain('name="password"');
+    expect(html).toContain('name="passwordConfirmation"');
+    expect(html).toContain("Set password");
+    expect(html).toContain("Reset password");
     expect(html).toContain("User");
     expect(html).toContain("Role");
     expect(html).toContain("Status");
@@ -261,6 +362,156 @@ describe("admin user management", () => {
     expect(activeAdminCount(dependencies.state)).toBe(1);
   });
 
+  test("ADMIN sets an initial password for a legacy user", async () => {
+    const dependencies = createDependencies();
+    const legacy = await createUser(
+      dependencies.state,
+      "legacy@onpointglobal.com",
+      "VIEWER",
+    );
+
+    const response = await setManagedAdminUserPassword(
+      formRequest(`/admin/users/${legacy.id}/password`, {
+        password: "legacy-password-123",
+        passwordConfirmation: "legacy-password-123",
+      }),
+      legacy.id,
+      adminSession("admin-actor"),
+      dependencies,
+    );
+
+    expect(response.headers.get("location")).toContain("Password+updated");
+    await expect(
+      verifyAdminPassword(
+        "legacy-password-123",
+        dependencies.state.passwordHashes.get(legacy.id) ?? null,
+      ),
+    ).resolves.toBe(true);
+    expect(dependencies.state.audits.at(-1)).toMatchObject({
+      type: "ADMIN_USER_PASSWORD_SET",
+      targetAdminUserId: legacy.id,
+      actorAdminUserId: "admin-actor",
+      data: {},
+    });
+  });
+
+  test("password reset validates length and confirmation", async () => {
+    const dependencies = createDependencies();
+    const target = await createUser(
+      dependencies.state,
+      "target@onpointglobal.com",
+      "VIEWER",
+    );
+
+    const short = await setManagedAdminUserPassword(
+      formRequest(`/admin/users/${target.id}/password`, {
+        password: "short",
+        passwordConfirmation: "short",
+      }),
+      target.id,
+      adminSession("admin-actor"),
+      dependencies,
+    );
+    const mismatch = await setManagedAdminUserPassword(
+      formRequest(`/admin/users/${target.id}/password`, {
+        password: "valid-password-123",
+        passwordConfirmation: "different-password-123",
+      }),
+      target.id,
+      adminSession("admin-actor"),
+      dependencies,
+    );
+
+    expect(short.headers.get("location")).toContain(
+      "Password+must+be+at+least+10+characters",
+    );
+    expect(mismatch.headers.get("location")).toContain(
+      "Passwords+do+not+match",
+    );
+    expect(dependencies.state.passwordHashes.get(target.id)).toBeNull();
+    expect(dependencies.state.audits).toHaveLength(0);
+  });
+
+  test("ADMIN resets another user's password and revokes only their sessions", async () => {
+    const dependencies = createDependencies();
+    const target = await createUser(
+      dependencies.state,
+      "operator@onpointglobal.com",
+      "OPERATOR",
+      "old-password-123",
+    );
+    const unrelated = await createUser(
+      dependencies.state,
+      "viewer@onpointglobal.com",
+      "VIEWER",
+      "viewer-password-123",
+    );
+    dependencies.state.sessions.push(
+      { id: "target-session", adminUserId: target.id, revokedAt: null },
+      { id: "other-session", adminUserId: unrelated.id, revokedAt: null },
+    );
+
+    await setManagedAdminUserPassword(
+      formRequest(`/admin/users/${target.id}/password`, {
+        password: "new-password-456",
+        passwordConfirmation: "new-password-456",
+      }),
+      target.id,
+      adminSession("admin-actor"),
+      dependencies,
+    );
+
+    const auth = createManagedAuthService(dependencies.state);
+    await expect(
+      auth.authenticateWithPassword({
+        email: "operator@onpointglobal.com",
+        password: "old-password-123",
+      }),
+    ).resolves.toEqual({ ok: false });
+    await expect(
+      auth.authenticateWithPassword({
+        email: "operator@onpointglobal.com",
+        password: "new-password-456",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(dependencies.state.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "target-session",
+          revokedAt: dependencies.state.now,
+        }),
+        expect.objectContaining({ id: "other-session", revokedAt: null }),
+      ]),
+    );
+    expect(dependencies.state.audits.at(-1)).toMatchObject({
+      type: "ADMIN_USER_PASSWORD_RESET",
+      data: {},
+    });
+    expect(JSON.stringify(dependencies.state.audits)).not.toContain(
+      "new-password-456",
+    );
+    expect(JSON.stringify(dependencies.state.audits)).not.toContain("$2b$");
+    expect(dependencies.state.sentEmails).toHaveLength(0);
+  });
+
+  test("self password reset stays on the CLI-only path", async () => {
+    const dependencies = createDependencies();
+    const response = await setManagedAdminUserPassword(
+      formRequest("/admin/users/admin-actor/password", {
+        password: "new-password-456",
+        passwordConfirmation: "new-password-456",
+      }),
+      "admin-actor",
+      adminSession("admin-actor"),
+      dependencies,
+    );
+
+    expect(response.headers.get("location")).toContain(
+      "password+CLI+to+change+your+own",
+    );
+    expect(dependencies.state.audits).toHaveLength(0);
+  });
+
   test("cross-origin mutations are rejected before storage", async () => {
     const dependencies = createDependencies();
     const response = await createManagedAdminUser(
@@ -284,6 +535,9 @@ function createDependencies(options: { secondAdmin?: boolean } = {}) {
     audits: [],
     assignments: [],
     historicalActorReferences: [],
+    passwordHashes: new Map(),
+    sessions: [],
+    sentEmails: [],
     nextId: 1,
     now: new Date("2026-07-18T12:00:00.000Z"),
   };
@@ -310,7 +564,11 @@ function createInMemoryStore(state: ManagementState): AdminUserManagementStore {
         )
         .sort(
           (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
-        );
+        )
+        .map((user) => ({
+          ...user,
+          hasPassword: state.passwordHashes.get(user.id) !== null,
+        }));
     },
     async createAdminUser(input) {
       if (!isActiveAdmin(state, input.actorAdminUserId)) {
@@ -330,6 +588,7 @@ function createInMemoryStore(state: ManagementState): AdminUserManagementStore {
         lastLoginAt: null,
       };
       state.users.push(user);
+      state.passwordHashes.set(user.id, input.passwordHash ?? null);
       audit(state, "ADMIN_USER_CREATED", user.id, input.actorAdminUserId, {
         newRole: input.role,
       });
@@ -395,6 +654,35 @@ function createInMemoryStore(state: ManagementState): AdminUserManagementStore {
       );
       return { ok: true, user, changed: true };
     },
+    async setAdminUserPassword(input) {
+      if (!isActiveAdmin(state, input.actorAdminUserId)) {
+        return { ok: false, code: "ACTOR_NOT_AUTHORIZED" };
+      }
+      if (input.targetAdminUserId === input.actorAdminUserId) {
+        return { ok: false, code: "SELF_PASSWORD_CHANGE_NOT_ALLOWED" };
+      }
+      const user = state.users.find(
+        (candidate) => candidate.id === input.targetAdminUserId,
+      );
+      if (!user) return { ok: false, code: "ADMIN_USER_NOT_FOUND" };
+
+      const previousHash = state.passwordHashes.get(user.id) ?? null;
+      state.passwordHashes.set(user.id, input.passwordHash);
+      user.updatedAt = input.now;
+      for (const session of state.sessions) {
+        if (session.adminUserId === user.id && !session.revokedAt) {
+          session.revokedAt = input.now;
+        }
+      }
+      audit(
+        state,
+        previousHash ? "ADMIN_USER_PASSWORD_RESET" : "ADMIN_USER_PASSWORD_SET",
+        user.id,
+        input.actorAdminUserId,
+        {},
+      );
+      return { ok: true, user, changed: true };
+    },
   };
 }
 
@@ -418,8 +706,15 @@ async function createUser(
   state: ManagementState,
   email: string,
   role: AdminRole,
+  password?: string,
 ) {
-  return addUser(state, `admin-user-${state.nextId++}`, email, role);
+  const user = addUser(state, `admin-user-${state.nextId++}`, email, role);
+
+  if (password) {
+    state.passwordHashes.set(user.id, await hashAdminPassword(password));
+  }
+
+  return user;
 }
 
 function addUser(
@@ -440,6 +735,7 @@ function addUser(
     lastLoginAt: null,
   };
   state.users.push(user);
+  state.passwordHashes.set(user.id, null);
   return user;
 }
 
@@ -452,6 +748,71 @@ function isActiveAdmin(state: ManagementState, id: string) {
 function activeAdminCount(state: ManagementState) {
   return state.users.filter((user) => user.active && user.role === "ADMIN")
     .length;
+}
+
+function createManagedAuthService(state: ManagementState) {
+  const adminAuthStore = {
+    async createAdminUser() {
+      throw new Error("Not used by this test.");
+    },
+    async findAdminPasswordCredentialByEmailHash(emailHash: string) {
+      const user = state.users.find(
+        (candidate) => candidate.emailHash === emailHash,
+      );
+
+      return user
+        ? {
+            id: user.id,
+            active: user.active,
+            passwordHash: state.passwordHashes.get(user.id) ?? null,
+          }
+        : null;
+    },
+    async createAdminSession(input) {
+      const user = state.users.find(
+        (candidate) => candidate.id === input.adminUserId && candidate.active,
+      );
+
+      if (!user) return null;
+
+      const sessionId = `session-${state.nextId++}`;
+      state.sessions.push({
+        id: sessionId,
+        adminUserId: user.id,
+        revokedAt: null,
+      });
+
+      return {
+        adminUserId: user.id,
+        role: user.role,
+        sessionId,
+      };
+    },
+    async findActiveAdminUserByEmailHash(emailHash: string) {
+      return (
+        state.users.find(
+          (user) => user.emailHash === emailHash && user.active,
+        ) ?? null
+      );
+    },
+    async createAdminLoginToken() {
+      throw new Error("Not used by this test.");
+    },
+    async consumeAdminLoginToken() {
+      return null;
+    },
+    async validateAdminSession() {
+      return null;
+    },
+    async revokeAdminSession() {},
+  } satisfies AdminAuthStore;
+
+  return createAdminAuthService({
+    adminAuthStore,
+    appEnv: "development",
+    now: () => state.now,
+    generateToken: () => `session-token-${state.nextId++}`,
+  });
 }
 
 function adminSession(adminUserId: string) {

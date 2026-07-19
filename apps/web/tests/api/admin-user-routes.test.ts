@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   createManagedAdminUser: vi.fn(),
   changeManagedAdminUserRole: vi.fn(),
   changeManagedAdminUserStatus: vi.fn(),
+  setManagedAdminUserPassword: vi.fn(),
 }));
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -16,6 +17,7 @@ vi.mock("@/lib/admin-user-management", () => ({
   createManagedAdminUser: mocks.createManagedAdminUser,
   changeManagedAdminUserRole: mocks.changeManagedAdminUserRole,
   changeManagedAdminUserStatus: mocks.changeManagedAdminUserStatus,
+  setManagedAdminUserPassword: mocks.setManagedAdminUserPassword,
 }));
 
 describe("admin user routes", () => {
@@ -88,5 +90,60 @@ describe("admin user routes", () => {
 
     expect(response.status).toBe(403);
     expect(mocks.changeManagedAdminUserStatus).not.toHaveBeenCalled();
+  });
+
+  test.each(["OPERATOR", "VIEWER"] as const)(
+    "%s cannot reset passwords",
+    async () => {
+      mocks.requireAdminRole.mockResolvedValueOnce(
+        Response.json({ error: { code: "FORBIDDEN" } }, { status: 403 }),
+      );
+      const { POST } =
+        await import("../../app/admin/users/[userId]/password/route");
+
+      const response = await POST(
+        new Request(
+          "https://magictrust.test/admin/users/admin-target/password",
+          { method: "POST" },
+        ),
+        { params: Promise.resolve({ userId: "admin-target" }) },
+      );
+
+      expect(response.status).toBe(403);
+      expect(mocks.requireAdminRole).toHaveBeenCalledWith(["ADMIN"], {
+        response: "json",
+      });
+      expect(mocks.setManagedAdminUserPassword).not.toHaveBeenCalled();
+    },
+  );
+
+  test("ADMIN password reset derives actor from the session", async () => {
+    const session = {
+      adminUserId: "admin-actor",
+      role: "ADMIN",
+      sessionId: "session-1",
+    };
+    mocks.requireAdminRole.mockResolvedValueOnce(session);
+    mocks.setManagedAdminUserPassword.mockResolvedValueOnce(
+      Response.redirect("https://magictrust.test/admin/users", 303),
+    );
+    const { POST } =
+      await import("../../app/admin/users/[userId]/password/route");
+    const request = new Request(
+      "https://magictrust.test/admin/users/admin-target/password",
+      { method: "POST" },
+    );
+
+    const response = await POST(request, {
+      params: Promise.resolve({ userId: "admin-target" }),
+    });
+
+    expect(response.status).toBe(303);
+    expect(mocks.setManagedAdminUserPassword).toHaveBeenCalledWith(
+      request,
+      "admin-target",
+      session,
+      { kind: "deps" },
+    );
   });
 });

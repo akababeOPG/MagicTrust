@@ -365,7 +365,8 @@ unset ADMIN_BOOTSTRAP_PASSWORD
 
 Allowed roles are `ADMIN`, `OPERATOR`, and `VIEWER`. Admin email addresses are normalized, encrypted, and hashed before storage. Passwords must be at least 10 characters and are stored only as bcrypt hashes. The CLI rejects duplicate normalized emails and never prints plaintext email, plaintext passwords, ciphertext, hashes, or keys.
 
-Set or reset the password for an existing or User Management-created admin:
+Set or reset a legacy user's password, or change your own password, through the
+server-only CLI:
 
 ```sh
 read -s ADMIN_BOOTSTRAP_PASSWORD
@@ -398,7 +399,22 @@ POST /api/admin/auth/logout
 
 Logout revokes the current admin session, clears the cookie, and redirects to `/admin/login`.
 
-Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `DATABASE_URL`, and `ENCRYPTION_KEY`, apply the password migration, set passwords through the protected CLI workflow, and serve over HTTPS so secure cookies work correctly. Resend remains configured separately for product communications and is not used for admin login.
+`ADMIN` users can manage accounts at:
+
+```text
+GET /admin/users
+```
+
+Creating a user requires email, role, password, and password confirmation. The
+password is hashed through the same canonical password utility used by the
+bootstrap CLI and login verification; plaintext passwords are never stored,
+logged, audited, or emailed. Administrators can set or reset another user's
+password. A reset revokes only the target user's active sessions and creates a
+safe `ADMIN_USER_PASSWORD_SET` or `ADMIN_USER_PASSWORD_RESET` audit event with
+no password material. Self-password changes remain CLI-only. `OPERATOR` and
+`VIEWER` users cannot access user-management mutations.
+
+Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `DATABASE_URL`, and `ENCRYPTION_KEY`, apply the password migration, create the first administrator through the protected CLI workflow, and serve over HTTPS so secure cookies work correctly. Resend remains configured separately for product communications and is not used for admin login.
 
 ## Internal Requests Dashboard
 
@@ -460,7 +476,7 @@ Requester email, phone, and the encrypted original payload are decrypted exclusi
 
 Admin request detail responses are dynamic and use `Cache-Control: private, no-store, max-age=0`. Consumer-provided text is rendered as text, never interpreted as HTML. Ciphertext, hashes, encryption versions, and encryption keys are never rendered.
 
-The dashboard list and detail views remain read-only for `VIEWER` users. This version does not support requester data editing or exports, attachment deletion, bulk uploads, analytics, CSV exports, bulk actions, user management, or API client management.
+The dashboard list and detail views remain read-only for `VIEWER` users. This version does not support requester data editing or exports, attachment deletion, bulk uploads, analytics, CSV exports, bulk actions, or API client management.
 
 ## Admin Request Actions
 
@@ -551,7 +567,7 @@ Custom events require an event type, visibility, and optional JSON object data. 
 
 Mutable data updates and custom events use minimal duplicate-submission protection for identical browser retries. They do not change request status, create comments, or send consumer email notifications automatically.
 
-This version does not add deleting mutable data keys, replacing the full mutable data object, submitted data editing, requester data editing or exports, attachment deletion, bulk uploads, SMS, automatic workflows, email template UI, admin user management, API client management, or analytics.
+This version does not add deleting mutable data keys, replacing the full mutable data object, submitted data editing, requester data editing or exports, attachment deletion, bulk uploads, SMS, automatic workflows, email template UI, API client management, or analytics.
 
 ## Guided DATA_ACCESS Workflow
 

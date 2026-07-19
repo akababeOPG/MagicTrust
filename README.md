@@ -134,8 +134,8 @@ be at least 10 characters and are stored only as bcrypt hashes. The command
 rejects duplicate normalized emails and never prints plaintext passwords,
 ciphertext, hashes, or keys.
 
-Set or reset the password for an existing admin, including users created before
-the password migration or through the current User Management UI:
+Set or reset a legacy user's password, or change your own password, through the
+server-only CLI:
 
 ```sh
 read -s ADMIN_BOOTSTRAP_PASSWORD
@@ -155,6 +155,12 @@ credentials message. A successful login creates an `httpOnly`, `sameSite=lax`
 admin session cookie for 8 hours and redirects to the intended admin page or
 `/admin/requests`. Existing magic-link records remain only for migration safety;
 MagicTrust no longer sends admin login emails.
+
+`ADMIN` users can manage accounts at `/admin/users`. Creating an account
+requires an initial password and does not send email. An administrator can set
+or reset another user's password from the directory; the reset revokes only
+that user's active sessions. Self-password changes remain available through the
+CLI above. `OPERATOR` and `VIEWER` users cannot access these management actions.
 
 Production requirements:
 

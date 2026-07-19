@@ -12,7 +12,12 @@ import type {
   AdminUserManagementStore,
 } from "@magictrust/database";
 import { getRequiredDatabaseUrl } from "@magictrust/config";
-import { decryptPii } from "@magictrust/privacy";
+import {
+  adminPasswordMaxBytes,
+  adminPasswordMinLength,
+  decryptPii,
+  hashAdminPassword,
+} from "@magictrust/privacy";
 import { z } from "zod";
 
 import type { AdminSession } from "./admin-auth";
@@ -24,9 +29,19 @@ const listFiltersSchema = z.object({
   status: z.enum(userStatusFilters).optional(),
 });
 
-const createUserSchema = z.object({
+const createUserIdentitySchema = z.object({
   email: z.string().trim().email().max(320),
   role: z.enum(adminRoles),
+});
+
+const createUserSchema = createUserIdentitySchema.extend({
+  password: z.string(),
+  passwordConfirmation: z.string(),
+});
+
+const setPasswordSchema = z.object({
+  password: z.string(),
+  passwordConfirmation: z.string(),
 });
 
 const changeRoleSchema = z.object({
@@ -42,6 +57,7 @@ export type AdminUserListItem = {
   email: string;
   role: AdminRole;
   active: boolean;
+  hasPassword: boolean;
   createdAt: string;
 };
 
@@ -100,6 +116,7 @@ export async function listManagedAdminUsers(
       email: safelyDecryptEmail(user.emailEncrypted),
       role: user.role,
       active: user.active,
+      hasPassword: user.hasPassword,
       createdAt: user.createdAt.toISOString(),
     })),
   };
@@ -118,11 +135,37 @@ export async function createManagedAdminUser(
   const parsed = createUserSchema.safeParse({
     email: formData?.get("email"),
     role: formData?.get("role"),
+    password: formData?.get("password"),
+    passwordConfirmation: formData?.get("passwordConfirmation"),
   });
 
   if (!parsed.success) {
+    const identity = createUserIdentitySchema.safeParse({
+      email: formData?.get("email"),
+      role: formData?.get("role"),
+    });
+
     return redirectToUsers(request, {
-      error: "Enter a valid email and select a role.",
+      error: identity.success
+        ? "Password must be at least 10 characters."
+        : "Enter a valid email and select a role.",
+    });
+  }
+
+  const passwordError = validatePasswordConfirmation(
+    parsed.data.password,
+    parsed.data.passwordConfirmation,
+  );
+
+  if (passwordError) {
+    return redirectToUsers(request, { error: passwordError });
+  }
+
+  const passwordHash = await safelyHashPassword(parsed.data.password);
+
+  if (!passwordHash) {
+    return redirectToUsers(request, {
+      error: "Unable to create user with that password.",
     });
   }
 
@@ -133,6 +176,7 @@ export async function createManagedAdminUser(
   const result = await dependencies.store.createAdminUser({
     emailEncrypted: prepared.emailEncrypted,
     emailHash: prepared.emailHash,
+    passwordHash,
     role: prepared.role,
     actorAdminUserId: session.adminUserId,
     now: dependencies.now(),
@@ -143,6 +187,63 @@ export async function createManagedAdminUser(
   }
 
   return redirectToUsers(request, { success: "User created." });
+}
+
+export async function setManagedAdminUserPassword(
+  request: Request,
+  targetAdminUserId: string,
+  session: AdminSession,
+  dependencies: AdminUserManagementDependencies,
+): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return actionError("INVALID_ORIGIN", "Request origin is not allowed.", 403);
+  }
+
+  if (targetAdminUserId === session.adminUserId) {
+    return redirectToUsers(request, {
+      error: "Use the password CLI to change your own password.",
+    });
+  }
+
+  const formData = await safeFormData(request);
+  const parsed = setPasswordSchema.safeParse({
+    password: formData?.get("password"),
+    passwordConfirmation: formData?.get("passwordConfirmation"),
+  });
+
+  if (!parsed.success) {
+    return redirectToUsers(request, {
+      error: "Password must be at least 10 characters.",
+    });
+  }
+
+  const passwordError = validatePasswordConfirmation(
+    parsed.data.password,
+    parsed.data.passwordConfirmation,
+  );
+
+  if (passwordError) {
+    return redirectToUsers(request, { error: passwordError });
+  }
+
+  const passwordHash = await safelyHashPassword(parsed.data.password);
+
+  if (!passwordHash) {
+    return redirectToUsers(request, { error: "Unable to update password." });
+  }
+
+  const result = await dependencies.store.setAdminUserPassword({
+    targetAdminUserId,
+    actorAdminUserId: session.adminUserId,
+    passwordHash,
+    now: dependencies.now(),
+  });
+
+  if (!result.ok) {
+    return mutationFailureResponse(request, result.code);
+  }
+
+  return redirectToUsers(request, { success: "Password updated." });
 }
 
 export async function changeManagedAdminUserRole(
@@ -233,6 +334,8 @@ function mutationFailureResponse(
     ADMIN_USER_ALREADY_EXISTS: "A user with this email already exists.",
     ADMIN_USER_NOT_FOUND: "User could not be found.",
     LAST_ACTIVE_ADMIN: "The last active Admin cannot be changed.",
+    SELF_PASSWORD_CHANGE_NOT_ALLOWED:
+      "Use the password CLI to change your own password.",
     SELF_DEACTIVATION: "You cannot deactivate your own account.",
     SELF_DEMOTION: "You cannot remove your own Admin role.",
   };
@@ -245,6 +348,33 @@ function safelyDecryptEmail(emailEncrypted: string): string {
     return decryptPii(emailEncrypted);
   } catch {
     return "Email unavailable";
+  }
+}
+
+function validatePasswordConfirmation(
+  password: string,
+  passwordConfirmation: string,
+): string | null {
+  if (password.length < adminPasswordMinLength) {
+    return "Password must be at least 10 characters.";
+  }
+
+  if (Buffer.byteLength(password, "utf8") > adminPasswordMaxBytes) {
+    return "Password is too long.";
+  }
+
+  if (password !== passwordConfirmation) {
+    return "Passwords do not match.";
+  }
+
+  return null;
+}
+
+async function safelyHashPassword(password: string): Promise<string | null> {
+  try {
+    return await hashAdminPassword(password);
+  } catch {
+    return null;
   }
 }
 
@@ -291,5 +421,6 @@ function missingDatabaseStore(): AdminUserManagementStore {
     createAdminUser: missing,
     changeAdminUserRole: missing,
     setAdminUserActive: missing,
+    setAdminUserPassword: missing,
   };
 }

@@ -1282,6 +1282,34 @@ button:disabled,
   width: 100%;
 }
 
+.admin-user-password-disclosure > summary {
+  color: var(--mt-ink);
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.admin-user-password-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-user-password-panel {
+  border-top: 1px solid var(--mt-border-faint);
+  display: grid;
+  gap: var(--mt-space-5);
+  margin-top: var(--mt-space-4);
+  padding-top: var(--mt-space-5);
+}
+
+.admin-user-password-panel > div {
+  display: grid;
+  gap: var(--mt-space-2);
+}
+
+.admin-user-password-panel h3 {
+  font-size: 14px;
+}
+
 .admin-user-current-notice {
   color: var(--mt-text-muted);
   font-size: 12px;
