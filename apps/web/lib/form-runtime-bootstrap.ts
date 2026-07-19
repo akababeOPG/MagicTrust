@@ -105,12 +105,18 @@ export function installMagicTrustFormRuntime(
 
   function serializeForm(form: HTMLFormElement) {
     const serialized: Record<string, string | string[]> = Object.create(null);
+    let requestType: string | undefined;
     const formData = new environment.FormData(form);
 
     for (const [name, value] of formData.entries()) {
+      if (name === "requestType") {
+        if (requestType === undefined && typeof value === "string") {
+          requestType = value;
+        }
+        continue;
+      }
       if (
         !name ||
-        name === "requestType" ||
         name === "__proto__" ||
         name === "prototype" ||
         name === "constructor" ||
@@ -129,7 +135,10 @@ export function installMagicTrustFormRuntime(
       }
     }
 
-    return serialized;
+    return {
+      ...(requestType === undefined ? {} : { requestType }),
+      data: serialized,
+    };
   }
 
   function feedbackFor(
@@ -242,7 +251,7 @@ export function installMagicTrustFormRuntime(
       return;
     }
 
-    const payload = JSON.stringify({ data: serializeForm(form) });
+    const payload = JSON.stringify(serializeForm(form));
     const isRetry = state.status === "error" && state.payload === payload;
     if (!isRetry || !state.idempotencyKey) {
       state.idempotencyKey = generateIdempotencyKey();

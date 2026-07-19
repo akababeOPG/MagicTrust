@@ -85,9 +85,9 @@ Example response:
 ## `POST /api/public/forms/:slug/submissions`
 
 Creates a request from an active managed Form's current published version. The
-endpoint is public and does not require `x-api-key`. The Form's fixed request
-type determines the request lifecycle; a caller-supplied field cannot override
-it.
+endpoint is public and does not require `x-api-key`. The server resolves the
+request type from the Form's fixed configuration or validates a requester
+selection against the Form's allowlist before creating the request.
 
 ```sh
 curl -X POST "http://localhost:3000/api/public/forms/privacy-question/submissions" \
@@ -137,9 +137,10 @@ Published Forms call this endpoint automatically through the isolated
 MagicTrust runtime. Form authors provide normal HTML controls with `name`
 attributes; no custom fetch code is needed. Common requester names are
 `email`, `firstName`, `lastName`, and `phone`. Repeated names serialize as
-arrays, and the Form's configured request type cannot be overridden by runtime
-fields. Admin editor preview submissions are simulated and never call this
-endpoint.
+arrays. A successful control named `requestType` is sent at the top level and
+removed from `data`. Fixed Forms ignore that value and use their configured
+type; requester-selected Forms require it to match their configured allowlist.
+Admin editor preview submissions are simulated and never call this endpoint.
 
 ## `GET /api/public/requests/:publicId`
 

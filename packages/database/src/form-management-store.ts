@@ -10,6 +10,20 @@ type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export type FormStatus = "ACTIVE" | "ARCHIVED";
 export type FormVersionStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED";
+export const formRequestTypeModes = ["FIXED", "USER_SELECTED"] as const;
+export type FormRequestTypeMode = (typeof formRequestTypeModes)[number];
+
+export type FormRequestTypeConfiguration =
+  | {
+      requestTypeMode: "FIXED";
+      fixedRequestType: RequestType;
+      allowedRequestTypes: [];
+    }
+  | {
+      requestTypeMode: "USER_SELECTED";
+      fixedRequestType: null;
+      allowedRequestTypes: RequestType[];
+    };
 
 export type ManagedForm = {
   id: string;
@@ -17,7 +31,9 @@ export type ManagedForm = {
   name: string;
   slug: string;
   description: string | null;
-  requestType: RequestType;
+  requestTypeMode: FormRequestTypeMode;
+  fixedRequestType: RequestType | null;
+  allowedRequestTypes: RequestType[];
   status: FormStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -58,7 +74,9 @@ export type PublishedFormRuntime = {
 export type PublishedFormSubmissionTarget = {
   publicId: string;
   slug: string;
-  requestType: RequestType;
+  requestTypeMode: FormRequestTypeMode;
+  fixedRequestType: RequestType | null;
+  allowedRequestTypes: RequestType[];
   versionNumber: number;
 };
 
@@ -77,15 +95,16 @@ export type FormMutationResult =
   | { ok: false; code: FormManagementErrorCode };
 
 export type FormManagementStore = {
-  createForm(input: {
-    publicId: string;
-    name: string;
-    slug: string;
-    description?: string;
-    requestType: RequestType;
-    actorAdminUserId: string;
-    now: Date;
-  }): Promise<FormMutationResult>;
+  createForm(
+    input: {
+      publicId: string;
+      name: string;
+      slug: string;
+      description?: string;
+      actorAdminUserId: string;
+      now: Date;
+    } & FormRequestTypeConfiguration,
+  ): Promise<FormMutationResult>;
   listForms(): Promise<ManagedFormSummary[]>;
   getForm(publicId: string): Promise<ManagedFormDetail | null>;
   getPublishedFormBySlug(slug: string): Promise<PublishedFormRuntime | null>;
@@ -135,7 +154,9 @@ export function createFormManagementStore(db: Database): FormManagementStore {
             name: input.name,
             slug: input.slug,
             description: input.description,
-            requestType: input.requestType,
+            requestTypeMode: input.requestTypeMode,
+            fixedRequestType: input.fixedRequestType,
+            allowedRequestTypes: input.allowedRequestTypes,
             createdAt: input.now,
             updatedAt: input.now,
             createdByAdminUserId: input.actorAdminUserId,
@@ -237,7 +258,9 @@ export function createFormManagementStore(db: Database): FormManagementStore {
         .select({
           publicId: forms.publicId,
           slug: forms.slug,
-          requestType: forms.requestType,
+          requestTypeMode: forms.requestTypeMode,
+          fixedRequestType: forms.fixedRequestType,
+          allowedRequestTypes: forms.allowedRequestTypes,
           versionNumber: formVersions.versionNumber,
         })
         .from(forms)
@@ -536,7 +559,9 @@ const formSelection = {
   name: forms.name,
   slug: forms.slug,
   description: forms.description,
-  requestType: forms.requestType,
+  requestTypeMode: forms.requestTypeMode,
+  fixedRequestType: forms.fixedRequestType,
+  allowedRequestTypes: forms.allowedRequestTypes,
   status: forms.status,
   createdAt: forms.createdAt,
   updatedAt: forms.updatedAt,

@@ -128,18 +128,25 @@ analytics, version pinning, and per-site configuration are not implemented.
 
 ### Form Submission Foundation v1
 
-Each logical Form owns one fixed request type, selected by an ADMIN when the
-Form is created and displayed with natural-language labels in form management.
-Existing Forms migrate to `GENERAL_INQUIRY`; new Forms must choose a type
-explicitly. Published versions inherit the Form configuration and cannot change
-the request type.
+Each logical Form owns one request-type resolution configuration, selected by
+an ADMIN when the Form is created and displayed with natural-language labels
+in form management. `FIXED` forms always create the configured request type.
+`USER_SELECTED` forms require the requester to choose from an allowlist of at
+least two types. Existing Forms migrate to `FIXED` while preserving their
+configured request type.
 
 `POST /api/public/forms/:slug/submissions` resolves only an active Form's
 current published `FormVersion`. It accepts bounded JSON under `data`, extracts
 the supported requester identity fields, and calls the shared public intake
-service. The Form's configured request type, rather than caller data, controls
-initial status and identity-verification behavior. Receipt communications and
-verification tokens therefore follow the same path as hosted public intake.
+service. The server resolves the request type from the Form configuration and,
+for `USER_SELECTED` forms, validates the submitted selection against the
+allowlist. That resolved type controls initial status and identity-verification
+behavior. Receipt communications and verification tokens therefore follow the
+same path as hosted public intake.
+
+The request-type resolution configuration remains on `Form` for v1. It may
+move to `FormVersion` later so published intake behavior can be fully
+versioned; this release does not make that lifecycle change.
 
 The complete original submission is encrypted once through the existing
 request creation service. Its immutable plaintext snapshot contains only safe
@@ -172,8 +179,10 @@ attributes and do not need custom fetch code. Standard successful-control
 behavior applies: disabled and unnamed controls and unchecked radio or checkbox
 inputs are omitted, while repeated names become arrays. Values remain strings.
 The reserved names `email`, `firstName`, `lastName`, and `phone` feed the
-existing requester mapping. `requestType` is never serialized by the runtime;
-the Request type always comes from the fixed Form configuration.
+existing requester mapping. A successful control named `requestType` is
+extracted into the top-level submission payload and omitted from `data`. The
+server ignores it for `FIXED` Forms and validates it against the configured
+allowlist for `USER_SELECTED` Forms.
 
 The bootstrap is injected before stored FormVersion JavaScript and captures the
 MagicTrust endpoint from the runtime URL. Form `action` attributes cannot

@@ -48,19 +48,57 @@ export function AdminFormsList({
                   <input name="slug" maxLength={120} required />
                   <small>Lowercase letters, numbers, and hyphens.</small>
                 </label>
-                <label>
-                  Request type
-                  <select name="requestType" required defaultValue="">
-                    <option value="" disabled>
-                      Select a request type
-                    </option>
-                    <option value="DATA_ACCESS">Data access</option>
-                    <option value="DATA_DELETION">Data deletion</option>
-                    <option value="DO_NOT_CONTACT">Do not contact</option>
-                    <option value="UNSUBSCRIBE">Unsubscribe</option>
-                    <option value="GENERAL_INQUIRY">General inquiry</option>
-                  </select>
-                </label>
+                <fieldset className="admin-form-request-type-config">
+                  <legend>How is the request type determined?</legend>
+                  <div className="admin-form-request-type-modes">
+                    <label>
+                      <input
+                        type="radio"
+                        name="requestTypeMode"
+                        value="FIXED"
+                        defaultChecked
+                      />
+                      Fixed
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="requestTypeMode"
+                        value="USER_SELECTED"
+                      />
+                      Selected by requester
+                    </label>
+                  </div>
+                  <div className="admin-form-fixed-request-type">
+                    <label>
+                      Request type
+                      <select name="fixedRequestType" defaultValue="">
+                        <option value="" disabled>
+                          Select a request type
+                        </option>
+                        {requestTypeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="admin-form-allowed-request-types">
+                    <p>Allowed request types</p>
+                    <small>Select at least two.</small>
+                    {requestTypeOptions.map((option) => (
+                      <label key={option.value}>
+                        <input
+                          type="checkbox"
+                          name="allowedRequestTypes"
+                          value={option.value}
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
                 <label>
                   Description <span>Optional</span>
                   <textarea name="description" maxLength={2000} rows={3} />
@@ -119,7 +157,7 @@ export function AdminFormsList({
                       <td>
                         <FormStatus status={form.status} />
                       </td>
-                      <td>{requestTypeLabel(form.requestType)}</td>
+                      <td>{requestTypeSummary(form)}</td>
                       <td>
                         {versionLabel(
                           form.publishedVersionNumber,
@@ -156,7 +194,7 @@ export function AdminFormsList({
                   <dl>
                     <div>
                       <dt>Request type</dt>
-                      <dd>{requestTypeLabel(form.requestType)}</dd>
+                      <dd>{requestTypeSummary(form)}</dd>
                     </div>
                     <div>
                       <dt>Published</dt>
@@ -244,7 +282,9 @@ export function AdminFormDetail({
           </div>
           <div>
             <dt>Request type</dt>
-            <dd>{requestTypeLabel(form.requestType)}</dd>
+            <dd>
+              <FormRequestTypeConfiguration form={form} />
+            </dd>
           </div>
           <div>
             <dt>Published version</dt>
@@ -464,8 +504,46 @@ const requestTypeLabels: Record<RequestType, string> = {
   GENERAL_INQUIRY: "General inquiry",
 };
 
+const requestTypeOptions = Object.entries(requestTypeLabels).map(
+  ([value, label]) => ({ value: value as RequestType, label }),
+);
+
 function requestTypeLabel(type: RequestType) {
   return requestTypeLabels[type];
+}
+
+function requestTypeSummary(form: {
+  requestTypeMode: "FIXED" | "USER_SELECTED";
+  fixedRequestType: RequestType | null;
+}) {
+  return form.requestTypeMode === "FIXED" && form.fixedRequestType
+    ? `Fixed · ${requestTypeLabel(form.fixedRequestType)}`
+    : "Selected by requester";
+}
+
+function FormRequestTypeConfiguration({
+  form,
+}: {
+  form: Pick<
+    AdminFormDetailView,
+    "requestTypeMode" | "fixedRequestType" | "allowedRequestTypes"
+  >;
+}) {
+  if (form.requestTypeMode === "FIXED") {
+    return <>{requestTypeSummary(form)}</>;
+  }
+
+  return (
+    <div className="admin-form-request-type-summary">
+      <span>Selected by requester</span>
+      <span>Allowed:</span>
+      <ul>
+        {form.allowedRequestTypes.map((type) => (
+          <li key={type}>{requestTypeLabel(type)}</li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function formatDate(value: string) {

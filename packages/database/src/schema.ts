@@ -1,6 +1,7 @@
 import { relations, sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   integer,
   index,
   jsonb,
@@ -101,6 +102,11 @@ export const adminRoleEnum = pgEnum("admin_role", [
 ]);
 
 export const formStatusEnum = pgEnum("form_status", ["ACTIVE", "ARCHIVED"]);
+
+export const formRequestTypeModeEnum = pgEnum("form_request_type_mode", [
+  "FIXED",
+  "USER_SELECTED",
+]);
 
 export const formVersionStatusEnum = pgEnum("form_version_status", [
   "DRAFT",
@@ -366,8 +372,13 @@ export const forms = pgTable(
     name: varchar("name", { length: 160 }).notNull(),
     slug: varchar("slug", { length: 120 }).notNull(),
     description: text("description"),
-    requestType: requestTypeEnum("request_type")
-      .default("GENERAL_INQUIRY")
+    requestTypeMode: formRequestTypeModeEnum("request_type_mode")
+      .default("FIXED")
+      .notNull(),
+    fixedRequestType: requestTypeEnum("fixed_request_type"),
+    allowedRequestTypes: requestTypeEnum("allowed_request_types")
+      .array()
+      .default(sql`ARRAY[]::request_type[]`)
       .notNull(),
     status: formStatusEnum("status").default("ACTIVE").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -386,6 +397,10 @@ export const forms = pgTable(
     statusUpdatedAtIdx: index("forms_status_updated_at_idx").on(
       table.status,
       table.updatedAt,
+    ),
+    requestTypeConfigurationCheck: check(
+      "forms_request_type_configuration_check",
+      sql`(${table.requestTypeMode} = 'FIXED' AND ${table.fixedRequestType} IS NOT NULL AND cardinality(${table.allowedRequestTypes}) = 0) OR (${table.requestTypeMode} = 'USER_SELECTED' AND ${table.fixedRequestType} IS NULL AND cardinality(${table.allowedRequestTypes}) >= 2)`,
     ),
   }),
 );

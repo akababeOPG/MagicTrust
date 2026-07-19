@@ -35,7 +35,8 @@ describe("form management foundation", () => {
         name: "Privacy Request",
         slug: " Privacy_Request ",
         description: "Consumer privacy intake.",
-        requestType: "DATA_ACCESS",
+        requestTypeMode: "FIXED",
+        fixedRequestType: "DATA_ACCESS",
       }),
       session("ADMIN"),
       dependencies,
@@ -45,7 +46,9 @@ describe("form management foundation", () => {
     expect(dependencies.state.forms[0]).toMatchObject({
       name: "Privacy Request",
       slug: "privacy-request",
-      requestType: "DATA_ACCESS",
+      requestTypeMode: "FIXED",
+      fixedRequestType: "DATA_ACCESS",
+      allowedRequestTypes: [],
       status: "ACTIVE",
     });
     expect(dependencies.state.versions[0]).toMatchObject({
@@ -70,7 +73,8 @@ describe("form management foundation", () => {
       formRequest("/admin/forms/create", {
         name: "Duplicate",
         slug: "PRIVACY REQUEST",
-        requestType: "GENERAL_INQUIRY",
+        requestTypeMode: "FIXED",
+        fixedRequestType: "GENERAL_INQUIRY",
       }),
       session("ADMIN"),
       dependencies,
@@ -113,9 +117,61 @@ describe("form management foundation", () => {
       </>,
     );
 
-    expect(form.requestType).toBe("DATA_DELETION");
+    expect(form.requestTypeMode).toBe("FIXED");
+    expect(form.fixedRequestType).toBe("DATA_DELETION");
+    expect(form.allowedRequestTypes).toEqual([]);
+    expect(html).toContain("Fixed · Data deletion");
     expect(html).toContain("Data deletion");
     expect(html).not.toContain(">DATA_DELETION<");
+  });
+
+  test("ADMIN creates a requester-selected form with a read-only allowlist", async () => {
+    const dependencies = createDependencies();
+    const response = await createAdminForm(
+      formRequest("/admin/forms/create", {
+        name: "Privacy rights",
+        slug: "privacy-rights",
+        requestTypeMode: "USER_SELECTED",
+        allowedRequestTypes: ["DATA_ACCESS", "DATA_DELETION"],
+      }),
+      session("ADMIN"),
+      dependencies,
+    );
+    const form = dependencies.state.forms[0]!;
+    const detail = await getAdminForm(form.publicId, dependencies);
+    const html = renderToStaticMarkup(
+      <AdminFormDetail role="ADMIN" form={detail!} />,
+    );
+
+    expect(response.status).toBe(303);
+    expect(form).toMatchObject({
+      requestTypeMode: "USER_SELECTED",
+      fixedRequestType: null,
+      allowedRequestTypes: ["DATA_ACCESS", "DATA_DELETION"],
+    });
+    expect(html).toContain("Selected by requester");
+    expect(html).toContain("Allowed:");
+    expect(html).toContain("Data access");
+    expect(html).toContain("Data deletion");
+  });
+
+  test("requester-selected form creation requires two allowed types", async () => {
+    const dependencies = createDependencies();
+    const response = await createAdminForm(
+      formRequest("/admin/forms/create", {
+        name: "Privacy rights",
+        slug: "privacy-rights",
+        requestTypeMode: "USER_SELECTED",
+        allowedRequestTypes: "DATA_ACCESS",
+      }),
+      session("ADMIN"),
+      dependencies,
+    );
+
+    expect(response.headers.get("location")).toContain(
+      "Select+at+least+two+allowed+request+types",
+    );
+    expect(dependencies.state.forms).toHaveLength(0);
   });
 
   test("publishes v1, copies it to v2, then archives v1 when v2 publishes", async () => {
@@ -635,10 +691,15 @@ async function createForm(
   dependencies: ReturnType<typeof createDependencies>,
   name: string,
   slug: string,
-  requestType: ManagedForm["requestType"] = "GENERAL_INQUIRY",
+  requestType: NonNullable<ManagedForm["fixedRequestType"]> = "GENERAL_INQUIRY",
 ) {
   await createAdminForm(
-    formRequest("/admin/forms/create", { name, slug, requestType }),
+    formRequest("/admin/forms/create", {
+      name,
+      slug,
+      requestTypeMode: "FIXED",
+      fixedRequestType: requestType,
+    }),
     session("ADMIN"),
     dependencies,
   );
@@ -662,7 +723,9 @@ function createMemoryStore(state: State): FormManagementStore {
         name: input.name,
         slug: input.slug,
         description: input.description ?? null,
-        requestType: input.requestType,
+        requestTypeMode: input.requestTypeMode,
+        fixedRequestType: input.fixedRequestType,
+        allowedRequestTypes: input.allowedRequestTypes,
         status: "ACTIVE",
         createdAt: input.now,
         updatedAt: input.now,
@@ -737,7 +800,9 @@ function createMemoryStore(state: State): FormManagementStore {
         ? {
             publicId: form.publicId,
             slug: form.slug,
-            requestType: form.requestType,
+            requestTypeMode: form.requestTypeMode,
+            fixedRequestType: form.fixedRequestType,
+            allowedRequestTypes: form.allowedRequestTypes,
             versionNumber: published.versionNumber,
           }
         : null;
@@ -851,14 +916,23 @@ function createMemoryStore(state: State): FormManagementStore {
 function session(role: "ADMIN" | "OPERATOR") {
   return { adminUserId: "admin-1", role, sessionId: "session-1" };
 }
-function formRequest(path: string, values: Record<string, string>) {
+function formRequest(path: string, values: Record<string, string | string[]>) {
+  const body = new URLSearchParams();
+  for (const [name, value] of Object.entries(values)) {
+    if (Array.isArray(value)) {
+      for (const item of value) body.append(name, item);
+    } else {
+      body.set(name, value);
+    }
+  }
+
   return new Request(`https://magictrust.test${path}`, {
     method: "POST",
     headers: {
       origin: "https://magictrust.test",
       "content-type": "application/x-www-form-urlencoded",
     },
-    body: new URLSearchParams(values),
+    body,
   });
 }
 

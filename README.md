@@ -204,12 +204,13 @@ Managed Forms accept backend submissions at:
 POST /api/public/forms/:slug/submissions
 ```
 
-The Form's configured request type controls request creation. Only active,
-published Forms accept submissions, and the response contains only the public
-request reference. The endpoint supports an optional `Idempotency-Key` for safe
-browser retries. Published standalone and embedded Forms automatically
-serialize native controls and submit through this endpoint; admin previews
-simulate submission without creating requests.
+The Form's request-type mode controls request creation. Fixed Forms always use
+their configured type; requester-selected Forms accept only a type from their
+configured allowlist. Only active, published Forms accept submissions, and the
+response contains only the public request reference. The endpoint supports an
+optional `Idempotency-Key` for safe browser retries. Published standalone and
+embedded Forms automatically serialize native controls and submit through this
+endpoint; admin previews simulate submission without creating requests.
 
 Consumers can request a single-use secure access link from the tracking page or by calling:
 

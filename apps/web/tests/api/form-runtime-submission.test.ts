@@ -49,6 +49,7 @@ describe("form runtime submission", () => {
       "Idempotency-Key": "runtime-idempotency-key",
     });
     expect(JSON.parse(String(init?.body))).toEqual({
+      requestType: "DATA_DELETION",
       data: {
         firstName: "John",
         email: "john@example.com",

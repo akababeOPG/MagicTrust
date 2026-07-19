@@ -1391,6 +1391,69 @@ button:disabled,
   font-weight: 400;
 }
 
+.admin-form-request-type-config,
+.admin-form-allowed-request-types {
+  border: 0;
+  display: grid;
+  gap: var(--mt-space-3);
+  margin: 0;
+  padding: 0;
+}
+
+.admin-form-request-type-config > legend,
+.admin-form-allowed-request-types > p {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-form-request-type-modes,
+.admin-form-allowed-request-types label {
+  display: flex;
+  gap: var(--mt-space-3);
+}
+
+.admin-form-request-type-modes {
+  flex-wrap: wrap;
+}
+
+.admin-form-request-type-modes label,
+.admin-form-allowed-request-types label {
+  align-items: center;
+}
+
+.admin-form-request-type-modes input,
+.admin-form-allowed-request-types input {
+  width: auto;
+}
+
+.admin-form-allowed-request-types {
+  display: none;
+}
+
+.admin-form-request-type-config:has(
+    input[name="requestTypeMode"][value="USER_SELECTED"]:checked
+  )
+  .admin-form-fixed-request-type {
+  display: none;
+}
+
+.admin-form-request-type-config:has(
+    input[name="requestTypeMode"][value="USER_SELECTED"]:checked
+  )
+  .admin-form-allowed-request-types {
+  display: grid;
+}
+
+.admin-form-request-type-summary {
+  display: grid;
+  gap: var(--mt-space-2);
+}
+
+.admin-form-request-type-summary ul {
+  margin: 0;
+  padding-left: var(--mt-space-6);
+}
+
 .admin-form-results,
 .admin-form-history {
   display: grid;

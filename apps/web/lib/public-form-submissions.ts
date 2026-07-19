@@ -8,9 +8,11 @@ import {
 import type {
   ApiIdempotencyStore,
   FormManagementStore,
+  PublishedFormSubmissionTarget,
 } from "@magictrust/database";
 import { getRequiredDatabaseUrl } from "@magictrust/config";
-import type { JsonObject } from "@magictrust/domain";
+import { requestTypes } from "@magictrust/domain";
+import type { JsonObject, RequestType } from "@magictrust/domain";
 import { hashSubmittedPayload } from "@magictrust/privacy";
 import { z } from "zod";
 
@@ -28,6 +30,7 @@ const dangerousKeys = new Set(["__proto__", "prototype", "constructor"]);
 
 const submissionSchema = z
   .object({
+    requestType: z.enum(requestTypes).optional(),
     data: z.unknown(),
   })
   .strict();
@@ -124,6 +127,10 @@ export function createPublicFormSubmissionApi(
         const body = await readJson(request);
         const parsed = submissionSchema.safeParse(body);
         if (!parsed.success) return validationError();
+        const requestType = resolveRequestType(form, parsed.data.requestType);
+        if (!requestType) {
+          return validationError("Select a valid request type.");
+        }
         if (
           !parsed.data.data ||
           typeof parsed.data.data !== "object" ||
@@ -144,6 +151,7 @@ export function createPublicFormSubmissionApi(
 
         const requestHash = hashSubmittedPayload({
           formPublicId: form.publicId,
+          requestType,
           data,
         });
         const idempotencyKey = request.headers.get("Idempotency-Key")?.trim();
@@ -174,14 +182,15 @@ export function createPublicFormSubmissionApi(
         delete remainingData.phone;
         delete remainingData.firstName;
         delete remainingData.lastName;
+        delete remainingData.requestType;
 
         const result = await submitPublicIntakeRequest(
           {
-            type: form.requestType,
+            type: requestType,
             email: requester.email,
             phone: requester.phone,
             submittedData: {
-              type: form.requestType,
+              type: requestType,
               requester: requester.original,
               source: {
                 channel: "FORM",
@@ -218,6 +227,20 @@ export function createPublicFormSubmissionApi(
       }
     },
   };
+}
+
+function resolveRequestType(
+  form: PublishedFormSubmissionTarget,
+  selectedRequestType?: RequestType,
+): RequestType | null {
+  if (form.requestTypeMode === "FIXED") {
+    return form.fixedRequestType;
+  }
+
+  return selectedRequestType &&
+    form.allowedRequestTypes.includes(selectedRequestType)
+    ? selectedRequestType
+    : null;
 }
 
 function parseRequester(data: JsonObject): {

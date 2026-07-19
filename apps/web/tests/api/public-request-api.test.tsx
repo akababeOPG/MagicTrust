@@ -80,21 +80,25 @@ describe("managed public form submissions", () => {
 
   test("creates a request using the Form's fixed request type and published version", async () => {
     const dependencies = createManagedFormSubmissionDependencies({
-      requestType: "GENERAL_INQUIRY",
+      fixedRequestType: "GENERAL_INQUIRY",
       versionNumber: 3,
     });
     const api = createPublicFormSubmissionApi(dependencies);
 
     const response = await api.create(
-      formSubmissionRequest({
-        email: "john@example.com",
-        firstName: "John",
-        lastName: "Doe",
-        phone: "+13055551234",
-        type: "DATA_DELETION",
-        message: "Please review my question.",
-        preferences: { newsletters: false },
-      }),
+      formSubmissionRequest(
+        {
+          email: "john@example.com",
+          firstName: "John",
+          lastName: "Doe",
+          phone: "+13055551234",
+          type: "DATA_DELETION",
+          message: "Please review my question.",
+          preferences: { newsletters: false },
+        },
+        undefined,
+        "DATA_DELETION",
+      ),
       "privacy-question",
     );
     const body = await response.json();
@@ -148,7 +152,7 @@ describe("managed public form submissions", () => {
     "%s reuses identity verification and receipt behavior",
     async (requestType) => {
       const dependencies = createManagedFormSubmissionDependencies({
-        requestType,
+        fixedRequestType: requestType,
       });
       const response = await createPublicFormSubmissionApi(dependencies).create(
         formSubmissionRequest({ email: "john@example.com" }),
@@ -173,7 +177,7 @@ describe("managed public form submissions", () => {
 
   test("non-verification form types reuse normal receipt behavior", async () => {
     const dependencies = createManagedFormSubmissionDependencies({
-      requestType: "UNSUBSCRIBE",
+      fixedRequestType: "UNSUBSCRIBE",
     });
     const response = await createPublicFormSubmissionApi(dependencies).create(
       formSubmissionRequest({ email: "john@example.com" }),
@@ -186,6 +190,88 @@ describe("managed public form submissions", () => {
     expect(dependencies.state.sentEmails[0]?.subject).toContain(
       "MagicTrust request received",
     );
+  });
+
+  test("USER_SELECTED requires a request type", async () => {
+    const dependencies = createManagedFormSubmissionDependencies({
+      requestTypeMode: "USER_SELECTED",
+      allowedRequestTypes: ["DATA_ACCESS", "DATA_DELETION"],
+    });
+
+    const response = await createPublicFormSubmissionApi(dependencies).create(
+      formSubmissionRequest({ email: "john@example.com" }),
+      "privacy-question",
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(dependencies.state.requests).toHaveLength(0);
+  });
+
+  test.each(["DATA_ACCESS", "DATA_DELETION"] as const)(
+    "USER_SELECTED accepts allowed %s requests",
+    async (requestType) => {
+      const dependencies = createManagedFormSubmissionDependencies({
+        requestTypeMode: "USER_SELECTED",
+        allowedRequestTypes: ["DATA_ACCESS", "DATA_DELETION"],
+      });
+
+      const response = await createPublicFormSubmissionApi(dependencies).create(
+        formSubmissionRequest(
+          { email: "john@example.com" },
+          undefined,
+          requestType,
+        ),
+        "privacy-question",
+      );
+
+      expect(response.status).toBe(201);
+      expect(dependencies.state.requests[0]?.type).toBe(requestType);
+      expect(dependencies.state.requests[0]?.status).toBe(
+        "PENDING_VERIFICATION",
+      );
+      expect(dependencies.state.identityVerificationTokens).toHaveLength(1);
+    },
+  );
+
+  test("USER_SELECTED rejects a disallowed request type", async () => {
+    const dependencies = createManagedFormSubmissionDependencies({
+      requestTypeMode: "USER_SELECTED",
+      allowedRequestTypes: ["DATA_ACCESS", "DATA_DELETION"],
+    });
+
+    const response = await createPublicFormSubmissionApi(dependencies).create(
+      formSubmissionRequest(
+        { email: "john@example.com" },
+        undefined,
+        "UNSUBSCRIBE",
+      ),
+      "privacy-question",
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(dependencies.state.requests).toHaveLength(0);
+  });
+
+  test("USER_SELECTED rejects unsupported request type values", async () => {
+    const dependencies = createManagedFormSubmissionDependencies({
+      requestTypeMode: "USER_SELECTED",
+      allowedRequestTypes: ["DATA_ACCESS", "DATA_DELETION"],
+    });
+
+    const response = await createPublicFormSubmissionApi(dependencies).create(
+      formSubmissionRequest(
+        { email: "john@example.com" },
+        undefined,
+        "UNSUPPORTED_TYPE",
+      ),
+      "privacy-question",
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(dependencies.state.requests).toHaveLength(0);
   });
 
   test.each(["unknown", "inactive", "unpublished"])(
@@ -1532,6 +1618,7 @@ function publicRequest(overrides: Record<string, unknown> = {}) {
 function formSubmissionRequest(
   data: Record<string, unknown>,
   idempotencyKey?: string,
+  requestType?: string,
 ) {
   return new Request(
     "https://magictrust.test/api/public/forms/privacy-question/submissions",
@@ -1541,7 +1628,10 @@ function formSubmissionRequest(
         "content-type": "application/json",
         ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
       },
-      body: JSON.stringify({ data }),
+      body: JSON.stringify({
+        ...(requestType ? { requestType } : {}),
+        data,
+      }),
     },
   );
 }
@@ -1549,18 +1639,34 @@ function formSubmissionRequest(
 function createManagedFormSubmissionDependencies(
   options: {
     available?: boolean;
-    requestType?: PublishedFormSubmissionTarget["requestType"];
+    requestTypeMode?: PublishedFormSubmissionTarget["requestTypeMode"];
+    fixedRequestType?: NonNullable<
+      PublishedFormSubmissionTarget["fixedRequestType"]
+    >;
+    allowedRequestTypes?: PublishedFormSubmissionTarget["allowedRequestTypes"];
     versionNumber?: number;
   } = {},
 ) {
   const intake = createInMemoryDependencies();
+  const requestTypeMode = options.requestTypeMode ?? "FIXED";
   const target: PublishedFormSubmissionTarget | null =
     options.available === false
       ? null
       : {
           publicId: "frm_managed_test",
           slug: "privacy-question",
-          requestType: options.requestType ?? "GENERAL_INQUIRY",
+          requestTypeMode,
+          fixedRequestType:
+            requestTypeMode === "FIXED"
+              ? (options.fixedRequestType ?? "GENERAL_INQUIRY")
+              : null,
+          allowedRequestTypes:
+            requestTypeMode === "USER_SELECTED"
+              ? (options.allowedRequestTypes ?? [
+                  "DATA_ACCESS",
+                  "DATA_DELETION",
+                ])
+              : [],
           versionNumber: options.versionNumber ?? 1,
         };
   const idempotencyRecords: ApiIdempotencyRecord[] = [];

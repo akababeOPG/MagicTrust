@@ -5,8 +5,11 @@ import { randomBytes } from "node:crypto";
 import {
   createDatabase,
   createFormManagementStore,
+  formRequestTypeModes,
 } from "@magictrust/database";
 import type {
+  FormRequestTypeConfiguration,
+  FormRequestTypeMode,
   FormManagementErrorCode,
   FormManagementStore,
   FormStatus,
@@ -24,7 +27,9 @@ const createFormSchema = z.object({
   name: z.string().trim().min(1).max(160),
   slug: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).optional(),
-  requestType: z.enum(requestTypes),
+  requestTypeMode: z.enum(formRequestTypeModes),
+  fixedRequestType: z.enum(requestTypes).optional(),
+  allowedRequestTypes: z.array(z.enum(requestTypes)),
 });
 
 const saveDraftSchema = z.object({
@@ -44,7 +49,9 @@ export type AdminFormListItem = {
   publicId: string;
   name: string;
   slug: string;
-  requestType: RequestType;
+  requestTypeMode: FormRequestTypeMode;
+  fixedRequestType: RequestType | null;
+  allowedRequestTypes: RequestType[];
   status: FormStatus;
   publishedVersionNumber: number | null;
   draftVersionNumber: number | null;
@@ -56,7 +63,9 @@ export type AdminFormDetailView = {
   name: string;
   slug: string;
   description: string | null;
-  requestType: RequestType;
+  requestTypeMode: FormRequestTypeMode;
+  fixedRequestType: RequestType | null;
+  allowedRequestTypes: RequestType[];
   status: FormStatus;
   updatedAt: string;
   draftVersionNumber: number | null;
@@ -105,7 +114,9 @@ export async function listAdminForms(dependencies: AdminFormDependencies) {
     publicId: form.publicId,
     name: form.name,
     slug: form.slug,
-    requestType: form.requestType,
+    requestTypeMode: form.requestTypeMode,
+    fixedRequestType: form.fixedRequestType,
+    allowedRequestTypes: form.allowedRequestTypes,
     status: form.status,
     publishedVersionNumber: form.publishedVersion?.versionNumber ?? null,
     draftVersionNumber: form.draftVersion?.versionNumber ?? null,
@@ -156,11 +167,13 @@ export async function createAdminForm(
     name: data?.get("name"),
     slug: data?.get("slug"),
     description: optionalString(data?.get("description")),
-    requestType: data?.get("requestType"),
+    requestTypeMode: data?.get("requestTypeMode"),
+    fixedRequestType: optionalString(data?.get("fixedRequestType")),
+    allowedRequestTypes: data?.getAll("allowedRequestTypes") ?? [],
   });
   if (!parsed.success) {
     return redirectForms(request, {
-      error: "Enter a valid name, slug, and request type.",
+      error: "Enter a valid name, slug, and request type configuration.",
     });
   }
   const slug = normalizeSlug(parsed.data.slug);
@@ -169,12 +182,21 @@ export async function createAdminForm(
       error: "Slug may contain lowercase letters, numbers, and hyphens only.",
     });
   }
+  const requestTypeConfiguration = resolveRequestTypeConfiguration(parsed.data);
+  if (!requestTypeConfiguration) {
+    return redirectForms(request, {
+      error:
+        parsed.data.requestTypeMode === "FIXED"
+          ? "Select a fixed request type."
+          : "Select at least two allowed request types.",
+    });
+  }
   const result = await dependencies.store.createForm({
     publicId: dependencies.generatePublicId(),
     name: parsed.data.name,
     slug,
     description: parsed.data.description,
-    requestType: parsed.data.requestType,
+    ...requestTypeConfiguration,
     actorAdminUserId: session.adminUserId,
     now: dependencies.now(),
   });
@@ -298,7 +320,9 @@ function toDetailView(detail: ManagedFormDetail, appBaseUrl: string) {
     name: detail.form.name,
     slug: detail.form.slug,
     description: detail.form.description,
-    requestType: detail.form.requestType,
+    requestTypeMode: detail.form.requestTypeMode,
+    fixedRequestType: detail.form.fixedRequestType,
+    allowedRequestTypes: detail.form.allowedRequestTypes,
     status: detail.form.status,
     updatedAt: detail.form.updatedAt.toISOString(),
     draftVersionNumber: draft?.versionNumber ?? null,
@@ -326,6 +350,31 @@ function normalizeSlug(value: string) {
     .trim()
     .toLowerCase()
     .replace(/[\s_]+/g, "-");
+}
+
+function resolveRequestTypeConfiguration(input: {
+  requestTypeMode: FormRequestTypeMode;
+  fixedRequestType?: RequestType;
+  allowedRequestTypes: RequestType[];
+}): FormRequestTypeConfiguration | null {
+  if (input.requestTypeMode === "FIXED") {
+    return input.fixedRequestType
+      ? {
+          requestTypeMode: "FIXED",
+          fixedRequestType: input.fixedRequestType,
+          allowedRequestTypes: [],
+        }
+      : null;
+  }
+
+  const allowedRequestTypes = [...new Set(input.allowedRequestTypes)];
+  return allowedRequestTypes.length >= 2
+    ? {
+        requestTypeMode: "USER_SELECTED",
+        fixedRequestType: null,
+        allowedRequestTypes,
+      }
+    : null;
 }
 
 function failure(
