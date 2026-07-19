@@ -1,5 +1,20 @@
 # API
 
+## Internal API Reference
+
+The implemented Internal API v1 is documented through:
+
+```text
+http://localhost:3000/api/docs
+http://localhost:3000/api/openapi.json
+```
+
+`/api/docs` provides Swagger UI and reads the same canonical OpenAPI document
+served by `/api/openapi.json`. Neither documentation route requires an admin
+session. The integration API itself continues to require a scoped database-backed
+API client key through `x-api-key`; mutating operations also require
+`Idempotency-Key`.
+
 ## `GET /api/health`
 
 Returns application health and database connectivity status.
@@ -327,7 +342,7 @@ mt_live_<random-secret>
 Create a client and one key with scoped access:
 
 ```sh
-pnpm api-client:create --name "Privacy Processor" --scopes "requests:read,requests:create,requests:update,comments:write,attachments:write,attachments:read,communications:write,notifications:write,events:write"
+pnpm api-client:create --name "Privacy Processor" --scopes "requests:read,requests:processing-data:read,requests:create,requests:update,comments:write,attachments:write,attachments:read,communications:write,notifications:write,events:write"
 ```
 
 The raw API key is displayed exactly once. MagicTrust stores only the key hash and a short key prefix used for lookup.
@@ -336,6 +351,7 @@ Scopes:
 
 ```text
 requests:read          GET request list/detail
+requests:processing-data:read  decrypted processing data
 requests:create        POST /api/v1/requests
 requests:update        status and mutable data updates
 comments:write         request comments

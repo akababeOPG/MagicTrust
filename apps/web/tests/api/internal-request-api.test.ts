@@ -29,7 +29,12 @@ import {
   verifyApiKey,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
-import { encryptPii, hashAccessToken, hashPii } from "@magictrust/privacy";
+import {
+  encryptPii,
+  encryptSubmittedPayload,
+  hashAccessToken,
+  hashPii,
+} from "@magictrust/privacy";
 import type { PrivateFileStorageProvider } from "@magictrust/storage";
 import { describe, expect, test } from "vitest";
 
@@ -399,6 +404,12 @@ describe("internal request API", () => {
       ),
       created.publicId,
     );
+    const processingDataResponse = await api.getProcessingData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-data`,
+      ),
+      created.publicId,
+    );
     const statusResponse = await api.updateStatus(
       authenticatedRequest(
         `https://magictrust.test/api/v1/requests/${created.publicId}/status`,
@@ -498,6 +509,7 @@ describe("internal request API", () => {
     expect(createResponse.status).toBe(201);
     expect(listResponse.status).toBe(200);
     expect(getResponse.status).toBe(200);
+    expect(processingDataResponse.status).toBe(200);
     expect(statusResponse.status).toBe(200);
     expect(dataResponse.status).toBe(200);
     expect(commentResponse.status).toBe(201);
@@ -638,6 +650,134 @@ describe("internal request API", () => {
     expect(serialized).not.toContain("submittedDataEncrypted");
     expect(serialized).not.toContain("submittedDataHash");
     expect(serialized).not.toContain("encryptionVersion");
+  });
+
+  test("returns decrypted processing data to a scoped API client without mutating the request", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const originalSubmission = validCreateRequestBody();
+    const created = await createRequest(api, originalSubmission);
+    const statusBefore = dependencies.state.requests[0]?.status;
+    const eventsBefore = structuredClone(dependencies.state.events);
+
+    const response = await api.getProcessingData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-data`,
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(body.request).toEqual({
+      id: created.id,
+      publicId: created.publicId,
+      type: "DATA_ACCESS",
+      status: "SUBMITTED",
+      requester: {
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        phone: "+13055551234",
+      },
+      originalSubmittedData: originalSubmission,
+      form: null,
+    });
+    expect(serialized).not.toContain("emailEncrypted");
+    expect(serialized).not.toContain("emailHash");
+    expect(serialized).not.toContain("phoneEncrypted");
+    expect(serialized).not.toContain("phoneHash");
+    expect(serialized).not.toContain("submittedDataEncrypted");
+    expect(serialized).not.toContain("submittedDataHash");
+    expect(serialized).not.toContain("encryptionVersion");
+    expect(dependencies.state.requests[0]?.status).toBe(statusBefore);
+    expect(dependencies.state.events).toEqual(eventsBefore);
+  });
+
+  test("returns null safely when optional processing data is unavailable", async () => {
+    const dependencies = createInMemoryDependencies();
+    const api = createInternalRequestApi(dependencies);
+    const created = await createRequest(api);
+    const request = dependencies.state.requests[0];
+
+    if (!request) throw new Error("Expected request fixture.");
+
+    dependencies.state.requesterEmailEncrypted.set(request.requesterId, null);
+    dependencies.state.requesterPhoneEncrypted.set(request.requesterId, null);
+    dependencies.state.requesterNameEncrypted.set(request.requesterId, null);
+    request.submittedDataEncrypted = encryptSubmittedPayload({
+      type: request.type,
+      source: { channel: "FORM" },
+      submittedData: {},
+    });
+
+    const response = await api.getProcessingData(
+      authenticatedRequest(
+        `https://magictrust.test/api/v1/requests/${created.publicId}/processing-data`,
+      ),
+      created.publicId,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.request.requester).toEqual({
+      firstName: null,
+      lastName: null,
+      email: null,
+      phone: null,
+    });
+    expect(body.request.form).toBeNull();
+  });
+
+  test("requires the processing-data scope", async () => {
+    const dependencies = createInMemoryDependencies({
+      scopes: ["requests:read"],
+    });
+    const api = createInternalRequestApi(dependencies);
+
+    const response = await api.getProcessingData(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_example/processing-data",
+      ),
+      "req_example",
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  test("rejects an invalid API key for processing data", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.getProcessingData(
+      new Request(
+        "https://magictrust.test/api/v1/requests/req_example/processing-data",
+        { headers: { "x-api-key": "invalid" } },
+      ),
+      "req_example",
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  test("returns 404 for unknown processing data requests", async () => {
+    const api = createInternalRequestApi(createInMemoryDependencies());
+    const response = await api.getProcessingData(
+      authenticatedRequest(
+        "https://magictrust.test/api/v1/requests/req_unknown/processing-data",
+      ),
+      "req_unknown",
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error.code).toBe("NOT_FOUND");
   });
 
   test("lists requests newest first with filters", async () => {
@@ -2763,6 +2903,8 @@ function createInMemoryDependencies(
     apiClientKey,
     requesters: [] as Requester[],
     requesterEmailEncrypted: new Map<string, string | null>(),
+    requesterPhoneEncrypted: new Map<string, string | null>(),
+    requesterNameEncrypted: new Map<string, string | null>(),
     requesterEmailHash: new Map<string, string | null>(),
     requesterPhoneHash: new Map<string, string | null>(),
     requests: [] as PrivacyRequest[],
@@ -2786,6 +2928,8 @@ function createInMemoryDependencies(
 
           state.requesters.push(requester);
           state.requesterEmailEncrypted.set(requester.id, data.emailEncrypted);
+          state.requesterPhoneEncrypted.set(requester.id, data.phoneEncrypted);
+          state.requesterNameEncrypted.set(requester.id, data.nameEncrypted);
           state.requesterEmailHash.set(requester.id, data.emailHash);
           state.requesterPhoneHash.set(requester.id, data.phoneHash);
 
@@ -2842,8 +2986,21 @@ function createInMemoryDependencies(
     async transitionToProcessing() {
       return { ok: false, code: "NOT_FOUND" };
     },
-    async findAdminSensitiveData() {
-      return null;
+    async findAdminSensitiveData(publicId) {
+      const request = state.requests.find((item) => item.publicId === publicId);
+
+      return request
+        ? {
+            requestId: request.id,
+            requesterEmailEncrypted:
+              state.requesterEmailEncrypted.get(request.requesterId) ?? null,
+            requesterPhoneEncrypted:
+              state.requesterPhoneEncrypted.get(request.requesterId) ?? null,
+            requesterNameEncrypted:
+              state.requesterNameEncrypted.get(request.requesterId) ?? null,
+            submittedDataEncrypted: request.submittedDataEncrypted,
+          }
+        : null;
     },
     async findByIdOrPublicId(id: string): Promise<RequestDetails | null> {
       const request = state.requests.find(

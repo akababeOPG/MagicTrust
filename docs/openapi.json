@@ -1,0 +1,1706 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MagicTrust Internal API",
+    "version": "1.0.0",
+    "summary": "System-to-system privacy request integration API",
+    "description": "The implemented MagicTrust Internal API v1. Authenticate with the `x-api-key` header using a database-backed API client key in the form `mt_live_<random-secret>`. The standard `Authorization` header is not used by these routes. Each operation lists its required API client scope. Mutating operations also require an `Idempotency-Key`; records remain replayable for 24 hours. Repeating the same key and request returns the original response with `Idempotency-Replayed: true`, while reusing a key for a different request returns `409 IDEMPOTENCY_KEY_REUSED`."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current MagicTrust deployment"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Requests",
+      "description": "Create, retrieve, search, and update requests."
+    },
+    {
+      "name": "Request Data",
+      "description": "Merge internal processing metadata into mutable request data."
+    },
+    { "name": "Events", "description": "Record custom business events." },
+    {
+      "name": "Comments",
+      "description": "Add public or internal request comments."
+    },
+    {
+      "name": "Attachments",
+      "description": "Register, upload, and download private request attachments."
+    },
+    {
+      "name": "Communications",
+      "description": "Send explicit outbound email communications."
+    },
+    {
+      "name": "Notifications",
+      "description": "Send consumer-facing request notifications."
+    }
+  ],
+  "security": [{ "ApiKeyAuth": [] }],
+  "paths": {
+    "/api/v1/requests": {
+      "post": {
+        "tags": ["Requests"],
+        "summary": "Create a privacy request",
+        "description": "Creates a requester, privacy request, and REQUEST_CREATED event transactionally. Internal API requests start in SUBMITTED status.",
+        "operationId": "createPrivacyRequest",
+        "x-required-scope": "requests:create",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateRequestInput" },
+              "example": {
+                "type": "DATA_ACCESS",
+                "requester": {
+                  "firstName": "John",
+                  "lastName": "Doe",
+                  "email": "john@example.com",
+                  "phone": "+13055551234"
+                },
+                "source": {
+                  "channel": "API",
+                  "siteKey": "onpoint",
+                  "formKey": "processor-api",
+                  "sourceUrl": "https://example.com/privacy"
+                },
+                "submittedData": { "message": "I want to access my data." }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Request created.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestSummaryResponse"
+                },
+                "example": {
+                  "request": {
+                    "id": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "publicId": "req_example123",
+                    "type": "DATA_ACCESS",
+                    "status": "SUBMITTED",
+                    "requesterId": "e4fbcf41-7bd0-4190-aa36-2ed43ecfcd2e",
+                    "createdAt": "2026-07-19T12:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "get": {
+        "tags": ["Requests"],
+        "summary": "Search privacy requests",
+        "description": "Returns stable cursor-paginated request summaries ordered by `createdAt DESC, id DESC`. Filters combine with AND. Email and phone searches use normalized deterministic hashes without decrypting requester records.",
+        "operationId": "listPrivacyRequests",
+        "x-required-scope": "requests:read",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicIdFilter" },
+          { "$ref": "#/components/parameters/TypeFilter" },
+          { "$ref": "#/components/parameters/StatusFilter" },
+          { "$ref": "#/components/parameters/EmailFilter" },
+          { "$ref": "#/components/parameters/PhoneFilter" },
+          { "$ref": "#/components/parameters/CreatedFrom" },
+          { "$ref": "#/components/parameters/CreatedTo" },
+          { "$ref": "#/components/parameters/UpdatedFrom" },
+          { "$ref": "#/components/parameters/UpdatedTo" },
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request page returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestListResponse"
+                },
+                "example": {
+                  "requests": [
+                    {
+                      "id": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                      "publicId": "req_example123",
+                      "type": "DATA_ACCESS",
+                      "status": "PROCESSING",
+                      "requesterId": "e4fbcf41-7bd0-4190-aa36-2ed43ecfcd2e",
+                      "createdAt": "2026-07-19T12:00:00.000Z",
+                      "updatedAt": "2026-07-19T13:00:00.000Z",
+                      "completedAt": null,
+                      "source": {
+                        "channel": "API",
+                        "siteKey": "onpoint",
+                        "formKey": "processor-api"
+                      }
+                    }
+                  ],
+                  "pagination": {
+                    "limit": 25,
+                    "nextCursor": "eyJjcmVhdGVkQXQiOiIyMDI2LTA3LTE5VDEyOjAwOjAwLjAwMFoiLCJpZCI6IjRmNzY3ZWEyLTJjMzItNGVmZC05MDNlLWQ3OTNmM2M2NGZjOCJ9"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}": {
+      "get": {
+        "tags": ["Requests"],
+        "summary": "Retrieve request detail",
+        "description": "Fetches a request by internal id or publicId and returns its internal detail, including mutable data, events, comments, attachment metadata, and communication metadata. Encrypted requester fields and hashes are not returned.",
+        "operationId": "getPrivacyRequest",
+        "x-required-scope": "requests:read",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "responses": {
+          "200": {
+            "description": "Request detail returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestDetailResponse"
+                },
+                "example": {
+                  "request": {
+                    "id": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "publicId": "req_example123",
+                    "type": "DATA_ACCESS",
+                    "status": "PROCESSING",
+                    "requesterId": "e4fbcf41-7bd0-4190-aa36-2ed43ecfcd2e",
+                    "createdAt": "2026-07-19T12:00:00.000Z",
+                    "mutableData": { "processorReference": "job-12345" },
+                    "events": [],
+                    "comments": [],
+                    "attachments": [],
+                    "communications": []
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/processing-data": {
+      "get": {
+        "tags": ["Request Data"],
+        "summary": "Retrieve request processing data",
+        "description": "Fetches a request by internal id or publicId and decrypts only the requester identity and immutable original submission needed by an authorized processor. The response is private and not cacheable. This read-only operation does not change request state or create audit events.",
+        "operationId": "getRequestProcessingData",
+        "x-required-scope": "requests:processing-data:read",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "responses": {
+          "200": {
+            "description": "Decrypted processing data returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents caching of decrypted processing data.",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store, max-age=0"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingDataResponse"
+                },
+                "example": {
+                  "request": {
+                    "id": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "publicId": "req_example123",
+                    "type": "DATA_ACCESS",
+                    "status": "VERIFIED",
+                    "requester": {
+                      "firstName": "[redacted]",
+                      "lastName": "[redacted]",
+                      "email": "redacted@example.invalid",
+                      "phone": "[redacted]"
+                    },
+                    "originalSubmittedData": {
+                      "type": "DATA_ACCESS",
+                      "requester": {
+                        "firstName": "[redacted]",
+                        "lastName": "[redacted]",
+                        "email": "redacted@example.invalid",
+                        "phone": "[redacted]"
+                      },
+                      "source": {
+                        "channel": "FORM",
+                        "siteKey": "magictrust-managed-form",
+                        "formKey": "privacy-request",
+                        "formPublicId": "form_example",
+                        "formVersionNumber": 3
+                      },
+                      "submittedData": {
+                        "message": "[redacted]"
+                      }
+                    },
+                    "form": {
+                      "publicId": "form_example",
+                      "versionNumber": 3
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/status": {
+      "post": {
+        "tags": ["Requests"],
+        "summary": "Update request status",
+        "description": "Sets any currently supported request status, updates completedAt for terminal statuses, and records STATUS_CHANGED. This endpoint currently validates the status enum but does not enforce workflow transition rules.",
+        "operationId": "updateRequestStatus",
+        "x-required-scope": "requests:update",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/StatusUpdateInput" },
+              "example": {
+                "status": "PROCESSING",
+                "actor": { "type": "API_CLIENT", "id": "ignored-client-label" },
+                "reason": "Request picked up for processing"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status updated.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestSummaryResponse"
+                },
+                "example": {
+                  "request": {
+                    "id": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "publicId": "req_example123",
+                    "type": "DATA_ACCESS",
+                    "status": "PROCESSING",
+                    "requesterId": "e4fbcf41-7bd0-4190-aa36-2ed43ecfcd2e",
+                    "createdAt": "2026-07-19T12:00:00.000Z",
+                    "completedAt": null
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/data": {
+      "patch": {
+        "tags": ["Request Data"],
+        "summary": "Merge mutable request data",
+        "description": "Shallow-merges the supplied object into mutableData while preserving omitted keys. submittedData is never modified. Dangerous keys (`__proto__`, `prototype`, and `constructor`) are rejected at any depth.",
+        "operationId": "updateRequestData",
+        "x-required-scope": "requests:update",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MutableDataUpdateInput"
+              },
+              "example": {
+                "data": {
+                  "processorReference": "job-12345",
+                  "matchedSystems": ["Vector", "Console"],
+                  "resolutionCode": "DATA_EXPORT_READY"
+                },
+                "actor": { "type": "API_CLIENT", "id": "ignored-client-label" },
+                "reason": "Processor added resolution metadata"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mutable data merged.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutableDataResponse"
+                },
+                "example": {
+                  "request": {
+                    "mutableData": {
+                      "processorReference": "job-12345",
+                      "resolutionCode": "DATA_EXPORT_READY"
+                    },
+                    "updatedAt": "2026-07-19T13:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/events": {
+      "post": {
+        "tags": ["Events"],
+        "summary": "Add a custom request event",
+        "description": "Records a CUSTOM event without changing request status or mutable data. Names must begin with a letter, contain only uppercase letters, numbers, and underscores, be 3-80 characters, and not match a built-in event name. Data is limited to 16 KB and rejects dangerous keys at any depth.",
+        "operationId": "addCustomRequestEvent",
+        "x-required-scope": "events:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CustomEventInput" },
+              "example": {
+                "type": "DATA_EXPORT_GENERATED",
+                "visibility": "INTERNAL",
+                "data": {
+                  "system": "Vector",
+                  "processorReference": "job-99999"
+                },
+                "actor": { "type": "API_CLIENT", "id": "ignored-client-label" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Custom event created.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EventResponse" },
+                "example": {
+                  "event": {
+                    "id": "3f399173-b1b2-4474-a35d-28f61c5a92c4",
+                    "requestId": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "type": "DATA_EXPORT_GENERATED",
+                    "category": "CUSTOM",
+                    "customType": "DATA_EXPORT_GENERATED",
+                    "visibility": "INTERNAL",
+                    "actorType": "API_CLIENT",
+                    "actorId": "a0fe9225-46dc-45cf-bbb4-84c8fab92cd2",
+                    "data": {
+                      "system": "Vector",
+                      "processorReference": "job-99999"
+                    },
+                    "createdAt": "2026-07-19T13:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/comments": {
+      "post": {
+        "tags": ["Comments"],
+        "summary": "Add a request comment",
+        "description": "Creates a PUBLIC or INTERNAL comment and the corresponding audit event.",
+        "operationId": "addRequestComment",
+        "x-required-scope": "comments:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CommentInput" },
+              "example": {
+                "visibility": "PUBLIC",
+                "body": "Your request is being processed.",
+                "actor": { "type": "API_CLIENT", "id": "ignored-client-label" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Comment created.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CommentResponse" },
+                "example": {
+                  "comment": {
+                    "id": "cb965ddc-43d2-4071-9717-530fcf91dd05",
+                    "requestId": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "visibility": "PUBLIC",
+                    "body": "Your request is being processed.",
+                    "actorType": "API_CLIENT",
+                    "actorId": "a0fe9225-46dc-45cf-bbb4-84c8fab92cd2",
+                    "createdAt": "2026-07-19T13:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/attachments": {
+      "post": {
+        "tags": ["Attachments"],
+        "summary": "Register attachment metadata",
+        "description": "Creates attachment metadata and its visibility-specific audit event. This endpoint does not upload binary content.",
+        "operationId": "addRequestAttachmentMetadata",
+        "x-required-scope": "attachments:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentMetadataInput"
+              },
+              "example": {
+                "visibility": "PUBLIC",
+                "fileName": "data-export.json",
+                "mimeType": "application/json",
+                "sizeBytes": 12345,
+                "storageProvider": "manual",
+                "storageKey": "manual/data-export.json",
+                "checksum": "sha256-placeholder",
+                "actor": { "type": "API_CLIENT", "id": "ignored-client-label" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment metadata created.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AttachmentResponse" },
+                "example": {
+                  "attachment": {
+                    "id": "4a3176bb-0756-438d-a973-e5a2dfb0514d",
+                    "requestId": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "visibility": "PUBLIC",
+                    "fileName": "data-export.json",
+                    "mimeType": "application/json",
+                    "sizeBytes": 12345,
+                    "storageProvider": "manual",
+                    "storageKey": "manual/data-export.json",
+                    "checksum": "sha256-placeholder",
+                    "actorType": "API_CLIENT",
+                    "actorId": "a0fe9225-46dc-45cf-bbb4-84c8fab92cd2",
+                    "createdAt": "2026-07-19T13:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/attachments/upload": {
+      "post": {
+        "tags": ["Attachments"],
+        "summary": "Upload a private attachment",
+        "description": "Uploads one file to the configured private storage provider and creates attachment metadata and an audit event. Maximum size is 10 MB. Allowed MIME types are application/json, text/csv, application/pdf, text/plain, and application/zip. Idempotency hashes safe file metadata and its checksum.",
+        "operationId": "uploadRequestAttachment",
+        "x-required-scope": "attachments:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentUploadInput"
+              },
+              "encoding": {
+                "file": {
+                  "contentType": "application/json, text/csv, application/pdf, text/plain, application/zip"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File uploaded and attachment metadata created.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AttachmentResponse" },
+                "example": {
+                  "attachment": {
+                    "id": "4a3176bb-0756-438d-a973-e5a2dfb0514d",
+                    "requestId": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                    "visibility": "PUBLIC",
+                    "fileName": "data-export.json",
+                    "mimeType": "application/json",
+                    "sizeBytes": 12345,
+                    "storageProvider": "vercel-blob",
+                    "storageKey": "requests/req_example123/attachments/example-data-export.json",
+                    "checksum": "sha256-example",
+                    "actorType": "API_CLIENT",
+                    "actorId": "a0fe9225-46dc-45cf-bbb4-84c8fab92cd2",
+                    "createdAt": "2026-07-19T13:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/attachments/{attachmentId}/download": {
+      "get": {
+        "tags": ["Attachments"],
+        "summary": "Download a private attachment",
+        "description": "Streams an attachment after verifying it belongs to the request and records ATTACHMENT_DOWNLOADED. No storage URL is exposed. The optional actorId query parameter remains accepted for compatibility, but API_CLIENT audit identity is derived from the authenticated client.",
+        "operationId": "downloadRequestAttachment",
+        "x-required-scope": "attachments:read",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/AttachmentId" },
+          {
+            "name": "actorId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "default": "internal-api"
+            },
+            "example": "privacy-processor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attachment content. Content-Type and filename are taken from stored metadata.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename.",
+                "schema": { "type": "string" },
+                "example": "attachment; filename=\"data-export.json\""
+              },
+              "Content-Length": {
+                "description": "Downloaded content length.",
+                "schema": { "type": "integer" }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/communications/email": {
+      "post": {
+        "tags": ["Communications"],
+        "summary": "Send an outbound email",
+        "description": "Creates an outbound communication record, sends a plain-text email, updates it to SENT or FAILED, and creates EMAIL_SENT or EMAIL_FAILED. Responses expose only a masked recipient.",
+        "operationId": "sendRequestEmail",
+        "x-required-scope": "communications:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCommunicationInput"
+              },
+              "example": {
+                "to": "john@example.com",
+                "subject": "Your MagicTrust request was updated",
+                "body": "Your request has been updated.",
+                "actor": { "type": "API_CLIENT", "id": "ignored-client-label" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "$ref": "#/components/responses/CommunicationSent" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/CommunicationFailed" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/notifications": {
+      "post": {
+        "tags": ["Notifications"],
+        "summary": "Send a consumer notification",
+        "description": "Sends a request update to the encrypted requester email without changing request status. Every email includes the publicId, current status, supplied public message, and tracking link. FILE_AVAILABLE also creates a hashed 30-minute consumer access token and includes its secure access link; no file is attached.",
+        "operationId": "sendConsumerNotification",
+        "x-required-scope": "notifications:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumerNotificationInput"
+              },
+              "examples": {
+                "requestUpdated": {
+                  "value": {
+                    "type": "REQUEST_UPDATED",
+                    "message": "Your request is currently being processed.",
+                    "actor": {
+                      "type": "API_CLIENT",
+                      "id": "ignored-client-label"
+                    }
+                  }
+                },
+                "fileAvailable": {
+                  "value": {
+                    "type": "FILE_AVAILABLE",
+                    "message": "A response file is available for your request.",
+                    "actor": {
+                      "type": "API_CLIENT",
+                      "id": "ignored-client-label"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "$ref": "#/components/responses/CommunicationSent" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" },
+          "422": { "$ref": "#/components/responses/NotificationUnavailable" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/CommunicationFailed" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Database-backed API client key: `mt_live_<random-secret>`. The deprecated INTERNAL_API_KEY fallback works only outside production."
+      }
+    },
+    "headers": {
+      "IdempotencyReplayed": {
+        "description": "Present with value `true` when the stored response is replayed.",
+        "schema": { "type": "string", "enum": ["true"] }
+      }
+    },
+    "parameters": {
+      "RequestId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Internal request id or publicId.",
+        "schema": { "type": "string", "minLength": 1 },
+        "example": "req_example123"
+      },
+      "AttachmentId": {
+        "name": "attachmentId",
+        "in": "path",
+        "required": true,
+        "description": "Attachment id.",
+        "schema": { "type": "string", "format": "uuid" },
+        "example": "4a3176bb-0756-438d-a973-e5a2dfb0514d"
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Unique operation key retained for 24 hours. Reuse only when retrying the same method, route, and payload.",
+        "schema": { "type": "string", "minLength": 1 },
+        "example": "request-update-req_example123-001"
+      },
+      "PublicIdFilter": {
+        "name": "publicId",
+        "in": "query",
+        "required": false,
+        "description": "Exact publicId match.",
+        "schema": { "type": "string" },
+        "example": "req_example123"
+      },
+      "TypeFilter": {
+        "name": "type",
+        "in": "query",
+        "required": false,
+        "description": "One or more comma-separated request types.",
+        "style": "form",
+        "explode": false,
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/components/schemas/RequestType" }
+        },
+        "example": ["DATA_ACCESS", "DATA_DELETION"]
+      },
+      "StatusFilter": {
+        "name": "status",
+        "in": "query",
+        "required": false,
+        "description": "One or more comma-separated request statuses.",
+        "style": "form",
+        "explode": false,
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/components/schemas/RequestStatus" }
+        },
+        "example": ["VERIFIED", "PROCESSING"]
+      },
+      "EmailFilter": {
+        "name": "email",
+        "in": "query",
+        "required": false,
+        "description": "Exact normalized email match using the requester email HMAC; records are not decrypted.",
+        "schema": { "type": "string", "format": "email" },
+        "example": "user@example.com"
+      },
+      "PhoneFilter": {
+        "name": "phone",
+        "in": "query",
+        "required": false,
+        "description": "Exact normalized phone match using the requester phone HMAC; records are not decrypted.",
+        "schema": { "type": "string" },
+        "example": "+13055551234"
+      },
+      "CreatedFrom": {
+        "name": "createdFrom",
+        "in": "query",
+        "required": false,
+        "description": "Inclusive ISO-8601 datetime.",
+        "schema": { "type": "string", "format": "date-time" },
+        "example": "2026-07-01T00:00:00Z"
+      },
+      "CreatedTo": {
+        "name": "createdTo",
+        "in": "query",
+        "required": false,
+        "description": "Exclusive ISO-8601 datetime; must be after createdFrom.",
+        "schema": { "type": "string", "format": "date-time" },
+        "example": "2026-08-01T00:00:00Z"
+      },
+      "UpdatedFrom": {
+        "name": "updatedFrom",
+        "in": "query",
+        "required": false,
+        "description": "Inclusive ISO-8601 datetime.",
+        "schema": { "type": "string", "format": "date-time" },
+        "example": "2026-07-01T00:00:00Z"
+      },
+      "UpdatedTo": {
+        "name": "updatedTo",
+        "in": "query",
+        "required": false,
+        "description": "Exclusive ISO-8601 datetime; must be after updatedFrom.",
+        "schema": { "type": "string", "format": "date-time" },
+        "example": "2026-08-01T00:00:00Z"
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Page size.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 25
+        },
+        "example": 25
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque nextCursor from the previous response.",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "RequestType": {
+        "type": "string",
+        "enum": [
+          "DATA_ACCESS",
+          "DATA_DELETION",
+          "DO_NOT_CONTACT",
+          "UNSUBSCRIBE",
+          "GENERAL_INQUIRY"
+        ]
+      },
+      "RequestStatus": {
+        "type": "string",
+        "enum": [
+          "SUBMITTED",
+          "PENDING_VERIFICATION",
+          "VERIFIED",
+          "PROCESSING",
+          "WAITING_FOR_REQUESTER",
+          "SUCCESS",
+          "REJECTED",
+          "CANCELLED"
+        ]
+      },
+      "ActorType": {
+        "type": "string",
+        "enum": [
+          "CONSUMER",
+          "INTERNAL_USER",
+          "ADMIN_USER",
+          "API_CLIENT",
+          "SYSTEM"
+        ]
+      },
+      "Visibility": { "type": "string", "enum": ["PUBLIC", "INTERNAL"] },
+      "JsonObject": { "type": "object", "additionalProperties": true },
+      "Actor": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": { "$ref": "#/components/schemas/ActorType" },
+          "id": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "description": "For API_CLIENT actions, MagicTrust derives actorId from the authenticated client and does not trust this value."
+          }
+        }
+      },
+      "CreateRequestInput": {
+        "type": "object",
+        "required": ["type", "requester", "source", "submittedData"],
+        "properties": {
+          "type": { "$ref": "#/components/schemas/RequestType" },
+          "requester": {
+            "type": "object",
+            "required": ["firstName", "lastName", "email", "phone"],
+            "properties": {
+              "firstName": { "type": "string", "minLength": 1 },
+              "lastName": { "type": "string", "minLength": 1 },
+              "email": { "type": "string", "format": "email" },
+              "phone": { "type": "string", "minLength": 1 }
+            }
+          },
+          "source": {
+            "type": "object",
+            "required": ["channel", "siteKey", "formKey", "sourceUrl"],
+            "properties": {
+              "channel": { "type": "string", "const": "API" },
+              "siteKey": { "type": "string", "minLength": 1 },
+              "formKey": { "type": "string", "minLength": 1 },
+              "sourceUrl": { "type": "string", "format": "uri" }
+            }
+          },
+          "submittedData": { "$ref": "#/components/schemas/JsonObject" }
+        }
+      },
+      "StatusUpdateInput": {
+        "type": "object",
+        "required": ["status", "actor"],
+        "properties": {
+          "status": { "$ref": "#/components/schemas/RequestStatus" },
+          "actor": { "$ref": "#/components/schemas/Actor" },
+          "reason": { "type": ["string", "null"], "minLength": 1 }
+        }
+      },
+      "MutableDataUpdateInput": {
+        "type": "object",
+        "required": ["data", "actor"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/JsonObject" },
+          "actor": { "$ref": "#/components/schemas/Actor" },
+          "reason": { "type": ["string", "null"], "minLength": 1 }
+        }
+      },
+      "CustomEventInput": {
+        "type": "object",
+        "required": ["type", "visibility", "data", "actor"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{2,79}$",
+            "minLength": 3,
+            "maxLength": 80,
+            "description": "Must not be a built-in MagicTrust event name.",
+            "not": {
+              "enum": [
+                "CUSTOM_EVENT",
+                "REQUEST_CREATED",
+                "STATUS_CHANGED",
+                "PUBLIC_COMMENT_ADDED",
+                "INTERNAL_COMMENT_ADDED",
+                "PUBLIC_ATTACHMENT_ADDED",
+                "INTERNAL_ATTACHMENT_ADDED",
+                "ATTACHMENT_DOWNLOADED",
+                "ADMIN_ATTACHMENT_DOWNLOADED",
+                "EMAIL_SENT",
+                "EMAIL_FAILED",
+                "CONSUMER_ACCESS_LINK_SENT",
+                "CONSUMER_ACCESS_TOKEN_USED",
+                "CONSUMER_ACCESS_SESSION_CREATED",
+                "CONSUMER_ACCESS_SESSION_USED",
+                "CONSUMER_ATTACHMENT_DOWNLOADED",
+                "IDENTITY_VERIFICATION_SENT",
+                "IDENTITY_VERIFIED",
+                "CONSUMER_NOTIFICATION_SENT",
+                "CONSUMER_NOTIFICATION_FAILED",
+                "REQUEST_DATA_UPDATED",
+                "REQUEST_ASSIGNED",
+                "REQUEST_UNASSIGNED",
+                "REQUEST_DUE_DATE_SET",
+                "REQUEST_DUE_DATE_UPDATED",
+                "REQUEST_DUE_DATE_CLEARED"
+              ]
+            }
+          },
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "data": { "$ref": "#/components/schemas/JsonObject" },
+          "actor": { "$ref": "#/components/schemas/Actor" }
+        }
+      },
+      "CommentInput": {
+        "type": "object",
+        "required": ["visibility", "body", "actor"],
+        "properties": {
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "body": { "type": "string", "minLength": 1 },
+          "actor": { "$ref": "#/components/schemas/Actor" }
+        }
+      },
+      "AttachmentMetadataInput": {
+        "type": "object",
+        "required": [
+          "visibility",
+          "fileName",
+          "mimeType",
+          "sizeBytes",
+          "storageProvider",
+          "storageKey",
+          "checksum",
+          "actor"
+        ],
+        "properties": {
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "fileName": { "type": "string", "minLength": 1 },
+          "mimeType": { "type": "string", "minLength": 1 },
+          "sizeBytes": { "type": "integer", "minimum": 0 },
+          "storageProvider": { "type": "string", "minLength": 1 },
+          "storageKey": { "type": "string", "minLength": 1 },
+          "checksum": { "type": "string", "minLength": 1 },
+          "actor": { "$ref": "#/components/schemas/Actor" }
+        }
+      },
+      "AttachmentUploadInput": {
+        "type": "object",
+        "required": ["file", "visibility", "actorType"],
+        "properties": {
+          "file": { "type": "string", "format": "binary" },
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "actorType": { "$ref": "#/components/schemas/ActorType" },
+          "actorId": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "description": "For API_CLIENT actions, MagicTrust derives actorId from the authenticated client."
+          }
+        }
+      },
+      "EmailCommunicationInput": {
+        "type": "object",
+        "required": ["to", "subject", "body", "actor"],
+        "properties": {
+          "to": { "type": "string", "format": "email" },
+          "subject": { "type": "string", "minLength": 1 },
+          "body": { "type": "string", "minLength": 1 },
+          "actor": { "$ref": "#/components/schemas/Actor" }
+        }
+      },
+      "ConsumerNotificationInput": {
+        "type": "object",
+        "required": ["type", "message", "actor"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "REQUEST_UPDATED",
+              "REQUEST_COMPLETED",
+              "REQUEST_REJECTED",
+              "FILE_AVAILABLE"
+            ]
+          },
+          "message": { "type": "string", "minLength": 1 },
+          "actor": { "$ref": "#/components/schemas/Actor" }
+        }
+      },
+      "RequestSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "publicId",
+          "type",
+          "status",
+          "requesterId",
+          "createdAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "publicId": { "type": "string", "pattern": "^req_[A-Za-z0-9_-]+$" },
+          "type": { "$ref": "#/components/schemas/RequestType" },
+          "status": { "$ref": "#/components/schemas/RequestStatus" },
+          "requesterId": { "type": "string", "format": "uuid" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "completedAt": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "RequestSummaryResponse": {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+          "request": { "$ref": "#/components/schemas/RequestSummary" }
+        },
+        "additionalProperties": false
+      },
+      "SourceMetadata": {
+        "type": ["object", "null"],
+        "properties": {
+          "channel": { "type": ["string", "null"] },
+          "siteKey": { "type": ["string", "null"] },
+          "formKey": { "type": ["string", "null"] }
+        },
+        "required": ["channel", "siteKey", "formKey"],
+        "additionalProperties": false
+      },
+      "RequestListItem": {
+        "allOf": [
+          { "$ref": "#/components/schemas/RequestSummary" },
+          {
+            "type": "object",
+            "required": ["updatedAt", "completedAt", "source"],
+            "properties": {
+              "updatedAt": { "type": "string", "format": "date-time" },
+              "completedAt": {
+                "type": ["string", "null"],
+                "format": "date-time"
+              },
+              "source": { "$ref": "#/components/schemas/SourceMetadata" }
+            }
+          }
+        ]
+      },
+      "RequestListResponse": {
+        "type": "object",
+        "required": ["requests", "pagination"],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/RequestListItem" }
+          },
+          "pagination": {
+            "type": "object",
+            "required": ["limit"],
+            "properties": {
+              "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+              "nextCursor": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "RequestEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "category",
+          "customType",
+          "visibility",
+          "actorType",
+          "actorId",
+          "data",
+          "createdAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "requestId": { "type": "string", "format": "uuid" },
+          "type": { "type": "string" },
+          "category": { "type": "string", "enum": ["BUILT_IN", "CUSTOM"] },
+          "customType": { "type": ["string", "null"] },
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "actorType": { "$ref": "#/components/schemas/ActorType" },
+          "actorId": { "type": ["string", "null"] },
+          "data": { "$ref": "#/components/schemas/JsonObject" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "EventResponse": {
+        "type": "object",
+        "required": ["event"],
+        "properties": {
+          "event": { "$ref": "#/components/schemas/RequestEvent" }
+        },
+        "additionalProperties": false
+      },
+      "Comment": {
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "visibility",
+          "body",
+          "actorType",
+          "actorId",
+          "createdAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "requestId": { "type": "string", "format": "uuid" },
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "body": { "type": "string" },
+          "actorType": { "$ref": "#/components/schemas/ActorType" },
+          "actorId": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "CommentResponse": {
+        "type": "object",
+        "required": ["comment"],
+        "properties": { "comment": { "$ref": "#/components/schemas/Comment" } },
+        "additionalProperties": false
+      },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "visibility",
+          "fileName",
+          "mimeType",
+          "sizeBytes",
+          "storageProvider",
+          "storageKey",
+          "checksum",
+          "actorType",
+          "actorId",
+          "createdAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "requestId": { "type": "string", "format": "uuid" },
+          "visibility": { "$ref": "#/components/schemas/Visibility" },
+          "fileName": { "type": "string" },
+          "mimeType": { "type": "string" },
+          "sizeBytes": { "type": "integer", "minimum": 0 },
+          "storageProvider": { "type": "string" },
+          "storageKey": { "type": "string" },
+          "checksum": { "type": "string" },
+          "actorType": { "$ref": "#/components/schemas/ActorType" },
+          "actorId": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "AttachmentResponse": {
+        "type": "object",
+        "required": ["attachment"],
+        "properties": {
+          "attachment": { "$ref": "#/components/schemas/Attachment" }
+        },
+        "additionalProperties": false
+      },
+      "Communication": {
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "channel",
+          "direction",
+          "recipientMasked",
+          "subject",
+          "provider",
+          "providerMessageId",
+          "status",
+          "errorMessage",
+          "actorType",
+          "actorId",
+          "createdAt",
+          "sentAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "requestId": { "type": "string", "format": "uuid" },
+          "channel": { "type": "string", "enum": ["EMAIL"] },
+          "direction": { "type": "string", "enum": ["OUTBOUND"] },
+          "recipientMasked": {
+            "type": ["string", "null"],
+            "example": "j***n@example.com"
+          },
+          "subject": { "type": "string" },
+          "provider": { "type": "string" },
+          "providerMessageId": { "type": ["string", "null"] },
+          "status": { "type": "string", "enum": ["PENDING", "SENT", "FAILED"] },
+          "errorMessage": { "type": ["string", "null"] },
+          "actorType": { "$ref": "#/components/schemas/ActorType" },
+          "actorId": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "sentAt": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "CommunicationResponse": {
+        "type": "object",
+        "required": ["communication"],
+        "properties": {
+          "communication": { "$ref": "#/components/schemas/Communication" }
+        },
+        "additionalProperties": false
+      },
+      "RequestDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/RequestSummary" },
+          {
+            "type": "object",
+            "required": [
+              "mutableData",
+              "events",
+              "comments",
+              "attachments",
+              "communications"
+            ],
+            "properties": {
+              "mutableData": { "$ref": "#/components/schemas/JsonObject" },
+              "events": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/RequestEvent" }
+              },
+              "comments": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Comment" }
+              },
+              "attachments": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Attachment" }
+              },
+              "communications": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Communication" }
+              }
+            }
+          }
+        ]
+      },
+      "RequestDetailResponse": {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+          "request": { "$ref": "#/components/schemas/RequestDetail" }
+        },
+        "additionalProperties": false
+      },
+      "ProcessingRequester": {
+        "type": "object",
+        "required": ["firstName", "lastName", "email", "phone"],
+        "properties": {
+          "firstName": { "type": ["string", "null"] },
+          "lastName": { "type": ["string", "null"] },
+          "email": { "type": ["string", "null"], "format": "email" },
+          "phone": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "ProcessingFormProvenance": {
+        "type": "object",
+        "required": ["publicId", "versionNumber"],
+        "properties": {
+          "publicId": { "type": ["string", "null"] },
+          "versionNumber": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProcessingData": {
+        "type": "object",
+        "required": [
+          "id",
+          "publicId",
+          "type",
+          "status",
+          "requester",
+          "originalSubmittedData",
+          "form"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "publicId": { "type": "string" },
+          "type": { "$ref": "#/components/schemas/RequestType" },
+          "status": { "$ref": "#/components/schemas/RequestStatus" },
+          "requester": {
+            "$ref": "#/components/schemas/ProcessingRequester"
+          },
+          "originalSubmittedData": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/JsonObject" },
+              { "type": "null" }
+            ]
+          },
+          "form": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/ProcessingFormProvenance" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProcessingDataResponse": {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+          "request": { "$ref": "#/components/schemas/ProcessingData" }
+        },
+        "additionalProperties": false
+      },
+      "MutableDataResponse": {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+          "request": {
+            "type": "object",
+            "required": ["mutableData", "updatedAt"],
+            "properties": {
+              "mutableData": { "$ref": "#/components/schemas/JsonObject" },
+              "updatedAt": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "$ref": "#/components/schemas/Error" } },
+        "additionalProperties": false
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Validation failed, Idempotency-Key is missing, or the storage provider is unsupported.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "examples": {
+              "validation": {
+                "value": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request payload is invalid."
+                  }
+                }
+              },
+              "idempotencyRequired": {
+                "value": {
+                  "error": {
+                    "code": "IDEMPOTENCY_KEY_REQUIRED",
+                    "message": "Idempotency-Key header is required."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "The x-api-key header is missing or invalid.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": {
+              "error": {
+                "code": "UNAUTHORIZED",
+                "message": "Missing or invalid API key."
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The API client lacks the required scope.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": {
+              "error": {
+                "code": "FORBIDDEN",
+                "message": "API client is not authorized for this operation."
+              }
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The request or related attachment was not found.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": {
+              "error": { "code": "NOT_FOUND", "message": "Request not found." }
+            }
+          }
+        }
+      },
+      "IdempotencyConflict": {
+        "description": "The Idempotency-Key was already used for a different request.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": {
+              "error": {
+                "code": "IDEMPOTENCY_KEY_REUSED",
+                "message": "Idempotency-Key was already used for a different request."
+              }
+            }
+          }
+        }
+      },
+      "NotificationUnavailable": {
+        "description": "The requester email is unavailable.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": {
+              "error": {
+                "code": "NOTIFICATION_UNAVAILABLE",
+                "message": "Requester email is unavailable."
+              }
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "The request could not be processed.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": {
+              "error": {
+                "code": "INTERNAL_ERROR",
+                "message": "Request could not be processed."
+              }
+            }
+          }
+        }
+      },
+      "CommunicationSent": {
+        "description": "Communication sent.",
+        "headers": {
+          "Idempotency-Replayed": {
+            "$ref": "#/components/headers/IdempotencyReplayed"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/CommunicationResponse" },
+            "example": {
+              "communication": {
+                "id": "2ba73280-19b0-45d2-a7f8-f531d09530d2",
+                "requestId": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                "channel": "EMAIL",
+                "direction": "OUTBOUND",
+                "recipientMasked": "j***n@example.com",
+                "subject": "Your MagicTrust request was updated",
+                "provider": "resend",
+                "providerMessageId": "provider-message-example",
+                "status": "SENT",
+                "errorMessage": null,
+                "actorType": "API_CLIENT",
+                "actorId": "a0fe9225-46dc-45cf-bbb4-84c8fab92cd2",
+                "createdAt": "2026-07-19T13:00:00.000Z",
+                "sentAt": "2026-07-19T13:00:01.000Z"
+              }
+            }
+          }
+        }
+      },
+      "CommunicationFailed": {
+        "description": "The communication record was created but the email provider failed. The response is communication metadata, not a generic error object.",
+        "headers": {
+          "Idempotency-Replayed": {
+            "$ref": "#/components/headers/IdempotencyReplayed"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/CommunicationResponse" },
+            "example": {
+              "communication": {
+                "id": "2ba73280-19b0-45d2-a7f8-f531d09530d2",
+                "requestId": "4f767ea2-2c32-4efd-903e-d793f3c64fc8",
+                "channel": "EMAIL",
+                "direction": "OUTBOUND",
+                "recipientMasked": "j***n@example.com",
+                "subject": "Your MagicTrust request was updated",
+                "provider": "resend",
+                "providerMessageId": null,
+                "status": "FAILED",
+                "errorMessage": "Email provider failed to send the message.",
+                "actorType": "API_CLIENT",
+                "actorId": "a0fe9225-46dc-45cf-bbb4-84c8fab92cd2",
+                "createdAt": "2026-07-19T13:00:00.000Z",
+                "sentAt": null
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

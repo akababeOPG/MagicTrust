@@ -7,6 +7,7 @@ import { Pool } from "@neondatabase/serverless";
 
 const allowedScopes = new Set([
   "requests:read",
+  "requests:processing-data:read",
   "requests:create",
   "requests:update",
   "comments:write",

@@ -4,6 +4,7 @@ import {
   actorTypes,
   commentVisibilities,
   createPrivacyRequest,
+  decryptOriginalSubmittedData,
   requestStatuses,
   requestTypes,
 } from "@magictrust/domain";
@@ -16,11 +17,13 @@ import type {
   RequestType,
 } from "@magictrust/domain";
 import type {
+  AdminRequestSensitiveData,
   ApiClientScope,
   ApiClientStore,
   AuthenticatedApiClient,
   ApiIdempotencyStore,
   RequestListFilters,
+  RequestDetails,
   RequestRepository,
 } from "@magictrust/database";
 import type { EmailProvider } from "@magictrust/email";
@@ -275,6 +278,49 @@ export function createInternalRequestApi(
           ),
         },
       });
+    },
+
+    async getProcessingData(request: Request, id: string): Promise<Response> {
+      const auth = await authorize(
+        request,
+        dependencies,
+        "requests:processing-data:read",
+      );
+
+      if (auth.response) {
+        return privateNoStore(auth.response);
+      }
+
+      try {
+        const existingRequest =
+          await dependencies.requestRepository.findByIdOrPublicId(id);
+
+        if (!existingRequest) {
+          return privateNoStore(notFound());
+        }
+
+        const sensitive =
+          await dependencies.requestRepository.findAdminSensitiveData(
+            existingRequest.publicId,
+          );
+        const originalSubmittedData = sensitive?.submittedDataEncrypted
+          ? decryptOriginalSubmittedData({
+              submittedDataEncrypted: sensitive.submittedDataEncrypted,
+            })
+          : null;
+
+        return privateNoStore(
+          Response.json({
+            request: normalizeProcessingData(
+              existingRequest,
+              sensitive,
+              originalSubmittedData,
+            ),
+          }),
+        );
+      } catch {
+        return privateNoStore(serverError());
+      }
     },
 
     async list(request: Request): Promise<Response> {
@@ -1712,6 +1758,12 @@ function unsupportedStorageProvider(): Response {
   );
 }
 
+function privateNoStore(response: Response): Response {
+  response.headers.set("cache-control", "private, no-store, max-age=0");
+
+  return response;
+}
+
 function normalizeRequestSummary(
   request: {
     id: string;
@@ -1788,6 +1840,92 @@ function normalizeCommunicationMetadata(communication: RequestCommunication) {
     createdAt: communication.createdAt.toISOString(),
     sentAt: communication.sentAt?.toISOString() ?? null,
   };
+}
+
+function normalizeProcessingData(
+  request: Pick<RequestDetails, "id" | "publicId" | "type" | "status">,
+  sensitive: AdminRequestSensitiveData | null,
+  originalSubmittedData: JsonObject | null,
+) {
+  const originalRequester = jsonObjectValue(originalSubmittedData?.requester);
+  const originalSource = jsonObjectValue(originalSubmittedData?.source);
+  const encryptedName = decryptRequesterName(
+    sensitive?.requesterNameEncrypted ?? null,
+  );
+  const formPublicId = stringValue(originalSource?.formPublicId);
+  const formVersionNumber = positiveIntegerValue(
+    originalSource?.formVersionNumber,
+  );
+
+  return {
+    id: request.id,
+    publicId: request.publicId,
+    type: request.type,
+    status: request.status,
+    requester: {
+      firstName:
+        stringValue(originalRequester?.firstName) ??
+        encryptedName?.firstName ??
+        null,
+      lastName:
+        stringValue(originalRequester?.lastName) ??
+        encryptedName?.lastName ??
+        null,
+      email:
+        decryptOptionalPii(sensitive?.requesterEmailEncrypted ?? null) ??
+        stringValue(originalRequester?.email),
+      phone:
+        decryptOptionalPii(sensitive?.requesterPhoneEncrypted ?? null) ??
+        stringValue(originalRequester?.phone),
+    },
+    originalSubmittedData,
+    form:
+      formPublicId || formVersionNumber
+        ? {
+            publicId: formPublicId,
+            versionNumber: formVersionNumber,
+          }
+        : null,
+  };
+}
+
+function decryptOptionalPii(value: string | null): string | null {
+  return value ? decryptPii(value) : null;
+}
+
+function decryptRequesterName(
+  value: string | null,
+): { firstName: string | null; lastName: string | null } | null {
+  const decrypted = decryptOptionalPii(value);
+
+  if (!decrypted) {
+    return null;
+  }
+
+  const name = jsonObjectValue(JSON.parse(decrypted));
+
+  return name
+    ? {
+        firstName: stringValue(name.firstName),
+        lastName: stringValue(name.lastName),
+      }
+    : null;
+}
+
+function jsonObjectValue(value: JsonValue | undefined): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+function stringValue(value: JsonValue | undefined): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function positiveIntegerValue(value: JsonValue | undefined): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
 }
 
 function maskEmailAddress(value: string | null): string | null {

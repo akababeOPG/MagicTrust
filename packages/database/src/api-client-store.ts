@@ -9,6 +9,7 @@ type Database = ReturnType<typeof createDatabase>;
 
 export const apiClientScopesList = [
   "requests:read",
+  "requests:processing-data:read",
   "requests:create",
   "requests:update",
   "comments:write",
