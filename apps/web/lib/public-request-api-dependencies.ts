@@ -49,6 +49,9 @@ export function getPublicRequestApiDependencies(
         clearRequestDueDate() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },
+        transitionToProcessing() {
+          throw new Error("DATABASE_URL is required for public request APIs.");
+        },
         updateStatus() {
           throw new Error("DATABASE_URL is required for public request APIs.");
         },

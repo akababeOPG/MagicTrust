@@ -1750,6 +1750,9 @@ function createInMemoryDependencies(
     async clearRequestDueDate() {
       return { ok: false, code: "NOT_FOUND" };
     },
+    async transitionToProcessing() {
+      return { ok: false, code: "NOT_FOUND" };
+    },
     async findAdminSensitiveData() {
       return null;
     },

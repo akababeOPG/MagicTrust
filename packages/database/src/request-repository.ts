@@ -47,6 +47,7 @@ import {
 import { createRequestEventAndEnqueueWebhooks } from "./webhooks";
 
 type Database = ReturnType<typeof createDatabase>;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export type RequestSummary = {
   id: string;
@@ -192,6 +193,10 @@ export type RequestRepository = {
     id: string,
     actor: AdminRequestAssignmentActor,
   ): Promise<RequestDueDateMutationResult>;
+  transitionToProcessing(
+    id: string,
+    input: TransitionRequestToProcessingInput,
+  ): Promise<TransitionRequestToProcessingResult>;
   updateStatus(
     id: string,
     input: UpdateRequestStatusInput,
@@ -297,6 +302,23 @@ export type RequestAssignmentMutationResult =
 export type RequestDueDateMutationResult =
   | { ok: true; request: RequestSummary; changed: boolean }
   | { ok: false; code: "NOT_FOUND" | "FORBIDDEN" };
+
+export type TransitionRequestToProcessingInput = {
+  expectedStatus: RequestStatus;
+  actor: AdminRequestAssignmentActor;
+  reason: string;
+};
+
+export type TransitionRequestToProcessingResult =
+  | { ok: true; request: RequestSummary; assigned: boolean }
+  | {
+      ok: false;
+      code:
+        | "NOT_FOUND"
+        | "ASSIGNED_TO_ANOTHER_USER"
+        | "ACTOR_NOT_ASSIGNABLE"
+        | "STATUS_CHANGED";
+    };
 
 export type UpdateRequestStatusInput = {
   status: RequestStatus;
@@ -821,17 +843,7 @@ export function createRequestRepository(db: Database): RequestRepository {
     },
     async assignRequest(id, assigneeId, actor) {
       return db.transaction(async (tx) => {
-        const [assignee] = await tx
-          .select({ id: adminUsers.id })
-          .from(adminUsers)
-          .where(
-            and(
-              eq(adminUsers.id, assigneeId),
-              eq(adminUsers.active, true),
-              inArray(adminUsers.role, ["ADMIN", "OPERATOR"]),
-            ),
-          )
-          .limit(1);
+        const assignee = await findActiveAssignableAdminUser(tx, assigneeId);
 
         if (!assignee) {
           return { ok: false, code: "ASSIGNEE_NOT_FOUND" };
@@ -860,28 +872,13 @@ export function createRequestRepository(db: Database): RequestRepository {
           return { ok: true, request, changed: false };
         }
 
-        const now = new Date();
-        const [updated] = await tx
-          .update(privacyRequests)
-          .set({
-            assignedToAdminUserId: assigneeId,
-            assignedAt: now,
-            assignedByAdminUserId: actor.id,
-            updatedAt: now,
-          })
-          .where(eq(privacyRequests.id, request.id))
-          .returning(requestSummarySelection);
-
-        await createRequestEventAndEnqueueWebhooks(tx, {
-          privacyRequestId: request.id,
-          type: "REQUEST_ASSIGNED",
-          actorType: "ADMIN_USER",
-          actorId: actor.id,
-          data: {
-            assignedToAdminUserId: assigneeId,
-            assignedByAdminUserId: actor.id,
-          },
-        });
+        const updated = await assignLockedRequest(
+          tx,
+          request,
+          assigneeId,
+          actor.id,
+          new Date(),
+        );
 
         return { ok: true, request: updated, changed: true };
       });
@@ -1024,65 +1021,75 @@ export function createRequestRepository(db: Database): RequestRepository {
         return { ok: true, request: updated, changed: true };
       });
     },
-    async updateStatus(id, input) {
+    async transitionToProcessing(id, input) {
       return db.transaction(async (tx) => {
         const [request] = await tx
-          .select({
-            id: privacyRequests.id,
-            publicId: privacyRequests.publicId,
-            requesterId: privacyRequests.requesterId,
-            type: privacyRequests.type,
-            status: privacyRequests.status,
-            completedAt: privacyRequests.completedAt,
-            createdAt: privacyRequests.createdAt,
-            updatedAt: privacyRequests.updatedAt,
-          })
+          .select(requestSummarySelection)
           .from(privacyRequests)
           .where(requestIdentifierCondition(id))
-          .limit(1);
+          .limit(1)
+          .for("update");
 
-        if (!request) {
-          return null;
+        if (!request) return { ok: false, code: "NOT_FOUND" };
+        if (request.status !== input.expectedStatus) {
+          return { ok: false, code: "STATUS_CHANGED" };
+        }
+        if (
+          request.assignedToAdminUserId !== null &&
+          request.assignedToAdminUserId !== input.actor.id
+        ) {
+          return { ok: false, code: "ASSIGNED_TO_ANOTHER_USER" };
+        }
+        if (input.actor.role === "VIEWER") {
+          return { ok: false, code: "ACTOR_NOT_ASSIGNABLE" };
         }
 
         const now = new Date();
-        const completedAt = isTerminalStatus(input.status) ? now : null;
-        const [updatedRequest] = await tx
-          .update(privacyRequests)
-          .set({
-            status: input.status,
-            completedAt,
-            updatedAt: now,
-          })
-          .where(eq(privacyRequests.id, request.id))
-          .returning({
-            id: privacyRequests.id,
-            publicId: privacyRequests.publicId,
-            requesterId: privacyRequests.requesterId,
-            type: privacyRequests.type,
-            status: privacyRequests.status,
-            completedAt: privacyRequests.completedAt,
-            createdAt: privacyRequests.createdAt,
-            updatedAt: privacyRequests.updatedAt,
-          });
+        let processingRequest: RequestSummary = request;
+        let assigned = false;
 
-        await createRequestEventAndEnqueueWebhooks(tx, {
-          privacyRequestId: request.id,
-          type: "STATUS_CHANGED",
-          actorType: input.actorType,
-          actorId: input.actorId,
-          data: {
-            previousStatus: request.status,
-            newStatus: input.status,
+        if (request.assignedToAdminUserId === null) {
+          const actor = await findActiveAssignableAdminUser(tx, input.actor.id);
+
+          if (!actor) return { ok: false, code: "ACTOR_NOT_ASSIGNABLE" };
+
+          processingRequest = await assignLockedRequest(
+            tx,
+            request,
+            input.actor.id,
+            input.actor.id,
+            now,
+          );
+          assigned = true;
+        }
+
+        const updatedRequest = await updateLockedRequestStatus(
+          tx,
+          processingRequest,
+          {
+            status: "PROCESSING",
+            actorType: "ADMIN_USER",
+            actorId: input.actor.id,
             reason: input.reason,
-            actor: {
-              type: input.actorType,
-              id: input.actorId,
-            },
           },
-        });
+          now,
+        );
 
-        return updatedRequest;
+        return { ok: true, request: updatedRequest, assigned };
+      });
+    },
+    async updateStatus(id, input) {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select(requestSummarySelection)
+          .from(privacyRequests)
+          .where(requestIdentifierCondition(id))
+          .limit(1)
+          .for("update");
+
+        if (!request) return null;
+
+        return updateLockedRequestStatus(tx, request, input, new Date());
       });
     },
     async updateMutableData(id, input) {
@@ -1896,6 +1903,96 @@ export function createRequestRepository(db: Database): RequestRepository {
       });
     },
   };
+}
+
+async function findActiveAssignableAdminUser(
+  tx: Transaction,
+  adminUserId: string,
+): Promise<{ id: string } | null> {
+  const [adminUser] = await tx
+    .select({ id: adminUsers.id })
+    .from(adminUsers)
+    .where(
+      and(
+        eq(adminUsers.id, adminUserId),
+        eq(adminUsers.active, true),
+        inArray(adminUsers.role, ["ADMIN", "OPERATOR"]),
+      ),
+    )
+    .limit(1);
+
+  return adminUser ?? null;
+}
+
+async function assignLockedRequest(
+  tx: Transaction,
+  request: RequestSummary,
+  assigneeId: string,
+  actorId: string,
+  now: Date,
+): Promise<RequestSummary> {
+  const [updated] = await tx
+    .update(privacyRequests)
+    .set({
+      assignedToAdminUserId: assigneeId,
+      assignedAt: now,
+      assignedByAdminUserId: actorId,
+      updatedAt: now,
+    })
+    .where(eq(privacyRequests.id, request.id))
+    .returning(requestSummarySelection);
+
+  if (!updated) throw new Error("REQUEST_ASSIGNMENT_UPDATE_FAILED");
+
+  await createRequestEventAndEnqueueWebhooks(tx, {
+    privacyRequestId: request.id,
+    type: "REQUEST_ASSIGNED",
+    actorType: "ADMIN_USER",
+    actorId,
+    data: {
+      assignedToAdminUserId: assigneeId,
+      assignedByAdminUserId: actorId,
+    },
+  });
+
+  return updated;
+}
+
+async function updateLockedRequestStatus(
+  tx: Transaction,
+  request: RequestSummary,
+  input: UpdateRequestStatusInput,
+  now: Date,
+): Promise<RequestSummary> {
+  const [updated] = await tx
+    .update(privacyRequests)
+    .set({
+      status: input.status,
+      completedAt: isTerminalStatus(input.status) ? now : null,
+      updatedAt: now,
+    })
+    .where(eq(privacyRequests.id, request.id))
+    .returning(requestSummarySelection);
+
+  if (!updated) throw new Error("REQUEST_STATUS_UPDATE_FAILED");
+
+  await createRequestEventAndEnqueueWebhooks(tx, {
+    privacyRequestId: request.id,
+    type: "STATUS_CHANGED",
+    actorType: input.actorType,
+    actorId: input.actorId,
+    data: {
+      previousStatus: request.status,
+      newStatus: input.status,
+      reason: input.reason,
+      actor: {
+        type: input.actorType,
+        id: input.actorId,
+      },
+    },
+  });
+
+  return updated;
 }
 
 const requestSummarySelection = {

@@ -5,6 +5,7 @@ import type {
   RequestCommunication,
   RequestEvent,
   RequestAccessToken,
+  RequestStatus,
   PrivacyRequest,
 } from "@magictrust/domain";
 import { deriveRequestSlaState, getRequestNextStep } from "@magictrust/domain";
@@ -1970,8 +1971,16 @@ describe("admin dashboard", () => {
 
     expect(response.status).toBe(303);
     expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(dependencies.state.assignments.get("request-one")).toMatchObject({
+      assignedToAdminUserId: "admin-user-1",
+      assignedByAdminUserId: "admin-user-1",
+    });
     expect(dependencies.state.events).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          type: "REQUEST_ASSIGNED",
+          actorId: "admin-user-1",
+        }),
         expect.objectContaining({
           type: "STATUS_CHANGED",
           actorType: "ADMIN_USER",
@@ -1982,6 +1991,86 @@ describe("admin dashboard", () => {
         }),
       ]),
     );
+  });
+
+  test("guided start processing preserves ownership when already assigned to the actor", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "VERIFIED";
+    dependencies.state.assignments.set("request-one", {
+      assignedToAdminUserId: "admin-user-1",
+      assignedAt: new Date("2026-07-02T00:00:00.000Z"),
+      assignedByAdminUserId: "admin-user-1",
+    });
+
+    const response = await startAdminRequestProcessing(
+      guidedRequest("start-processing"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(dependencies.state.requests[0]?.status).toBe("PROCESSING");
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_ASSIGNED",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("guided start processing blocks ownership assigned to another user", async () => {
+    const dependencies = createInMemoryDependencies();
+    dependencies.state.requests[0]!.status = "VERIFIED";
+    dependencies.state.assignments.set("request-one", {
+      assignedToAdminUserId: "other-admin-user",
+      assignedAt: new Date("2026-07-02T00:00:00.000Z"),
+      assignedByAdminUserId: "other-admin-user",
+    });
+
+    const response = await startAdminRequestProcessing(
+      guidedRequest("start-processing"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "assigned+to+another+user",
+    );
+    expect(dependencies.state.requests[0]?.status).toBe("VERIFIED");
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.type === "REQUEST_ASSIGNED" || event.type === "STATUS_CHANGED",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("guided processing does not partially assign when request status changes", async () => {
+    const dependencies = createInMemoryDependencies({
+      processingStatusBeforeTransition: "CANCELLED",
+    });
+    dependencies.state.requests[0]!.status = "VERIFIED";
+
+    const response = await startAdminRequestProcessing(
+      guidedRequest("start-processing"),
+      "req_one",
+      adminSession(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "request+changed+before+processing",
+    );
+    expect(dependencies.state.assignments.has("request-one")).toBe(false);
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.type === "REQUEST_ASSIGNED" || event.type === "STATUS_CHANGED",
+      ),
+    ).toHaveLength(0);
   });
 
   test("DIRECT_PROCESSING starts a submitted simple request", async () => {
@@ -2157,9 +2246,18 @@ describe("admin dashboard", () => {
 
     expect(response.status).toBe(303);
     expect(request.status).toBe("PROCESSING");
+    expect(dependencies.state.assignments.get(request.id)).toMatchObject({
+      assignedToAdminUserId: "admin-user-1",
+      assignedByAdminUserId: "admin-user-1",
+    });
     expect(dependencies.state.sentEmails).toHaveLength(0);
     expect(dependencies.state.events).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          type: "REQUEST_ASSIGNED",
+          actorType: "ADMIN_USER",
+          actorId: "admin-user-1",
+        }),
         expect.objectContaining({
           type: "STATUS_CHANGED",
           actorType: "ADMIN_USER",
@@ -2171,6 +2269,64 @@ describe("admin dashboard", () => {
         }),
       ]),
     );
+  });
+
+  test("CONVERSATIONAL_PROCESSING resumes when already owned without reassigning", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "WAITING_FOR_REQUESTER";
+    dependencies.state.assignments.set(request.id, {
+      assignedToAdminUserId: "admin-user-1",
+      assignedAt: new Date("2026-07-02T00:00:00.000Z"),
+      assignedByAdminUserId: "admin-user-1",
+    });
+
+    const response = await resumeAdminRequestProcessing(
+      guidedRequest("resume-processing"),
+      "req_one",
+      adminSession({ role: "OPERATOR" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(request.status).toBe("PROCESSING");
+    expect(
+      dependencies.state.events.filter(
+        (event) => event.type === "REQUEST_ASSIGNED",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("CONVERSATIONAL_PROCESSING blocks resume when owned by another user", async () => {
+    const dependencies = createInMemoryDependencies();
+    const request = dependencies.state.requests[0]!;
+    request.type = "GENERAL_INQUIRY";
+    request.status = "WAITING_FOR_REQUESTER";
+    dependencies.state.assignments.set(request.id, {
+      assignedToAdminUserId: "other-admin-user",
+      assignedAt: new Date("2026-07-02T00:00:00.000Z"),
+      assignedByAdminUserId: "other-admin-user",
+    });
+
+    const response = await resumeAdminRequestProcessing(
+      guidedRequest("resume-processing"),
+      "req_one",
+      adminSession({ role: "OPERATOR" }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain(
+      "assigned+to+another+user",
+    );
+    expect(request.status).toBe("WAITING_FOR_REQUESTER");
+    expect(
+      dependencies.state.events.filter(
+        (event) =>
+          event.type === "REQUEST_ASSIGNED" || event.type === "STATUS_CHANGED",
+      ),
+    ).toHaveLength(0);
   });
 
   test("CONVERSATIONAL_PROCESSING completion notifies, keeps its note internal, and succeeds", async () => {
@@ -2809,6 +2965,7 @@ function createInMemoryDependencies(
   options: {
     emailShouldFail?: boolean;
     requesterEmailEncrypted?: string | null;
+    processingStatusBeforeTransition?: RequestStatus;
   } = {},
 ) {
   const createdAtOne = new Date("2026-07-01T00:00:00.000Z");
@@ -3006,6 +3163,7 @@ function createInMemoryDependencies(
     assignments,
     sensitiveReads: 0,
     emailShouldFail: options.emailShouldFail ?? false,
+    processingStatusBeforeTransition: options.processingStatusBeforeTransition,
     uploadedFiles: [] as Array<{
       storageKey: string;
       contentType: string;
@@ -3396,6 +3554,79 @@ function createInMemoryDependencies(
       return {
         ok: true,
         changed: true,
+        request: summaryFromPrivacyRequest(request, assignments),
+      };
+    },
+    async transitionToProcessing(id, input) {
+      const request = requests.find(
+        (item) => item.id === id || item.publicId === id,
+      );
+
+      if (!request) return { ok: false, code: "NOT_FOUND" };
+
+      if (state.processingStatusBeforeTransition) {
+        request.status = state.processingStatusBeforeTransition;
+      }
+
+      if (request.status !== input.expectedStatus) {
+        return { ok: false, code: "STATUS_CHANGED" };
+      }
+
+      const current = assignments.get(request.id);
+
+      if (current && current.assignedToAdminUserId !== input.actor.id) {
+        return { ok: false, code: "ASSIGNED_TO_ANOTHER_USER" };
+      }
+
+      if (input.actor.role === "VIEWER") {
+        return { ok: false, code: "ACTOR_NOT_ASSIGNABLE" };
+      }
+
+      const now = new Date("2026-07-03T00:00:00.000Z");
+      const assigned = !current;
+
+      if (assigned) {
+        assignments.set(request.id, {
+          assignedToAdminUserId: input.actor.id,
+          assignedAt: now,
+          assignedByAdminUserId: input.actor.id,
+        });
+        events.push({
+          id: `event-assigned-${events.length + 1}`,
+          privacyRequestId: request.id,
+          type: "REQUEST_ASSIGNED",
+          actorType: "ADMIN_USER",
+          actorId: input.actor.id,
+          data: {
+            assignedToAdminUserId: input.actor.id,
+            assignedByAdminUserId: input.actor.id,
+          },
+          createdAt: now,
+        });
+      }
+
+      const previousStatus = request.status;
+      request.status = "PROCESSING";
+      request.updatedAt = now;
+      request.completedAt = null;
+      events.push({
+        id: `event-status-${events.length + 1}`,
+        privacyRequestId: request.id,
+        type: "STATUS_CHANGED",
+        actorType: "ADMIN_USER",
+        actorId: input.actor.id,
+        data: {
+          previousStatus,
+          newStatus: "PROCESSING",
+          reason: input.reason,
+          actor: { type: "ADMIN_USER", id: input.actor.id },
+        },
+        createdAt: now,
+      });
+
+      return {
+        ok: true,
+        assigned,
         request: summaryFromPrivacyRequest(request, assignments),
       };
     },

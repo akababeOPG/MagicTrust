@@ -890,6 +890,18 @@ export async function startAdminRequestProcessing(
     return actionError("NOT_FOUND", "Request not found.", 404);
   }
 
+  if (
+    existing.assignedToAdminUserId !== null &&
+    existing.assignedToAdminUserId !== undefined &&
+    existing.assignedToAdminUserId !== adminSession.adminUserId
+  ) {
+    return processingTransitionFailureResponse(
+      request,
+      publicId,
+      "ASSIGNED_TO_ANOTHER_USER",
+    );
+  }
+
   if (existing.status === "PROCESSING") {
     return redirectToRequestDetail(request, publicId, {
       success: "Processing has already started.",
@@ -905,15 +917,49 @@ export async function startAdminRequestProcessing(
     });
   }
 
-  await dependencies.requestRepository.updateStatus(existing.id, {
-    status: "PROCESSING",
-    actorType: "ADMIN_USER",
-    actorId: adminSession.adminUserId,
-    reason: "Processing started from admin dashboard",
-  });
+  const result = await dependencies.requestRepository.transitionToProcessing(
+    existing.id,
+    {
+      expectedStatus: existing.status,
+      actor: {
+        id: adminSession.adminUserId,
+        role: adminSession.role,
+      },
+      reason: "Processing started from admin dashboard",
+    },
+  );
+
+  if (!result.ok) {
+    return processingTransitionFailureResponse(request, publicId, result.code);
+  }
 
   return redirectToRequestDetail(request, publicId, {
     success: "Processing started.",
+  });
+}
+
+function processingTransitionFailureResponse(
+  request: Request,
+  publicId: string,
+  code:
+    | "NOT_FOUND"
+    | "ASSIGNED_TO_ANOTHER_USER"
+    | "ACTOR_NOT_ASSIGNABLE"
+    | "STATUS_CHANGED",
+): Response {
+  if (code === "NOT_FOUND") {
+    return actionError("NOT_FOUND", "Request not found.", 404);
+  }
+
+  if (code === "ACTOR_NOT_ASSIGNABLE") {
+    return actionError("FORBIDDEN", "You cannot process this request.", 403);
+  }
+
+  return redirectToRequestDetail(request, publicId, {
+    error:
+      code === "ASSIGNED_TO_ANOTHER_USER"
+        ? "This request is assigned to another user."
+        : "The request changed before processing could start. Try again.",
   });
 }
 
@@ -1057,6 +1103,18 @@ export async function resumeAdminRequestProcessing(
   }
 
   if (
+    existing.assignedToAdminUserId !== null &&
+    existing.assignedToAdminUserId !== undefined &&
+    existing.assignedToAdminUserId !== adminSession.adminUserId
+  ) {
+    return processingTransitionFailureResponse(
+      request,
+      publicId,
+      "ASSIGNED_TO_ANOTHER_USER",
+    );
+  }
+
+  if (
     existing.status === "PROCESSING" &&
     existing.events.some(
       (event) =>
@@ -1081,18 +1139,20 @@ export async function resumeAdminRequestProcessing(
     });
   }
 
-  const updated = await dependencies.requestRepository.updateStatus(
+  const result = await dependencies.requestRepository.transitionToProcessing(
     existing.id,
     {
-      status: "PROCESSING",
-      actorType: "ADMIN_USER",
-      actorId: adminSession.adminUserId,
+      expectedStatus: existing.status,
+      actor: {
+        id: adminSession.adminUserId,
+        role: adminSession.role,
+      },
       reason: "Processing resumed from admin dashboard",
     },
   );
 
-  if (!updated) {
-    return actionError("NOT_FOUND", "Request not found.", 404);
+  if (!result.ok) {
+    return processingTransitionFailureResponse(request, publicId, result.code);
   }
 
   return redirectToRequestDetail(request, publicId, {
@@ -3359,6 +3419,9 @@ function missingDatabaseRequestRepository(): RequestRepository {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     clearRequestDueDate() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    transitionToProcessing() {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     updateStatus() {
