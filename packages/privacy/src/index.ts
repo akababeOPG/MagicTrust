@@ -102,6 +102,24 @@ export function normalizeEmailForHash(value: string): string {
   return value.trim().toLowerCase();
 }
 
+export function hashEmail(value: string): string {
+  return hashPii(normalizeEmailForHash(value));
+}
+
+export function prepareProtectedEmail(value: string): {
+  normalizedEmail: string;
+  emailEncrypted: string;
+  emailHash: string;
+} {
+  const normalizedEmail = normalizeEmailForHash(value);
+
+  return {
+    normalizedEmail,
+    emailEncrypted: encryptPii(normalizedEmail),
+    emailHash: hashEmail(normalizedEmail),
+  };
+}
+
 export function normalizePhoneForHash(value: string): string {
   return value.trim().replace(/[\s\-()]/g, "");
 }

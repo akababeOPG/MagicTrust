@@ -18,9 +18,9 @@ import {
 import type { EmailProvider } from "@magictrust/email";
 import { createResendEmailProvider } from "@magictrust/email";
 import {
+  hashEmail,
   hashAdminLoginToken,
   hashAdminSessionToken,
-  hashPii,
   normalizeEmailForHash,
 } from "@magictrust/privacy";
 import { cookies } from "next/headers";
@@ -47,7 +47,7 @@ export type AdminSession = {
 };
 
 const requestLoginLinkSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
 });
 
 const genericLoginResponse = {
@@ -94,7 +94,7 @@ export function createAdminAuthService(dependencies: AdminAuthDependencies) {
       const normalizedEmail = normalizeEmailForHash(parsed.data.email);
       const adminUser =
         await dependencies.adminAuthStore.findActiveAdminUserByEmailHash(
-          hashPii(normalizedEmail),
+          hashEmail(normalizedEmail),
         );
 
       if (!adminUser) {
@@ -114,17 +114,21 @@ export function createAdminAuthService(dependencies: AdminAuthDependencies) {
 
       const magicLink = `${dependencies.appBaseUrl.replace(/\/$/, "")}/admin/auth/verify?token=${encodeURIComponent(token)}`;
 
-      await dependencies.emailProvider.sendEmail({
-        to: normalizedEmail,
-        subject: "Your MagicTrust admin login link",
-        body: [
-          "Use this link to sign in to MagicTrust.",
-          "",
-          magicLink,
-          "",
-          "This link expires in 15 minutes and can only be used once.",
-        ].join("\n"),
-      });
+      try {
+        await dependencies.emailProvider.sendEmail({
+          to: normalizedEmail,
+          subject: "Your MagicTrust admin login link",
+          body: [
+            "Use this link to sign in to MagicTrust.",
+            "",
+            magicLink,
+            "",
+            "This link expires in 15 minutes and can only be used once.",
+          ].join("\n"),
+        });
+      } catch {
+        // Keep provider failures indistinguishable from unknown accounts.
+      }
 
       return Response.json(genericLoginResponse);
     },

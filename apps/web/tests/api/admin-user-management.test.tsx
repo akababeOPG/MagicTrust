@@ -1,11 +1,13 @@
 import type {
+  AdminAuthStore,
   AdminAuditEventType,
   AdminRole,
   AdminUser,
   AdminUserManagementStore,
 } from "@magictrust/database";
 import { prepareAdminUserCreateInput } from "@magictrust/database";
-import { decryptPii } from "@magictrust/privacy";
+import type { EmailProvider } from "@magictrust/email";
+import { decryptPii, hashEmail } from "@magictrust/privacy";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
@@ -19,6 +21,7 @@ import {
   createManagedAdminUser,
   listManagedAdminUsers,
 } from "../../lib/admin-user-management";
+import { createAdminAuthService } from "../../lib/admin-auth";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-admin-users";
 
@@ -71,6 +74,35 @@ describe("admin user management", () => {
       expect(JSON.stringify(dependencies.state.audits)).not.toContain(
         "onpointglobal.com",
       );
+    },
+  );
+
+  test.each(["ADMIN", "OPERATOR", "VIEWER"] as const)(
+    "a dashboard-created %s can request a login link",
+    async (role) => {
+      const dependencies = createDependencies();
+      const email = ` Login.${role}@OnPointGlobal.com `;
+
+      await createManagedAdminUser(
+        formRequest("/admin/users/create", { email, role }),
+        adminSession("admin-actor"),
+        dependencies,
+      );
+      const auth = createAuthForManagedUsers(dependencies.state);
+      const response = await auth.service.requestLoginLink(loginRequest(email));
+      const created = dependencies.state.users.find(
+        (user) => user.id !== "admin-actor",
+      );
+
+      expect(response.status).toBe(200);
+      expect(created?.emailHash).toBe(hashEmail(email));
+      expect(auth.loginTokens).toHaveLength(1);
+      expect(auth.loginTokens[0]?.adminUserId).toBe(created?.id);
+      expect(auth.sentEmails).toEqual([
+        expect.objectContaining({
+          to: `login.${role.toLowerCase()}@onpointglobal.com`,
+        }),
+      ]);
     },
   );
 
@@ -460,6 +492,74 @@ function adminSession(adminUserId: string) {
     role: "ADMIN" as const,
     sessionId: "session-1",
   };
+}
+
+function createAuthForManagedUsers(state: ManagementState) {
+  const loginTokens: Array<{
+    id: string;
+    adminUserId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }> = [];
+  const sentEmails: Array<{ to: string; subject: string; body: string }> = [];
+  const adminAuthStore = {
+    async createAdminUser() {
+      throw new Error("Not used by this test.");
+    },
+    async findActiveAdminUserByEmailHash(emailHash: string) {
+      return (
+        state.users.find(
+          (user) => user.active && user.emailHash === emailHash,
+        ) ?? null
+      );
+    },
+    async createAdminLoginToken(input) {
+      const loginToken = {
+        id: `login-token-${state.nextId++}`,
+        ...input,
+      };
+      loginTokens.push(loginToken);
+      return loginToken;
+    },
+    async consumeAdminLoginToken() {
+      return null;
+    },
+    async validateAdminSession() {
+      return null;
+    },
+    async revokeAdminSession() {},
+  } satisfies AdminAuthStore;
+  const emailProvider = {
+    provider: "resend",
+    async sendEmail(input) {
+      sentEmails.push(input);
+      return {
+        provider: "resend",
+        providerMessageId: `message-${state.nextId++}`,
+      };
+    },
+  } satisfies EmailProvider;
+
+  return {
+    loginTokens,
+    sentEmails,
+    service: createAdminAuthService({
+      adminAuthStore,
+      emailProvider,
+      appBaseUrl: "https://magictrust.test",
+      appEnv: "production",
+      now: () => state.now,
+      generateToken: () => `raw-login-token-${state.nextId++}`,
+    }),
+  };
+}
+
+function loginRequest(email: string) {
+  return new Request("https://magictrust.test/api/admin/auth/request-link", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
 }
 
 function formRequest(

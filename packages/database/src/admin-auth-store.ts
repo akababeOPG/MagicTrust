@@ -1,10 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import {
-  encryptPii,
-  hashPii,
-  normalizeEmailForHash,
-} from "@magictrust/privacy";
+import { prepareProtectedEmail } from "@magictrust/privacy";
 import { and, eq, gt, isNull } from "drizzle-orm";
 
 import type { createDatabase } from "./index";
@@ -88,12 +84,10 @@ export function prepareAdminUserCreateInput(
   email: string,
   role: AdminRole,
 ): PreparedAdminUserCreateInput {
-  const normalizedEmail = normalizeEmailForHash(email);
+  const protectedEmail = prepareProtectedEmail(email);
 
   return {
-    normalizedEmail,
-    emailEncrypted: encryptPii(normalizedEmail),
-    emailHash: hashPii(normalizedEmail),
+    ...protectedEmail,
     role,
   };
 }

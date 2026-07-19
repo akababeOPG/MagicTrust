@@ -99,6 +99,28 @@ describe("admin authentication", () => {
     expect(unknown.status).toBe(200);
   });
 
+  test("returns the generic response when the email provider rejects delivery", async () => {
+    const dependencies = createInMemoryDependencies();
+    const service = createAdminAuthService(dependencies);
+    await dependencies.adminAuthStore.createAdminUser(
+      prepareAdminUserCreateInput("user@onpointglobal.com", "ADMIN"),
+    );
+    dependencies.emailProvider.sendEmail = vi
+      .fn()
+      .mockRejectedValue(new Error("provider rejected delivery"));
+
+    const response = await service.requestLoginLink(
+      loginRequest("user@onpointglobal.com"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      message: "If an active admin user exists, a login link will be sent.",
+    });
+    expect(dependencies.state.loginTokens).toHaveLength(1);
+  });
+
   test("active users receive login email and inactive users do not", async () => {
     const dependencies = createInMemoryDependencies();
     const service = createAdminAuthService(dependencies);

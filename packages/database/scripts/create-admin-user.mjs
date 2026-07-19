@@ -1,14 +1,9 @@
-import {
-  createCipheriv,
-  createHash,
-  createHmac,
-  randomBytes,
-} from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadEnvFile } from "node:process";
 
 import { Pool } from "@neondatabase/serverless";
+import { prepareProtectedEmail } from "../../privacy/src/index.ts";
 
 const roles = new Set(["ADMIN", "OPERATOR", "VIEWER"]);
 const rootDirectory = findWorkspaceRoot(process.cwd());
@@ -19,10 +14,10 @@ if (existsSync(localEnvPath)) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const email = normalizeEmail(args.email ?? "");
+const email = args.email ?? "";
 const role = args.role;
 
-if (!email || !role || !roles.has(role)) {
+if (!email.trim() || !role || !roles.has(role)) {
   console.error(
     'Usage: pnpm admin:user:create --email "user@onpointglobal.com" --role ADMIN',
   );
@@ -43,10 +38,10 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const client = await pool.connect();
 
 try {
-  const emailHash = hashPii(email);
+  const protectedEmail = prepareProtectedEmail(email);
   const existing = await client.query(
     "select id from admin_users where email_hash = $1 limit 1",
-    [emailHash],
+    [protectedEmail.emailHash],
   );
 
   if (existing.rowCount && existing.rowCount > 0) {
@@ -56,7 +51,7 @@ try {
     await client.query(
       `insert into admin_users (email_encrypted, email_hash, role)
        values ($1, $2, $3)`,
-      [encryptValue(email), emailHash, role],
+      [protectedEmail.emailEncrypted, protectedEmail.emailHash, role],
     );
 
     console.log(`Admin user created with role ${role}.`);
@@ -85,38 +80,6 @@ function parseArgs(values) {
   }
 
   return parsed;
-}
-
-function normalizeEmail(value) {
-  return value.trim().toLowerCase();
-}
-
-function encryptValue(value) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", deriveKey("encrypt"), iv);
-  const ciphertext = Buffer.concat([
-    cipher.update(value, "utf8"),
-    cipher.final(),
-  ]);
-  const authTag = cipher.getAuthTag();
-
-  return [
-    "v1",
-    iv.toString("base64url"),
-    authTag.toString("base64url"),
-    ciphertext.toString("base64url"),
-  ].join(":");
-}
-
-function hashPii(value) {
-  return createHmac("sha256", deriveKey("hash")).update(value).digest("hex");
-}
-
-function deriveKey(purpose) {
-  return createHash("sha256")
-    .update(`magictrust:pii:${purpose}:`)
-    .update(process.env.ENCRYPTION_KEY)
-    .digest();
 }
 
 function findWorkspaceRoot(startDirectory) {

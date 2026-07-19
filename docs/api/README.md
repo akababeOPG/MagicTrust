@@ -391,7 +391,7 @@ POST /api/admin/auth/logout
 
 Logout revokes the current admin session, clears the cookie, and redirects to `/admin/login`.
 
-Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `ENCRYPTION_KEY`, and serve over HTTPS so secure cookies work correctly.
+Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `ENCRYPTION_KEY`, and serve over HTTPS so secure cookies work correctly. `EMAIL_FROM` must use a sender identity from a domain verified in Resend; `onboarding@resend.dev` is not suitable for sending login links to arbitrary production admin users.
 
 ## Internal Requests Dashboard
 
