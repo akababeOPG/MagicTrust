@@ -28,6 +28,7 @@ import {
   lte,
   notInArray,
   or,
+  sql,
 } from "drizzle-orm";
 
 import type { AdminRole } from "./admin-auth-store";
@@ -158,6 +159,15 @@ export type RequestListResult = {
   } | null;
 };
 
+export type AdminHomeSummary = {
+  needsAttention: number;
+  myRequests: number;
+  unassigned: number;
+  overdue: number;
+  dueSoon: number;
+  completedRecently: number;
+};
+
 export type RequestRepository = {
   findByIdOrPublicId(id: string): Promise<RequestDetails | null>;
   findAdminSensitiveData(
@@ -174,6 +184,10 @@ export type RequestRepository = {
   ): Promise<ConsumerNotificationTarget | null>;
   listActiveAssignableAdminUsers(): Promise<AdminUserAssignmentRecord[]>;
   findAdminUsersByIds(ids: string[]): Promise<AdminUserAssignmentRecord[]>;
+  getAdminHomeSummary?(input: {
+    adminUserId: string;
+    now: Date;
+  }): Promise<AdminHomeSummary>;
   list(filters: RequestListFilters): Promise<RequestListResult>;
   assignRequest(
     id: string,
@@ -735,6 +749,56 @@ export function createRequestRepository(db: Database): RequestRepository {
         })
         .from(adminUsers)
         .where(inArray(adminUsers.id, ids));
+    },
+    async getAdminHomeSummary({ adminUserId, now }) {
+      const active = notInArray(privacyRequests.status, [
+        "SUCCESS",
+        "REJECTED",
+        "CANCELLED",
+      ]);
+      const overdue = dueStateCondition("OVERDUE", now);
+      const dueSoon = dueStateCondition("DUE_SOON", now);
+      const unassigned = and(
+        active,
+        isNull(privacyRequests.assignedToAdminUserId),
+      );
+      const needsAttention = or(overdue, dueSoon, unassigned);
+      const completedSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const [summary] = await db
+        .select({
+          needsAttention:
+            sql<number>`count(*) filter (where ${needsAttention})`.mapWith(
+              Number,
+            ),
+          myRequests:
+            sql<number>`count(*) filter (where ${and(active, eq(privacyRequests.assignedToAdminUserId, adminUserId))})`.mapWith(
+              Number,
+            ),
+          unassigned:
+            sql<number>`count(*) filter (where ${unassigned})`.mapWith(Number),
+          overdue: sql<number>`count(*) filter (where ${overdue})`.mapWith(
+            Number,
+          ),
+          dueSoon: sql<number>`count(*) filter (where ${dueSoon})`.mapWith(
+            Number,
+          ),
+          completedRecently:
+            sql<number>`count(*) filter (where ${and(eq(privacyRequests.status, "SUCCESS"), gte(privacyRequests.completedAt, completedSince), lte(privacyRequests.completedAt, now))})`.mapWith(
+              Number,
+            ),
+        })
+        .from(privacyRequests);
+
+      return (
+        summary ?? {
+          needsAttention: 0,
+          myRequests: 0,
+          unassigned: 0,
+          overdue: 0,
+          dueSoon: 0,
+          completedRecently: 0,
+        }
+      );
     },
     async list(filters) {
       const conditions = [

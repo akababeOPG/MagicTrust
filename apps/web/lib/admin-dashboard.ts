@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import {
   createDatabase,
   createRequestRepository,
+  type AdminHomeSummary,
   type AdminUserAssignmentRecord,
   type AdminRequestListWorkflowData,
   type AdminRequestSensitiveData,
@@ -58,6 +59,16 @@ export type AdminDashboardDependencies = {
   appBaseUrl: string;
   now: () => Date;
   generateToken: () => string;
+};
+
+type AdminRequestQueryDependencies = Pick<
+  AdminDashboardDependencies,
+  "requestRepository" | "now"
+>;
+
+export type AdminHomeView = {
+  summary: AdminHomeSummary;
+  recentRequests: AdminRequestListItem[];
 };
 
 export type AdminRequestListView = {
@@ -324,7 +335,7 @@ export function createAdminDashboardDependencies(): AdminDashboardDependencies {
 
 export async function listAdminRequests(
   searchParams: URLSearchParams,
-  dependencies: AdminDashboardDependencies,
+  dependencies: AdminRequestQueryDependencies,
   viewer:
     | AdminSession["role"]
     | Pick<AdminSession, "role" | "adminUserId"> = "VIEWER",
@@ -398,6 +409,39 @@ export async function listAdminRequests(
       assignmentOptions,
       now,
     ),
+  };
+}
+
+export async function getAdminHomeDashboard(
+  session: Pick<AdminSession, "adminUserId" | "role">,
+  dependencies: AdminRequestQueryDependencies,
+): Promise<AdminHomeView> {
+  const getSummary = dependencies.requestRepository.getAdminHomeSummary;
+
+  if (!getSummary) {
+    throw new Error("Admin dashboard summary query is unavailable.");
+  }
+
+  const now = dependencies.now();
+  const [summary, recent] = await Promise.all([
+    getSummary.call(dependencies.requestRepository, {
+      adminUserId: session.adminUserId,
+      now,
+    }),
+    listAdminRequests(
+      new URLSearchParams({ limit: "8" }),
+      { ...dependencies, now: () => now },
+      session,
+    ),
+  ]);
+
+  if (!recent.ok) {
+    throw new Error("Recent requests could not be loaded.");
+  }
+
+  return {
+    summary,
+    recentRequests: recent.data.requests,
   };
 }
 
@@ -3407,6 +3451,9 @@ function missingDatabaseRequestRepository(): RequestRepository {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     findAdminUsersByIds() {
+      throw new Error("DATABASE_URL is required for the admin dashboard.");
+    },
+    getAdminHomeSummary() {
       throw new Error("DATABASE_URL is required for the admin dashboard.");
     },
     assignRequest() {

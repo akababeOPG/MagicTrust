@@ -27,6 +27,7 @@ export type AdminSessionIdentity = {
   adminUserId: string;
   role: AdminRole;
   sessionId: string;
+  emailEncrypted?: string;
 };
 
 export type CreateAdminUserInput = {
@@ -152,6 +153,7 @@ export function createAdminAuthStore(db: Database): AdminAuthStore {
           .select({
             id: adminUsers.id,
             role: adminUsers.role,
+            emailEncrypted: adminUsers.emailEncrypted,
           })
           .from(adminUsers)
           .where(
@@ -187,6 +189,7 @@ export function createAdminAuthStore(db: Database): AdminAuthStore {
           adminUserId: adminUser.id,
           role: adminUser.role,
           sessionId: session.id,
+          emailEncrypted: adminUser.emailEncrypted,
         };
       });
     },
@@ -240,6 +243,7 @@ export function createAdminAuthStore(db: Database): AdminAuthStore {
           .select({
             id: adminUsers.id,
             role: adminUsers.role,
+            emailEncrypted: adminUsers.emailEncrypted,
           })
           .from(adminUsers)
           .where(
@@ -277,6 +281,7 @@ export function createAdminAuthStore(db: Database): AdminAuthStore {
           adminUserId: adminUser.id,
           role: adminUser.role,
           sessionId: session.id,
+          emailEncrypted: adminUser.emailEncrypted,
         };
       });
     },
@@ -286,6 +291,7 @@ export function createAdminAuthStore(db: Database): AdminAuthStore {
           sessionId: adminSessions.id,
           adminUserId: adminUsers.id,
           role: adminUsers.role,
+          emailEncrypted: adminUsers.emailEncrypted,
         })
         .from(adminSessions)
         .innerJoin(adminUsers, eq(adminSessions.adminUserId, adminUsers.id))

@@ -22,9 +22,10 @@ vi.mock("../../lib/admin-auth", () => ({
     authenticateWithPassword: mocks.authenticateWithPassword,
   }),
   normalizeAdminReturnTo: (value: unknown) =>
-    typeof value === "string" && value.startsWith("/admin/")
+    typeof value === "string" &&
+    (value === "/admin" || value.startsWith("/admin/"))
       ? value
-      : "/admin/requests",
+      : "/admin",
 }));
 
 import { POST as login } from "../../app/api/admin/auth/login/route";
@@ -66,6 +67,30 @@ describe("admin password login route", () => {
       email: "admin@onpointglobal.com",
       password: "correct horse battery staple",
     });
+  });
+
+  test("successful login without an intended route redirects to the dashboard", async () => {
+    mocks.authenticateWithPassword.mockResolvedValueOnce({
+      ok: true,
+      sessionToken: "raw-session-token",
+      session: {
+        adminUserId: "admin-1",
+        role: "ADMIN",
+        sessionId: "session-1",
+      },
+    });
+
+    const response = await login(
+      loginRequest({
+        email: "admin@onpointglobal.com",
+        password: "correct horse battery staple",
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "https://magictrust.test/admin",
+    );
   });
 
   test("invalid credentials use one generic error redirect", async () => {

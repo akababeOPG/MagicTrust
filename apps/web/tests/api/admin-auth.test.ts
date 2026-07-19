@@ -216,6 +216,8 @@ describe("admin password authentication", () => {
     adminUser.role = "OPERATOR";
     expect(await service.validateSessionToken("session-token")).toMatchObject({
       adminUserId: adminUser.id,
+      displayName: "Viewer",
+      email: "viewer@onpointglobal.com",
       role: "OPERATOR",
     });
 
@@ -279,17 +281,19 @@ describe("admin password authentication", () => {
   });
 
   test("admin return destinations are restricted to internal pages", () => {
+    expect(normalizeAdminReturnTo(undefined)).toBe("/admin");
+    expect(normalizeAdminReturnTo("/admin")).toBe("/admin");
     expect(normalizeAdminReturnTo("/admin/requests/MT-123?tab=activity")).toBe(
       "/admin/requests/MT-123?tab=activity",
     );
     expect(normalizeAdminReturnTo("https://example.com/admin/requests")).toBe(
-      "/admin/requests",
+      "/admin",
     );
     expect(normalizeAdminReturnTo("//example.com/admin/requests")).toBe(
-      "/admin/requests",
+      "/admin",
     );
     expect(normalizeAdminReturnTo("/admin/auth/verify?token=secret")).toBe(
-      "/admin/requests",
+      "/admin",
     );
   });
 });
@@ -467,6 +471,7 @@ function sessionIdentity(
 ): AdminSessionIdentity {
   return {
     adminUserId: adminUser.id,
+    emailEncrypted: adminUser.emailEncrypted,
     role: adminUser.role,
     sessionId,
   };

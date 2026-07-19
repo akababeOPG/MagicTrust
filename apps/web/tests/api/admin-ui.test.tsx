@@ -43,8 +43,8 @@ describe("MagicTrust admin UI", () => {
     },
   );
 
-  test("shows Advanced tools only to ADMIN users", () => {
-    expect(renderShell("ADMIN")).toContain("Advanced tools");
+  test("removes Advanced tools from sidebar navigation", () => {
+    expect(renderShell("ADMIN")).not.toContain("Advanced tools");
     expect(renderShell("OPERATOR")).not.toContain("Advanced tools");
     expect(renderShell("VIEWER")).not.toContain("Advanced tools");
   });
@@ -58,16 +58,75 @@ describe("MagicTrust admin UI", () => {
     expect(renderShell("VIEWER")).not.toContain('href="/admin/users"');
   });
 
-  test("shows Forms navigation to ADMIN and OPERATOR only", () => {
-    expect(renderShell("ADMIN", "forms")).toContain('href="/admin/forms"');
-    expect(renderShell("OPERATOR", "forms")).toContain('href="/admin/forms"');
+  test("shows Forms under Administration to ADMIN and OPERATOR only", () => {
+    const admin = renderShell("ADMIN", "forms");
+    const operator = renderShell("OPERATOR", "forms");
+
+    expect(admin).toContain('href="/admin/forms"');
+    expect(operator).toContain('href="/admin/forms"');
+    expect(admin.indexOf("Administration")).toBeLessThan(
+      admin.indexOf('href="/admin/forms"'),
+    );
+    expect(operator.indexOf("Administration")).toBeLessThan(
+      operator.indexOf('href="/admin/forms"'),
+    );
     expect(renderShell("VIEWER")).not.toContain('href="/admin/forms"');
+  });
+
+  test("shows the current user's display name and role without an internal id", () => {
+    const html = renderToStaticMarkup(
+      <AdminShell
+        session={{
+          adminUserId: "private-admin-id",
+          displayName: "Agustin Kababe",
+          email: "agustin.kababe@onpointglobal.com",
+          role: "ADMIN",
+          sessionId: "private-session-id",
+        }}
+      >
+        <p>Dashboard content</p>
+      </AdminShell>,
+    );
+
+    expect(html).toContain("Agustin Kababe");
+    expect(html).toContain("Admin");
+    expect(html).not.toContain("private-admin-id");
+    expect(html).not.toContain("private-session-id");
+  });
+
+  test("falls back to the authenticated email when no display name is available", () => {
+    const html = renderToStaticMarkup(
+      <AdminShell
+        session={{
+          adminUserId: "admin-user-1",
+          email: "admin+ops@onpointglobal.com",
+          role: "OPERATOR",
+          sessionId: "session-1",
+        }}
+      >
+        <p>Dashboard content</p>
+      </AdminShell>,
+    );
+
+    expect(html).toContain("admin+ops@onpointglobal.com");
+    expect(html).toContain("Operator");
+  });
+
+  test("links the sidebar brand to the dashboard and omits secondary views", () => {
+    const html = renderShell("ADMIN", "dashboard");
+
+    expect(html).toContain(
+      'class="mt-sidebar-brand-link" aria-label="MagicTrust dashboard" href="/admin"',
+    );
+    expect(html).not.toContain('<p class="mt-nav-label">Views</p>');
+    expect(html).not.toContain("view=overdue");
+    expect(html).not.toContain("view=my-requests");
   });
 });
 
 function renderShell(
   role: "ADMIN" | "OPERATOR" | "VIEWER",
-  currentSection: "requests" | "forms" | "users" = "requests",
+  currentSection: "dashboard" | "requests" | "forms" | "users" = "requests",
 ) {
   return renderToStaticMarkup(
     <AdminShell

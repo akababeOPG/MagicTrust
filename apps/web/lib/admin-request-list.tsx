@@ -528,7 +528,7 @@ function RequestMobileCards({
   );
 }
 
-function RequesterSummary({
+export function RequesterSummary({
   request,
   role,
 }: {
@@ -551,7 +551,11 @@ function RequesterSummary({
   );
 }
 
-function AssignmentLabel({ request }: { request: AdminRequestListItem }) {
+export function AssignmentLabel({
+  request,
+}: {
+  request: AdminRequestListItem;
+}) {
   if (request.assignment.isCurrentUser) {
     return <strong>You</strong>;
   }
@@ -578,7 +582,7 @@ function DueLabel({ request }: { request: AdminRequestListItem }) {
   );
 }
 
-function ReceivedDate({ value }: { value: string }) {
+export function ReceivedDate({ value }: { value: string }) {
   const date = new Date(value);
 
   return (

@@ -12,6 +12,7 @@ import type {
 } from "@magictrust/database";
 import { getAppEnv, getRequiredDatabaseUrl } from "@magictrust/config";
 import {
+  decryptPii,
   hashAdminLoginToken,
   hashAdminSessionToken,
   hashEmail,
@@ -39,6 +40,8 @@ export type AdminSession = {
   adminUserId: string;
   role: AdminRole;
   sessionId: string;
+  displayName?: string;
+  email?: string;
 };
 
 const adminPasswordLoginSchema = z.object({
@@ -126,11 +129,13 @@ export function createAdminAuthService(dependencies: AdminAuthDependencies) {
     },
     async validateSessionToken(
       sessionToken: string,
-    ): Promise<AdminSessionIdentity | null> {
-      return dependencies.adminAuthStore.validateAdminSession({
+    ): Promise<AdminSession | null> {
+      const session = await dependencies.adminAuthStore.validateAdminSession({
         sessionTokenHash: hashAdminSessionToken(sessionToken),
         now: dependencies.now(),
       });
+
+      return session ? toAdminSession(session) : null;
     },
     async revokeSessionToken(sessionToken: string): Promise<void> {
       await dependencies.adminAuthStore.revokeAdminSession(
@@ -163,6 +168,8 @@ export async function requireAdminSession(options?: {
     adminUserId: session.adminUserId,
     role: session.role,
     sessionId: session.sessionId,
+    displayName: session.displayName,
+    email: session.email,
   };
 }
 
@@ -202,19 +209,19 @@ export function clearAdminSessionCookieOptions(appEnv: string) {
 
 export function normalizeAdminReturnTo(value: unknown): string {
   if (typeof value !== "string") {
-    return "/admin/requests";
+    return "/admin";
   }
 
   const candidate = value.trim();
 
   if (
-    !candidate.startsWith("/admin/") ||
+    (candidate !== "/admin" && !candidate.startsWith("/admin/")) ||
     candidate.startsWith("//") ||
     candidate.includes("\\") ||
     candidate.startsWith("/admin/login") ||
     candidate.startsWith("/admin/auth/")
   ) {
-    return "/admin/requests";
+    return "/admin";
   }
 
   try {
@@ -222,7 +229,7 @@ export function normalizeAdminReturnTo(value: unknown): string {
 
     return `${parsed.pathname}${parsed.search}`;
   } catch {
-    return "/admin/requests";
+    return "/admin";
   }
 }
 
@@ -269,6 +276,54 @@ function forbidden(options?: { response?: "json" }): Response {
   }
 
   return new Response("Forbidden", { status: 403 });
+}
+
+function toAdminSession(session: AdminSessionIdentity): AdminSession {
+  const email = safelyDecryptAdminEmail(session.emailEncrypted);
+  const displayName = email ? displayNameFromEmail(email) : undefined;
+
+  return {
+    adminUserId: session.adminUserId,
+    role: session.role,
+    sessionId: session.sessionId,
+    ...(email ? { email } : {}),
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
+function safelyDecryptAdminEmail(
+  value: string | undefined,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return decryptPii(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function displayNameFromEmail(email: string): string | undefined {
+  const localPart = email.split("@", 1)[0]?.trim();
+
+  if (!localPart) {
+    return undefined;
+  }
+
+  const parts = localPart.split(/[._-]+/);
+
+  if (
+    parts.length === 0 ||
+    parts.some((part) => !/^[A-Za-z][A-Za-z0-9]*$/.test(part))
+  ) {
+    return undefined;
+  }
+
+  return parts
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function missingDatabaseAdminAuthStore(): AdminAuthStore {

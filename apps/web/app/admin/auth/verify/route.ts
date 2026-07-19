@@ -23,9 +23,7 @@ export async function GET(request: Request) {
     return safeError();
   }
 
-  const response = NextResponse.redirect(
-    new URL("/admin/requests", request.url),
-  );
+  const response = NextResponse.redirect(new URL("/admin", request.url));
   response.cookies.set(
     adminSessionCookieName,
     result.sessionToken,

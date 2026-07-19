@@ -46,7 +46,7 @@ export function AdminShell({
   session: AdminSession;
   children: ReactNode;
   topbarSlot?: ReactNode;
-  currentSection?: "requests" | "forms" | "users";
+  currentSection?: "dashboard" | "requests" | "forms" | "users";
 }) {
   return (
     <div className="mt-admin-shell">
@@ -68,24 +68,22 @@ export function AdminSidebar({
   currentSection = "requests",
 }: {
   session: AdminSession;
-  currentSection?: "requests" | "forms" | "users";
+  currentSection?: "dashboard" | "requests" | "forms" | "users";
 }) {
   return (
     <aside className="mt-admin-sidebar" aria-label="Admin navigation">
       <div className="mt-sidebar-brand">
-        <MagicTrustWordmark dark />
+        <Link
+          className="mt-sidebar-brand-link"
+          href="/admin"
+          aria-label="MagicTrust dashboard"
+        >
+          <MagicTrustWordmark dark />
+        </Link>
       </div>
       <AdminNavigation role={session.role} currentSection={currentSection} />
       <div className="mt-sidebar-footer">
-        <div className="mt-user-summary">
-          <span className="mt-user-avatar" aria-hidden="true">
-            {session.role.slice(0, 1)}
-          </span>
-          <span>
-            <strong>Signed in</strong>
-            <small>{formatRole(session.role)}</small>
-          </span>
-        </div>
+        <AdminAccountSummary session={session} />
         <form action="/api/admin/auth/logout" method="post">
           <button className="mt-sidebar-logout" type="submit">
             Log out
@@ -103,7 +101,7 @@ export function AdminTopbar({
 }: {
   session: AdminSession;
   searchSlot?: ReactNode;
-  currentSection?: "requests" | "forms" | "users";
+  currentSection?: "dashboard" | "requests" | "forms" | "users";
 }) {
   return (
     <header className="mt-admin-topbar">
@@ -117,15 +115,7 @@ export function AdminTopbar({
             currentSection={currentSection}
           />
           <div className="mt-mobile-account">
-            <div className="mt-user-summary">
-              <span className="mt-user-avatar" aria-hidden="true">
-                {session.role.slice(0, 1)}
-              </span>
-              <span>
-                <strong>Signed in</strong>
-                <small>{formatRole(session.role)}</small>
-              </span>
-            </div>
+            <AdminAccountSummary session={session} />
             <form action="/api/admin/auth/logout" method="post">
               <button className="mt-sidebar-logout" type="submit">
                 Log out
@@ -138,11 +128,13 @@ export function AdminTopbar({
         <span>Workspace</span>
         <span aria-hidden="true">/</span>
         <strong>
-          {currentSection === "users"
-            ? "Users"
-            : currentSection === "forms"
-              ? "Forms"
-              : "Requests"}
+          {currentSection === "dashboard"
+            ? "Dashboard"
+            : currentSection === "users"
+              ? "Users"
+              : currentSection === "forms"
+                ? "Forms"
+                : "Requests"}
         </strong>
       </nav>
       {searchSlot ? <div className="mt-topbar-search">{searchSlot}</div> : null}
@@ -168,12 +160,22 @@ function AdminNavigation({
   currentSection,
 }: {
   role: AdminSession["role"];
-  currentSection: "requests" | "forms" | "users";
+  currentSection: "dashboard" | "requests" | "forms" | "users";
 }) {
   return (
     <nav className="mt-sidebar-nav" aria-label="Workspace">
       <div className="mt-nav-group">
         <p className="mt-nav-label">Workspace</p>
+        <Link
+          className={`mt-nav-item${
+            currentSection === "dashboard" ? " mt-nav-item-active" : ""
+          }`}
+          href="/admin"
+          aria-current={currentSection === "dashboard" ? "page" : undefined}
+        >
+          <DashboardIcon />
+          <span>Dashboard</span>
+        </Link>
         <Link
           className={`mt-nav-item${
             currentSection === "requests" ? " mt-nav-item-active" : ""
@@ -184,7 +186,10 @@ function AdminNavigation({
           <InboxIcon />
           <span>Requests</span>
         </Link>
-        {role !== "VIEWER" ? (
+      </div>
+      {role !== "VIEWER" ? (
+        <div className="mt-nav-group mt-nav-group-advanced">
+          <p className="mt-nav-label">Administration</p>
           <Link
             className={`mt-nav-item${
               currentSection === "forms" ? " mt-nav-item-active" : ""
@@ -195,80 +200,18 @@ function AdminNavigation({
             <FormsIcon />
             <span>Forms</span>
           </Link>
-        ) : null}
-      </div>
-      <div className="mt-nav-group">
-        <p className="mt-nav-label">Views</p>
-        <Link
-          className="mt-nav-item"
-          href="/admin/requests?view=overdue&due=overdue"
-        >
-          Overdue
-        </Link>
-        <Link
-          className="mt-nav-item"
-          href="/admin/requests?view=due-soon&due=due-soon"
-        >
-          Due soon
-        </Link>
-        {role !== "VIEWER" ? (
-          <>
+          {role === "ADMIN" ? (
             <Link
-              className="mt-nav-item"
-              href="/admin/requests?view=my-requests&assignedTo=me"
+              className={`mt-nav-item${
+                currentSection === "users" ? " mt-nav-item-active" : ""
+              }`}
+              href="/admin/users"
+              aria-current={currentSection === "users" ? "page" : undefined}
             >
-              My requests
+              <UserIcon />
+              <span>Users</span>
             </Link>
-            <Link
-              className="mt-nav-item"
-              href="/admin/requests?view=unassigned&assignedTo=unassigned"
-            >
-              Unassigned
-            </Link>
-          </>
-        ) : null}
-        <Link
-          className="mt-nav-item"
-          href="/admin/requests?view=needs-attention&status=VERIFIED"
-        >
-          Needs attention
-        </Link>
-        <Link
-          className="mt-nav-item"
-          href="/admin/requests?view=waiting-on-requester&status=WAITING_FOR_REQUESTER"
-        >
-          Waiting on requester
-        </Link>
-        <Link
-          className="mt-nav-item"
-          href="/admin/requests?view=in-progress&status=PROCESSING"
-        >
-          In progress
-        </Link>
-        <Link
-          className="mt-nav-item"
-          href="/admin/requests?view=completed&status=SUCCESS"
-        >
-          Completed
-        </Link>
-      </div>
-      {role === "ADMIN" ? (
-        <div className="mt-nav-group mt-nav-group-advanced">
-          <p className="mt-nav-label">Administration</p>
-          <Link
-            className={`mt-nav-item${
-              currentSection === "users" ? " mt-nav-item-active" : ""
-            }`}
-            href="/admin/users"
-            aria-current={currentSection === "users" ? "page" : undefined}
-          >
-            <UserIcon />
-            <span>Users</span>
-          </Link>
-          <span className="mt-nav-item mt-nav-item-secondary">
-            <SettingsIcon />
-            <span>Advanced tools</span>
-          </span>
+          ) : null}
         </div>
       ) : null}
     </nav>
@@ -277,6 +220,22 @@ function AdminNavigation({
 
 function formatRole(role: AdminSession["role"]): string {
   return role.charAt(0) + role.slice(1).toLowerCase();
+}
+
+function AdminAccountSummary({ session }: { session: AdminSession }) {
+  const accountName = session.displayName || session.email || "Signed in";
+
+  return (
+    <div className="mt-user-summary">
+      <span className="mt-user-avatar" aria-hidden="true">
+        {accountName.slice(0, 1).toUpperCase()}
+      </span>
+      <span>
+        <strong>{accountName}</strong>
+        <small>{formatRole(session.role)}</small>
+      </span>
+    </div>
+  );
 }
 
 function MenuIcon() {
@@ -330,23 +289,15 @@ function InboxIcon() {
   );
 }
 
-function SettingsIcon() {
+function DashboardIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-      <circle
-        cx="12"
-        cy="12"
-        r="3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-      />
       <path
-        d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"
+        d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.7"
-        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
