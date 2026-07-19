@@ -141,7 +141,7 @@ describe("public form rendering", () => {
     );
     expect(csp).not.toContain("connect-src https://magictrust.test;");
     expect(csp).not.toContain("https://external.example");
-    expect(csp).toContain("navigate-to 'none'");
+    expect(csp).not.toContain("navigate-to");
     expect(csp).toContain("default-src 'none'");
     expect(document).toContain("<\\/style");
     expect(document).toContain("<\\/script");

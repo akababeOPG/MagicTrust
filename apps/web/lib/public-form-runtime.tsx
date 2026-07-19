@@ -25,7 +25,6 @@ function publicFormDocumentCspDirectives(submissionEndpoint?: string) {
     "form-action 'none'",
     "base-uri 'none'",
     "frame-src 'none'",
-    "navigate-to 'none'",
   ];
 }
 

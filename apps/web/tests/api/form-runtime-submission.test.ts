@@ -115,6 +115,28 @@ describe("form runtime submission", () => {
     expect(harness.feedback()?.textContent).toContain("req_retry_test");
   });
 
+  test("binds receiver-sensitive browser APIs before sending the submission", async () => {
+    const harness = createRuntimeHarness({
+      receiverSensitiveApis: true,
+      fetch: vi.fn(() =>
+        Promise.resolve(Response.json({ publicId: "req_receiver_test" })),
+      ),
+      controls: [
+        control("email", "john@example.com", "email"),
+        control("submit", "Send", "submit"),
+      ],
+    });
+
+    harness.submit();
+    await flushRuntime();
+
+    expect(harness.fetch).toHaveBeenCalledOnce();
+    expect(harness.fetch.mock.calls[0]?.[0]).toBe(
+      "https://magictrust.test/api/public/forms/contact-us/submissions",
+    );
+    expect(harness.feedback()?.textContent).toContain("req_receiver_test");
+  });
+
   test("safe validation messages are shown and resize emits after errors", async () => {
     const harness = createRuntimeHarness({
       fetch: vi.fn(() =>
@@ -294,6 +316,7 @@ class FakeFormData {
 function createRuntimeHarness(input: {
   mode?: "published" | "preview";
   fetch?: ReturnType<typeof vi.fn>;
+  receiverSensitiveApis?: boolean;
   controls: FakeControl[];
 }) {
   const listeners = new Map<string, Array<(event: never) => void>>();
@@ -303,6 +326,11 @@ function createRuntimeHarness(input: {
       href: "https://magictrust.test/forms/contact-us/runtime",
     },
     parent: { postMessage },
+    ResizeObserver: input.receiverSensitiveApis
+      ? class {
+          observe() {}
+        }
+      : undefined,
     addEventListener(type: string, listener: (event: never) => void) {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
@@ -310,7 +338,7 @@ function createRuntimeHarness(input: {
   const body = new FakeElement("body");
   const documentElement = new FakeElement("html");
   const runtimeDocument = {
-    readyState: "complete",
+    readyState: input.receiverSensitiveApis ? "loading" : "complete",
     body,
     documentElement,
     createElement(tagName: string) {
@@ -319,11 +347,32 @@ function createRuntimeHarness(input: {
     addEventListener: vi.fn(),
   };
   const form = new FakeForm(input.controls);
-  const fetch = input.fetch ?? vi.fn();
-  const immediateTimeout = (callback: () => void) => {
+  const providedFetch = input.fetch ?? vi.fn();
+  const fetch = input.receiverSensitiveApis
+    ? vi.fn(function (
+        this: unknown,
+        request: RequestInfo | URL,
+        init?: RequestInit,
+      ) {
+        if (this !== runtimeWindow) throw new TypeError("Illegal invocation");
+        return providedFetch(request, init);
+      })
+    : providedFetch;
+  const runtimeCrypto = {
+    randomUUID(this: unknown) {
+      if (input.receiverSensitiveApis && this !== runtimeCrypto) {
+        throw new TypeError("Illegal invocation");
+      }
+      return "runtime-idempotency-key";
+    },
+  };
+  function immediateTimeout(this: unknown, callback: () => void) {
+    if (input.receiverSensitiveApis && this !== runtimeWindow) {
+      throw new TypeError("Illegal invocation");
+    }
     callback();
     return 1;
-  };
+  }
 
   installMagicTrustFormRuntime(
     input.mode === "preview"
@@ -338,7 +387,7 @@ function createRuntimeHarness(input: {
       document: runtimeDocument,
       FormData: FakeFormData,
       fetch,
-      crypto: { randomUUID: () => "runtime-idempotency-key" },
+      crypto: runtimeCrypto,
       URL,
       setTimeout: immediateTimeout,
     } as never,

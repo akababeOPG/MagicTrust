@@ -57,6 +57,7 @@ export function installMagicTrustFormRuntime(
   const runtimeWindow = environment.window;
   const runtimeDocument = environment.document;
   const sendRequest = environment.fetch.bind(runtimeWindow);
+  const schedule = environment.setTimeout.bind(runtimeWindow);
   const submissionEndpoint =
     config.mode === "published"
       ? new environment.URL(
@@ -163,7 +164,7 @@ export function installMagicTrustFormRuntime(
       status === "error" ? "assertive" : "polite",
     );
     feedback.textContent = message;
-    environment.setTimeout(() => sendHeight(true), 0);
+    schedule(() => sendHeight(true), 0);
     if (status !== "submitting") {
       try {
         feedback.focus({ preventScroll: true });
@@ -337,7 +338,7 @@ export function installMagicTrustFormRuntime(
     (runtimeDocument.body || runtimeDocument.documentElement).appendChild(
       notice,
     );
-    environment.setTimeout(() => sendHeight(true), 0);
+    schedule(() => sendHeight(true), 0);
   });
   runtimeWindow.addEventListener("unhandledrejection", () => {
     const notice = runtimeDocument.createElement("p");
@@ -346,7 +347,7 @@ export function installMagicTrustFormRuntime(
     (runtimeDocument.body || runtimeDocument.documentElement).appendChild(
       notice,
     );
-    environment.setTimeout(() => sendHeight(true), 0);
+    schedule(() => sendHeight(true), 0);
   });
 
   if (runtimeDocument.readyState === "loading") {
@@ -354,7 +355,7 @@ export function installMagicTrustFormRuntime(
       once: true,
     });
   } else {
-    environment.setTimeout(() => sendHeight(), 0);
+    schedule(() => sendHeight(), 0);
   }
   runtimeWindow.addEventListener("load", () => sendHeight(), { once: true });
   const RuntimeResizeObserver = (
@@ -364,6 +365,6 @@ export function installMagicTrustFormRuntime(
     const resizeObserver = new RuntimeResizeObserver(() => sendHeight());
     resizeObserver.observe(runtimeDocument.documentElement);
   } else {
-    environment.setTimeout(() => sendHeight(), 250);
+    schedule(() => sendHeight(), 250);
   }
 }
