@@ -10,6 +10,7 @@ import { describe, expect, test, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { AdminApiClientDirectory } from "../../lib/admin-api-client-directory";
+import { AdminShell } from "../../lib/admin-ui";
 import {
   createManagedApiClient,
   revokeManagedApiClient,
@@ -23,7 +24,21 @@ describe("admin API client management", () => {
     );
     expect(html).toContain("API Clients");
     expect(html).toContain("requests:processing-result:write");
+    expect(html).toContain("Report successful or rejected processing outcomes");
+    expect(html).toContain("admin-api-client-scope");
+    expect(html).toContain("+1 more");
     expect(html).toContain("Last used");
+  });
+
+  test("API Clients uses the shared Administration navigation row", () => {
+    const html = renderToStaticMarkup(
+      <AdminShell session={session} currentSection="api-clients">
+        <span>Content</span>
+      </AdminShell>,
+    );
+    expect(html).toContain('href="/admin/api-clients"');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain('viewBox="0 0 24 24" width="18" height="18"');
   });
 
   test("created secret is shown once and only its hash is retained", async () => {

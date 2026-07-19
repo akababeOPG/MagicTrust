@@ -354,9 +354,23 @@ function FormsIcon() {
 
 function KeyIcon() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="8" cy="15" r="4" />
-      <path d="m11 12 8-8m-2 2 2 2m-5 1 2 2" />
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle
+        cx="8"
+        cy="15"
+        r="4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d="m11 12 8-8m-2 2 2 2m-5 1 2 2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

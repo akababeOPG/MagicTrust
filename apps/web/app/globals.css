@@ -1401,6 +1401,124 @@ a.admin-home-summary-card:hover {
   --user-status-border: var(--mt-status-success-border);
 }
 
+/* API client administration */
+.admin-api-client-create[open]::before {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  background: rgba(27, 25, 21, 0.52);
+  content: "";
+}
+
+.admin-api-client-create-panel {
+  position: fixed;
+  z-index: 50;
+  top: 50%;
+  left: 50%;
+  width: min(620px, calc(100vw - var(--mt-space-8) * 2));
+  max-height: calc(100vh - var(--mt-space-8) * 2);
+  display: grid;
+  gap: var(--mt-space-6);
+  overflow-y: auto;
+  transform: translate(-50%, -50%);
+}
+
+.admin-api-client-create-panel > div {
+  display: grid;
+  gap: var(--mt-space-2);
+}
+
+.admin-api-client-scopes {
+  min-width: 0;
+  border: 0;
+  display: grid;
+  gap: var(--mt-space-5);
+  margin: 0;
+  padding: 0;
+}
+
+.admin-api-client-scopes > legend {
+  margin-bottom: var(--mt-space-4);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-api-client-scope-group {
+  display: grid;
+  gap: var(--mt-space-2);
+}
+
+.admin-api-client-scope-group h3 {
+  color: var(--mt-text-muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.admin-user-form .admin-api-client-scope {
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--mt-space-4);
+  border-radius: var(--mt-radius-control);
+  padding: var(--mt-space-3) var(--mt-space-4);
+  font-weight: 400;
+}
+
+.admin-user-form .admin-api-client-scope:hover {
+  background: var(--mt-sunken);
+}
+
+.admin-user-form .admin-api-client-scope input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--mt-ink);
+}
+
+.admin-api-client-scope span {
+  display: grid;
+  gap: var(--mt-space-1);
+}
+
+.admin-api-client-scope strong {
+  color: var(--mt-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.admin-api-client-scope small {
+  color: var(--mt-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.admin-api-client-scope-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mt-space-2);
+  max-width: 360px;
+}
+
+.admin-api-client-scope-chip,
+.admin-api-client-scope-more {
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius-pill);
+  background: var(--mt-sunken);
+  color: var(--mt-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: var(--mt-space-1) var(--mt-space-3);
+}
+
+.admin-api-client-scope-more {
+  font-family: inherit;
+  font-weight: 700;
+}
+
 .admin-user-actions-menu {
   position: relative;
 }
