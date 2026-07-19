@@ -88,16 +88,20 @@ Use `privacy_request` or `request` as the core domain concept.
 
 ## Codex Execution Efficiency
 
-- For small, localized changes, prefer the smallest implementation that satisfies the request.
-- Before starting a small task, identify the narrowest existing code path that owns the behavior and modify that path directly.
-- Avoid unrelated refactors.
-- Reuse existing abstractions before introducing new ones.
+- Treat explicitly scoped tasks as having a default execution budget of roughly 5–10 minutes.
+- Before coding, identify the smallest viable implementation path and the narrowest existing code path that owns the behavior.
+- For small, localized changes, prefer the smallest implementation that satisfies the request and modify the owning code path directly.
+- Do not expand a scoped task into architectural cleanup, generalized abstractions, broad refactors, or unrelated test updates.
+- Reuse existing services and abstractions even if they are not perfectly generalized.
+- Prefer a small adapter or wrapper over refactoring an existing subsystem.
 - Touch the minimum number of files necessary.
-- Do not update documentation unless the change affects stable architecture, product behavior, or an existing documented contract.
-- Run only directly affected tests for small changes.
-- Do not run broad package suites or the full test suite unless explicitly requested, repository validation requires it, or focused tests indicate a broader regression.
+- Run only directly affected tests. Never run broad suites unless explicitly requested or the change clearly affects shared infrastructure.
+- Do not repeatedly rerun expensive test or typecheck commands after every small edit. Implement first, then validate once.
 - Prefer focused validation over exhaustive validation for localized changes.
+- Limit documentation updates to documents directly affected by the contract being changed.
 - Do not run `db:generate` unless a schema change is required.
 - Do not run migrations automatically.
-- Optimize localized changes for fast execution. A typical small change should aim to complete in a few minutes.
-- If the requested change appears to require a much broader refactor than expected, stop and explain why before expanding scope.
+- Optimize for delivering the requested behavior, not for improving surrounding code.
+- Never silently turn a localized task into a large implementation.
+- If the requested change cannot reasonably be completed within the expected small-task budget because it requires a broader refactor or architectural change, stop before expanding scope and explain what was discovered.
+- Small task rule: When the user describes a task as puntual, concreto, rápido, localized, or similar, aggressively minimize scope and target a few minutes of execution. Do not perform optional improvements.

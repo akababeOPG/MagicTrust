@@ -46,7 +46,7 @@ export function AdminShell({
   session: AdminSession;
   children: ReactNode;
   topbarSlot?: ReactNode;
-  currentSection?: "dashboard" | "requests" | "forms" | "users";
+  currentSection?: "dashboard" | "requests" | "forms" | "users" | "api-clients";
 }) {
   return (
     <div className="mt-admin-shell">
@@ -68,7 +68,7 @@ export function AdminSidebar({
   currentSection = "requests",
 }: {
   session: AdminSession;
-  currentSection?: "dashboard" | "requests" | "forms" | "users";
+  currentSection?: "dashboard" | "requests" | "forms" | "users" | "api-clients";
 }) {
   return (
     <aside className="mt-admin-sidebar" aria-label="Admin navigation">
@@ -101,7 +101,7 @@ export function AdminTopbar({
 }: {
   session: AdminSession;
   searchSlot?: ReactNode;
-  currentSection?: "dashboard" | "requests" | "forms" | "users";
+  currentSection?: "dashboard" | "requests" | "forms" | "users" | "api-clients";
 }) {
   return (
     <header className="mt-admin-topbar">
@@ -132,9 +132,11 @@ export function AdminTopbar({
             ? "Dashboard"
             : currentSection === "users"
               ? "Users"
-              : currentSection === "forms"
-                ? "Forms"
-                : "Requests"}
+              : currentSection === "api-clients"
+                ? "API Clients"
+                : currentSection === "forms"
+                  ? "Forms"
+                  : "Requests"}
         </strong>
       </nav>
       {searchSlot ? <div className="mt-topbar-search">{searchSlot}</div> : null}
@@ -160,7 +162,7 @@ function AdminNavigation({
   currentSection,
 }: {
   role: AdminSession["role"];
-  currentSection: "dashboard" | "requests" | "forms" | "users";
+  currentSection: "dashboard" | "requests" | "forms" | "users" | "api-clients";
 }) {
   return (
     <nav className="mt-sidebar-nav" aria-label="Workspace">
@@ -201,16 +203,26 @@ function AdminNavigation({
             <span>Forms</span>
           </Link>
           {role === "ADMIN" ? (
-            <Link
-              className={`mt-nav-item${
-                currentSection === "users" ? " mt-nav-item-active" : ""
-              }`}
-              href="/admin/users"
-              aria-current={currentSection === "users" ? "page" : undefined}
-            >
-              <UserIcon />
-              <span>Users</span>
-            </Link>
+            <>
+              <Link
+                className={`mt-nav-item${currentSection === "users" ? " mt-nav-item-active" : ""}`}
+                href="/admin/users"
+                aria-current={currentSection === "users" ? "page" : undefined}
+              >
+                <UserIcon />
+                <span>Users</span>
+              </Link>
+              <Link
+                className={`mt-nav-item${currentSection === "api-clients" ? " mt-nav-item-active" : ""}`}
+                href="/admin/api-clients"
+                aria-current={
+                  currentSection === "api-clients" ? "page" : undefined
+                }
+              >
+                <KeyIcon />
+                <span>API Clients</span>
+              </Link>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -336,6 +348,15 @@ function FormsIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="8" cy="15" r="4" />
+      <path d="m11 12 8-8m-2 2 2 2m-5 1 2 2" />
     </svg>
   );
 }

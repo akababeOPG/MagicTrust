@@ -22,6 +22,8 @@ export const adminAuditEventTypes = [
   "FORM_VERSION_CREATED",
   "FORM_VERSION_PUBLISHED",
   "FORM_VERSION_UPDATED",
+  "API_CLIENT_CREATED",
+  "API_CLIENT_REVOKED",
 ] as const;
 
 export type AdminAuditEventType = (typeof adminAuditEventTypes)[number];
