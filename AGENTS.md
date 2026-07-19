@@ -85,3 +85,19 @@ Use `privacy_request` or `request` as the core domain concept.
 - Do not introduce external services unless explicitly requested.
 - Do not add authentication yet unless the task explicitly asks for it.
 - Do not hardcode environment-specific values.
+
+## Codex Execution Efficiency
+
+- For small, localized changes, prefer the smallest implementation that satisfies the request.
+- Before starting a small task, identify the narrowest existing code path that owns the behavior and modify that path directly.
+- Avoid unrelated refactors.
+- Reuse existing abstractions before introducing new ones.
+- Touch the minimum number of files necessary.
+- Do not update documentation unless the change affects stable architecture, product behavior, or an existing documented contract.
+- Run only directly affected tests for small changes.
+- Do not run broad package suites or the full test suite unless explicitly requested, repository validation requires it, or focused tests indicate a broader regression.
+- Prefer focused validation over exhaustive validation for localized changes.
+- Do not run `db:generate` unless a schema change is required.
+- Do not run migrations automatically.
+- Optimize localized changes for fast execution. A typical small change should aim to complete in a few minutes.
+- If the requested change appears to require a much broader refactor than expected, stop and explain why before expanding scope.

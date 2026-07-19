@@ -34,15 +34,15 @@ export async function GET(
     buildPublicFormRuntimeDocument(runtime, { slug, origin }),
     {
       status: 200,
-      headers: runtimeHeaders(origin),
+      headers: runtimeHeaders(origin, slug),
     },
   );
 }
 
-function runtimeHeaders(origin: string) {
+function runtimeHeaders(origin: string, slug?: string) {
   return {
     "cache-control": "no-store, max-age=0",
-    "content-security-policy": buildPublicFormRuntimeCsp(origin),
+    "content-security-policy": buildPublicFormRuntimeCsp(origin, slug),
     "content-type": "text/html; charset=utf-8",
     "cross-origin-resource-policy": "same-origin",
     "referrer-policy": "no-referrer",

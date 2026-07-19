@@ -5,14 +5,23 @@ import {
   formRuntimeFeedbackCss,
 } from "./form-runtime-bootstrap";
 
-function publicFormDocumentCspDirectives(origin: string) {
+function publicFormSubmissionEndpoint(origin: string, slug: string) {
+  return new URL(
+    `/api/public/forms/${encodeURIComponent(slug)}/submissions`,
+    origin,
+  ).toString();
+}
+
+function publicFormDocumentCspDirectives(submissionEndpoint?: string) {
   return [
     "default-src 'none'",
     "style-src 'unsafe-inline'",
     "script-src 'unsafe-inline'",
     "img-src data: blob:",
     "font-src data:",
-    `connect-src ${origin}`,
+    submissionEndpoint
+      ? `connect-src ${submissionEndpoint}`
+      : "connect-src 'none'",
     "form-action 'none'",
     "base-uri 'none'",
     "frame-src 'none'",
@@ -20,11 +29,13 @@ function publicFormDocumentCspDirectives(origin: string) {
   ];
 }
 
-export function buildPublicFormRuntimeCsp(origin: string) {
+export function buildPublicFormRuntimeCsp(origin: string, slug?: string) {
   return [
     "sandbox allow-scripts allow-forms",
     "frame-ancestors *",
-    ...publicFormDocumentCspDirectives(origin),
+    ...publicFormDocumentCspDirectives(
+      slug ? publicFormSubmissionEndpoint(origin, slug) : undefined,
+    ),
   ].join("; ");
 }
 
@@ -40,7 +51,7 @@ export function buildPublicFormRuntimeDocument(
     resizeMessageType: "magictrust:runtime-resize",
   }).replace(/<\/script/gi, "<\\/script");
   const publicFormDocumentCsp = publicFormDocumentCspDirectives(
-    input.origin,
+    publicFormSubmissionEndpoint(input.origin, input.slug),
   ).join("; ");
 
   return `<!doctype html>

@@ -86,7 +86,13 @@ describe("public form rendering", () => {
       "frame-ancestors *",
     );
     expect(response.headers.get("content-security-policy")).toContain(
-      "connect-src https://magictrust.test",
+      "connect-src https://magictrust.test/api/public/forms/contact-us/submissions",
+    );
+    expect(response.headers.get("content-security-policy")).not.toContain(
+      "connect-src https://magictrust.test;",
+    );
+    expect(response.headers.get("content-security-policy")).not.toContain(
+      "https://external.example",
     );
     expect(body).toContain(publishedSource.html);
     expect(body).toContain(publishedSource.css);
@@ -126,12 +132,28 @@ describe("public form rendering", () => {
       { slug: "contact-us", origin: "https://magictrust.test" },
     );
 
-    const csp = buildPublicFormRuntimeCsp("https://magictrust.test");
-    expect(csp).toContain("connect-src https://magictrust.test");
+    const csp = buildPublicFormRuntimeCsp(
+      "https://magictrust.test",
+      "contact-us",
+    );
+    expect(csp).toContain(
+      "connect-src https://magictrust.test/api/public/forms/contact-us/submissions",
+    );
+    expect(csp).not.toContain("connect-src https://magictrust.test;");
+    expect(csp).not.toContain("https://external.example");
     expect(csp).toContain("navigate-to 'none'");
     expect(csp).toContain("default-src 'none'");
     expect(document).toContain("<\\/style");
     expect(document).toContain("<\\/script");
+    expect(document).toContain(
+      "connect-src https://magictrust.test/api/public/forms/contact-us/submissions",
+    );
+  });
+
+  test("unavailable runtime keeps all connections blocked", () => {
+    expect(buildPublicFormRuntimeCsp("https://magictrust.test")).toContain(
+      "connect-src 'none'",
+    );
   });
 
   test("public resize messages enforce numeric height bounds", () => {
