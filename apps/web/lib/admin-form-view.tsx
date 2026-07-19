@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { RequestType } from "@magictrust/domain";
 import React from "react";
 
 import type { AdminSession } from "./admin-auth";
@@ -48,6 +49,19 @@ export function AdminFormsList({
                   <small>Lowercase letters, numbers, and hyphens.</small>
                 </label>
                 <label>
+                  Request type
+                  <select name="requestType" required defaultValue="">
+                    <option value="" disabled>
+                      Select a request type
+                    </option>
+                    <option value="DATA_ACCESS">Data access</option>
+                    <option value="DATA_DELETION">Data deletion</option>
+                    <option value="DO_NOT_CONTACT">Do not contact</option>
+                    <option value="UNSUBSCRIBE">Unsubscribe</option>
+                    <option value="GENERAL_INQUIRY">General inquiry</option>
+                  </select>
+                </label>
+                <label>
                   Description <span>Optional</span>
                   <textarea name="description" maxLength={2000} rows={3} />
                 </label>
@@ -88,6 +102,7 @@ export function AdminFormsList({
                   <tr>
                     <th>Form</th>
                     <th>Status</th>
+                    <th>Request type</th>
                     <th>Published version</th>
                     <th>Draft</th>
                     <th>Updated</th>
@@ -104,6 +119,7 @@ export function AdminFormsList({
                       <td>
                         <FormStatus status={form.status} />
                       </td>
+                      <td>{requestTypeLabel(form.requestType)}</td>
                       <td>
                         {versionLabel(
                           form.publishedVersionNumber,
@@ -138,6 +154,10 @@ export function AdminFormsList({
                     <FormStatus status={form.status} />
                   </div>
                   <dl>
+                    <div>
+                      <dt>Request type</dt>
+                      <dd>{requestTypeLabel(form.requestType)}</dd>
+                    </div>
                     <div>
                       <dt>Published</dt>
                       <dd>
@@ -221,6 +241,10 @@ export function AdminFormDetail({
             <dd>
               <FormStatus status={form.status} />
             </dd>
+          </div>
+          <div>
+            <dt>Request type</dt>
+            <dd>{requestTypeLabel(form.requestType)}</dd>
           </div>
           <div>
             <dt>Published version</dt>
@@ -430,6 +454,18 @@ function VersionStatus({
 
 function versionLabel(value: number | null, empty: string, suffix = "") {
   return value === null ? empty : `v${value}${suffix}`;
+}
+
+const requestTypeLabels: Record<RequestType, string> = {
+  DATA_ACCESS: "Data access",
+  DATA_DELETION: "Data deletion",
+  DO_NOT_CONTACT: "Do not contact",
+  UNSUBSCRIBE: "Unsubscribe",
+  GENERAL_INQUIRY: "General inquiry",
+};
+
+function requestTypeLabel(type: RequestType) {
+  return requestTypeLabels[type];
 }
 
 function formatDate(value: string) {

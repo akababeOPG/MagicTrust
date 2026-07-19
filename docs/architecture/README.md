@@ -93,9 +93,10 @@ applies an HTTP Content Security Policy sandbox and blocks external network
 connections, framing, navigation, and form actions. External scripts and assets
 are not supported in v1.
 
-Native form controls may be displayed and exercised, but submission is
-intentionally blocked. Public submissions, request creation, domain allowlists,
-analytics, and deployment management remain separate future phases.
+Native form controls may be displayed and exercised, but the isolated runtime
+does not yet wire submit events to the public submission API. Submission UX,
+runtime transport, domain allowlists, analytics, and deployment management
+remain separate future phases.
 
 ### Embed Snippet v1
 
@@ -122,9 +123,37 @@ its MagicTrust origin only for validated resize messaging. The embed loader
 uses a 500px initial height and updates it between 200 and 4000px through
 `ResizeObserver` with a non-polling fallback.
 
-Embedding remains rendering-only. Form submissions, request creation, domain
-allowlists, themes, analytics, version pinning, and per-site configuration are
-not implemented.
+Embedding remains rendering-only and is not yet wired to the managed Form
+submission endpoint. Domain allowlists, themes, analytics, version pinning, and
+per-site configuration are not implemented.
+
+### Form Submission Foundation v1
+
+Each logical Form owns one fixed request type, selected by an ADMIN when the
+Form is created and displayed with natural-language labels in form management.
+Existing Forms migrate to `GENERAL_INQUIRY`; new Forms must choose a type
+explicitly. Published versions inherit the Form configuration and cannot change
+the request type.
+
+`POST /api/public/forms/:slug/submissions` resolves only an active Form's
+current published `FormVersion`. It accepts bounded JSON under `data`, extracts
+the supported requester identity fields, and calls the shared public intake
+service. The Form's configured request type, rather than caller data, controls
+initial status and identity-verification behavior. Receipt communications and
+verification tokens therefore follow the same path as hosted public intake.
+
+The complete original submission is encrypted once through the existing
+request creation service. Its immutable plaintext snapshot contains only safe
+source metadata, including Form public ID and published version number; it does
+not contain database IDs, requester PII, or arbitrary submitted fields. No
+separate `FormSubmission` entity is required because the privacy request remains
+the system of record.
+
+An optional `Idempotency-Key` uses the existing idempotency store under a
+Form-specific namespace. Request data is represented only by its keyed HMAC,
+and the stored response contains only `publicId`. Matching retries replay that
+response without repeating request, communication, or event side effects;
+different payloads return a conflict.
 
 ## Request Model and Workflow Architecture
 

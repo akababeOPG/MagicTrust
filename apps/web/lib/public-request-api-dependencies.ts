@@ -9,7 +9,9 @@ import { createVercelBlobPrivateStorageProvider } from "@magictrust/storage";
 
 import type { PublicRequestApiDependencies } from "./public-request-api";
 
-export function getPublicRequestApiDependencies(): PublicRequestApiDependencies {
+export function getPublicRequestApiDependencies(
+  database?: ReturnType<typeof createDatabase>,
+): PublicRequestApiDependencies {
   const databaseUrl = getRequiredDatabaseUrl();
 
   if (!databaseUrl) {
@@ -124,7 +126,7 @@ export function getPublicRequestApiDependencies(): PublicRequestApiDependencies 
     };
   }
 
-  const db = createDatabase(databaseUrl);
+  const db = database ?? createDatabase(databaseUrl);
 
   return {
     requestCreationStore: createRequestCreationStore(db),

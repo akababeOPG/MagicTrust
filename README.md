@@ -170,6 +170,18 @@ http://localhost:3000/requests/req_example
 
 Public tracking only exposes public-safe status data and public comments.
 
+Managed Forms accept backend submissions at:
+
+```text
+POST /api/public/forms/:slug/submissions
+```
+
+The Form's configured request type controls request creation. Only active,
+published Forms accept submissions, and the response contains only the public
+request reference. The endpoint supports an optional `Idempotency-Key` for safe
+browser retries. The public runtime and embed loader remain rendering-only in
+this version and do not submit automatically.
+
 Consumers can request a single-use secure access link from the tracking page or by calling:
 
 ```text

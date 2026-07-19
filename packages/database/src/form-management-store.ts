@@ -1,4 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
+import type { RequestType } from "@magictrust/domain";
 
 import type { createDatabase } from "./index";
 import type { AdminAuditEventType } from "./admin-user-management-store";
@@ -16,6 +17,7 @@ export type ManagedForm = {
   name: string;
   slug: string;
   description: string | null;
+  requestType: RequestType;
   status: FormStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -53,6 +55,13 @@ export type PublishedFormRuntime = {
   javascript: string;
 };
 
+export type PublishedFormSubmissionTarget = {
+  publicId: string;
+  slug: string;
+  requestType: RequestType;
+  versionNumber: number;
+};
+
 export type FormManagementErrorCode =
   | "ACTOR_NOT_AUTHORIZED"
   | "DRAFT_ALREADY_EXISTS"
@@ -73,12 +82,16 @@ export type FormManagementStore = {
     name: string;
     slug: string;
     description?: string;
+    requestType: RequestType;
     actorAdminUserId: string;
     now: Date;
   }): Promise<FormMutationResult>;
   listForms(): Promise<ManagedFormSummary[]>;
   getForm(publicId: string): Promise<ManagedFormDetail | null>;
   getPublishedFormBySlug(slug: string): Promise<PublishedFormRuntime | null>;
+  getPublishedFormSubmissionTargetBySlug(
+    slug: string,
+  ): Promise<PublishedFormSubmissionTarget | null>;
   updateDraftVersion(input: {
     publicId: string;
     versionNumber: number;
@@ -122,6 +135,7 @@ export function createFormManagementStore(db: Database): FormManagementStore {
             name: input.name,
             slug: input.slug,
             description: input.description,
+            requestType: input.requestType,
             createdAt: input.now,
             updatedAt: input.now,
             createdByAdminUserId: input.actorAdminUserId,
@@ -217,6 +231,26 @@ export function createFormManagementStore(db: Database): FormManagementStore {
         .where(and(eq(forms.slug, slug), eq(forms.status, "ACTIVE")))
         .limit(1);
       return runtime ?? null;
+    },
+    async getPublishedFormSubmissionTargetBySlug(slug) {
+      const [target] = await db
+        .select({
+          publicId: forms.publicId,
+          slug: forms.slug,
+          requestType: forms.requestType,
+          versionNumber: formVersions.versionNumber,
+        })
+        .from(forms)
+        .innerJoin(
+          formVersions,
+          and(
+            eq(formVersions.formId, forms.id),
+            eq(formVersions.status, "PUBLISHED"),
+          ),
+        )
+        .where(and(eq(forms.slug, slug), eq(forms.status, "ACTIVE")))
+        .limit(1);
+      return target ?? null;
     },
     async updateDraftVersion(input) {
       return db.transaction(async (tx) => {
@@ -502,6 +536,7 @@ const formSelection = {
   name: forms.name,
   slug: forms.slug,
   description: forms.description,
+  requestType: forms.requestType,
   status: forms.status,
   createdAt: forms.createdAt,
   updatedAt: forms.updatedAt,

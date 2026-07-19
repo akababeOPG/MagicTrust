@@ -76,6 +76,8 @@ export function sanitizeSubmittedDataSnapshot(
     !Array.isArray(submittedData.source)
       ? (submittedData.source as JsonObject)
       : {};
+  const formPublicId = safeString(source.formPublicId);
+  const formVersionNumber = safePositiveInteger(source.formVersionNumber);
 
   return {
     type: requestType,
@@ -83,10 +85,18 @@ export function sanitizeSubmittedDataSnapshot(
       channel: safeString(source.channel),
       formKey: safeString(source.formKey),
       siteKey: safeString(source.siteKey),
+      ...(formPublicId ? { formPublicId } : {}),
+      ...(formVersionNumber ? { formVersionNumber } : {}),
     },
   };
 }
 
 function safeString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function safePositiveInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
 }

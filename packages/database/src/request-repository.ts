@@ -77,6 +77,8 @@ export type SafeRequestSource = {
   channel: string | null;
   siteKey: string | null;
   formKey: string | null;
+  formPublicId?: string | null;
+  formVersionNumber?: number | null;
 };
 
 export type RequestEventSummary = {
@@ -2019,15 +2021,26 @@ function safeSourceFromSubmittedData(
     return null;
   }
 
+  const formPublicId = safeString(source.formPublicId);
+  const formVersionNumber = safePositiveInteger(source.formVersionNumber);
+
   return {
     channel: safeString(source.channel),
     siteKey: safeString(source.siteKey),
     formKey: safeString(source.formKey),
+    ...(formPublicId ? { formPublicId } : {}),
+    ...(formVersionNumber ? { formVersionNumber } : {}),
   };
 }
 
 function safeString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function safePositiveInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
 }
 
 function isTerminalStatus(status: RequestStatus): boolean {

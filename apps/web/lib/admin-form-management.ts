@@ -14,6 +14,8 @@ import type {
   ManagedFormDetail,
 } from "@magictrust/database";
 import { getAppBaseUrl, getRequiredDatabaseUrl } from "@magictrust/config";
+import { requestTypes } from "@magictrust/domain";
+import type { RequestType } from "@magictrust/domain";
 import { z } from "zod";
 
 import type { AdminSession } from "./admin-auth";
@@ -22,6 +24,7 @@ const createFormSchema = z.object({
   name: z.string().trim().min(1).max(160),
   slug: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).optional(),
+  requestType: z.enum(requestTypes),
 });
 
 const saveDraftSchema = z.object({
@@ -41,6 +44,7 @@ export type AdminFormListItem = {
   publicId: string;
   name: string;
   slug: string;
+  requestType: RequestType;
   status: FormStatus;
   publishedVersionNumber: number | null;
   draftVersionNumber: number | null;
@@ -52,6 +56,7 @@ export type AdminFormDetailView = {
   name: string;
   slug: string;
   description: string | null;
+  requestType: RequestType;
   status: FormStatus;
   updatedAt: string;
   draftVersionNumber: number | null;
@@ -100,6 +105,7 @@ export async function listAdminForms(dependencies: AdminFormDependencies) {
     publicId: form.publicId,
     name: form.name,
     slug: form.slug,
+    requestType: form.requestType,
     status: form.status,
     publishedVersionNumber: form.publishedVersion?.versionNumber ?? null,
     draftVersionNumber: form.draftVersion?.versionNumber ?? null,
@@ -150,9 +156,12 @@ export async function createAdminForm(
     name: data?.get("name"),
     slug: data?.get("slug"),
     description: optionalString(data?.get("description")),
+    requestType: data?.get("requestType"),
   });
   if (!parsed.success) {
-    return redirectForms(request, { error: "Enter a valid name and slug." });
+    return redirectForms(request, {
+      error: "Enter a valid name, slug, and request type.",
+    });
   }
   const slug = normalizeSlug(parsed.data.slug);
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
@@ -165,6 +174,7 @@ export async function createAdminForm(
     name: parsed.data.name,
     slug,
     description: parsed.data.description,
+    requestType: parsed.data.requestType,
     actorAdminUserId: session.adminUserId,
     now: dependencies.now(),
   });
@@ -288,6 +298,7 @@ function toDetailView(detail: ManagedFormDetail, appBaseUrl: string) {
     name: detail.form.name,
     slug: detail.form.slug,
     description: detail.form.description,
+    requestType: detail.form.requestType,
     status: detail.form.status,
     updatedAt: detail.form.updatedAt.toISOString(),
     draftVersionNumber: draft?.versionNumber ?? null,
@@ -435,6 +446,7 @@ function missingStore(): FormManagementStore {
     listForms: missing,
     getForm: missing,
     getPublishedFormBySlug: missing,
+    getPublishedFormSubmissionTargetBySlug: missing,
     updateDraftVersion: missing,
     publishFormVersion: missing,
     createDraftVersion: missing,

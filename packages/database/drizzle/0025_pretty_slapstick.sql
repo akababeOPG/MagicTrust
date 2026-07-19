@@ -1,0 +1,1 @@
+ALTER TABLE "forms" ADD COLUMN "request_type" "request_type" DEFAULT 'GENERAL_INQUIRY' NOT NULL;

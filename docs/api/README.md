@@ -82,6 +82,57 @@ Example response:
 }
 ```
 
+## `POST /api/public/forms/:slug/submissions`
+
+Creates a request from an active managed Form's current published version. The
+endpoint is public and does not require `x-api-key`. The Form's fixed request
+type determines the request lifecycle; a caller-supplied field cannot override
+it.
+
+```sh
+curl -X POST "http://localhost:3000/api/public/forms/privacy-question/submissions" \
+  -H "content-type: application/json" \
+  -H "Idempotency-Key: browser-submit-123" \
+  -d '{
+    "data": {
+      "firstName": "John",
+      "lastName": "Doe",
+      "email": "john@example.com",
+      "phone": "+13055551234",
+      "message": "Please review my request.",
+      "preferences": {
+        "newsletters": false
+      }
+    }
+  }'
+```
+
+Successful responses contain only the generated public request reference:
+
+```json
+{
+  "publicId": "req_example"
+}
+```
+
+`email` is required. `firstName`, `lastName`, and `phone` are recognized as
+requester identity fields when present; all remaining JSON-safe fields are
+preserved as original submitted data. Submission data is limited to 256 KB and
+12 levels of nesting. The complete original payload is encrypted through the
+existing PII-hardened request creation service, while plaintext storage is
+limited to safe Form provenance: the Form public ID, slug, and published
+version number. Database IDs, hashes, ciphertext, communications, and events
+are never returned.
+
+Only active Forms with a published version accept submissions. Unknown,
+archived, and unpublished Forms return the same normalized `404` response and
+create no request or communication side effects.
+
+`Idempotency-Key` is optional. Repeating the same key and payload for the same
+Form replays the original safe response without creating duplicate requests,
+communications, or events. Reusing the key with different data returns `409`
+with code `IDEMPOTENCY_KEY_REUSED`.
+
 ## `GET /api/public/requests/:publicId`
 
 Returns public-safe tracking data for a request. This endpoint does not require `x-api-key` and only looks up requests by `publicId`.

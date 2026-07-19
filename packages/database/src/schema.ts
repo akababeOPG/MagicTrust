@@ -365,6 +365,9 @@ export const forms = pgTable(
     name: varchar("name", { length: 160 }).notNull(),
     slug: varchar("slug", { length: 120 }).notNull(),
     description: text("description"),
+    requestType: requestTypeEnum("request_type")
+      .default("GENERAL_INQUIRY")
+      .notNull(),
     status: formStatusEnum("status").default("ACTIVE").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

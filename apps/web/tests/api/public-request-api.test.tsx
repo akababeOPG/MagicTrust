@@ -13,7 +13,10 @@ import type {
   RequestIdentityVerificationToken,
   Requester,
 } from "@magictrust/domain";
+import { decryptOriginalSubmittedData } from "@magictrust/domain";
 import type {
+  ApiIdempotencyRecord,
+  PublishedFormSubmissionTarget,
   RequestDetails,
   RequestListFilters,
   RequestRepository,
@@ -43,13 +46,239 @@ import {
   getPublicSecureAccessData,
   verifyPublicRequestIdentity,
 } from "../../lib/public-request-api";
+import { createPublicFormSubmissionApi } from "../../lib/public-form-submissions";
 import { PublicSecureAccessView } from "../../lib/public-secure-access-view";
 import { PublicRequestTrackingView } from "../../lib/public-request-tracking-view";
+
+vi.mock("server-only", () => ({}));
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-public-intake";
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("managed public form submissions", () => {
+  test("creates a request using the Form's fixed request type and published version", async () => {
+    const dependencies = createManagedFormSubmissionDependencies({
+      requestType: "GENERAL_INQUIRY",
+      versionNumber: 3,
+    });
+    const api = createPublicFormSubmissionApi(dependencies);
+
+    const response = await api.create(
+      formSubmissionRequest({
+        email: "john@example.com",
+        firstName: "John",
+        lastName: "Doe",
+        phone: "+13055551234",
+        type: "DATA_DELETION",
+        message: "Please review my question.",
+        preferences: { newsletters: false },
+      }),
+      "privacy-question",
+    );
+    const body = await response.json();
+    const created = dependencies.state.requests[0]!;
+    const original = decryptOriginalSubmittedData(created)!;
+
+    expect(response.status).toBe(201);
+    expect(body).toEqual({ publicId: created.publicId });
+    expect(created.type).toBe("GENERAL_INQUIRY");
+    expect(created.status).toBe("SUBMITTED");
+    expect(created.submittedData).toEqual({
+      type: "GENERAL_INQUIRY",
+      source: {
+        channel: "FORM",
+        siteKey: "magictrust-managed-form",
+        formKey: "privacy-question",
+        formPublicId: "frm_managed_test",
+        formVersionNumber: 3,
+      },
+    });
+    expect(original).toMatchObject({
+      type: "GENERAL_INQUIRY",
+      requester: {
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        phone: "+13055551234",
+      },
+      submittedData: {
+        type: "DATA_DELETION",
+        message: "Please review my question.",
+        preferences: { newsletters: false },
+      },
+    });
+    expect(original.submittedData).not.toHaveProperty("email");
+    expect(original.submittedData).not.toHaveProperty("phone");
+    expect(dependencies.state.requesters[0]).toMatchObject({
+      emailEncrypted: expect.any(String),
+      emailHash: expect.any(String),
+      phoneEncrypted: expect.any(String),
+      phoneHash: expect.any(String),
+    });
+    expect(JSON.stringify(created.submittedData)).not.toContain(
+      "john@example.com",
+    );
+    expect(JSON.stringify(body)).not.toContain("requesterId");
+    expect(JSON.stringify(body)).not.toContain("versionNumber");
+  });
+
+  test.each(["DATA_ACCESS", "DATA_DELETION"] as const)(
+    "%s reuses identity verification and receipt behavior",
+    async (requestType) => {
+      const dependencies = createManagedFormSubmissionDependencies({
+        requestType,
+      });
+      const response = await createPublicFormSubmissionApi(dependencies).create(
+        formSubmissionRequest({ email: "john@example.com" }),
+        "privacy-question",
+      );
+
+      expect(response.status).toBe(201);
+      expect(dependencies.state.requests[0]?.status).toBe(
+        "PENDING_VERIFICATION",
+      );
+      expect(dependencies.state.identityVerificationTokens).toHaveLength(1);
+      expect(dependencies.state.sentEmails[0]?.body).toContain(
+        "/verify?token=",
+      );
+      expect(dependencies.state.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "IDENTITY_VERIFICATION_SENT" }),
+        ]),
+      );
+    },
+  );
+
+  test("non-verification form types reuse normal receipt behavior", async () => {
+    const dependencies = createManagedFormSubmissionDependencies({
+      requestType: "UNSUBSCRIBE",
+    });
+    const response = await createPublicFormSubmissionApi(dependencies).create(
+      formSubmissionRequest({ email: "john@example.com" }),
+      "privacy-question",
+    );
+
+    expect(response.status).toBe(201);
+    expect(dependencies.state.requests[0]?.status).toBe("SUBMITTED");
+    expect(dependencies.state.identityVerificationTokens).toHaveLength(0);
+    expect(dependencies.state.sentEmails[0]?.subject).toContain(
+      "MagicTrust request received",
+    );
+  });
+
+  test.each(["unknown", "inactive", "unpublished"])(
+    "%s forms return 404 without side effects",
+    async () => {
+      const dependencies = createManagedFormSubmissionDependencies({
+        available: false,
+      });
+      const response = await createPublicFormSubmissionApi(dependencies).create(
+        formSubmissionRequest({ email: "john@example.com" }),
+        "unavailable",
+      );
+
+      expect(response.status).toBe(404);
+      expect(dependencies.state.requests).toHaveLength(0);
+      expect(dependencies.state.communications).toHaveLength(0);
+      expect(dependencies.state.sentEmails).toHaveLength(0);
+    },
+  );
+
+  test("validates malformed, oversized, deeply nested, and missing email payloads", async () => {
+    const dependencies = createManagedFormSubmissionDependencies();
+    const api = createPublicFormSubmissionApi(dependencies);
+    const nested: Record<string, unknown> = {};
+    let cursor = nested;
+    for (let depth = 0; depth < 14; depth += 1) {
+      cursor.child = {};
+      cursor = cursor.child as Record<string, unknown>;
+    }
+    const requests = [
+      new Request(
+        "https://magictrust.test/api/public/forms/privacy-question/submissions",
+        { method: "POST", body: "{" },
+      ),
+      new Request(
+        "https://magictrust.test/api/public/forms/privacy-question/submissions",
+        {
+          method: "POST",
+          body: '{"data":{"email":"john@example.com","nested":{"__proto__":{"polluted":true}}}}',
+        },
+      ),
+      formSubmissionRequest({ email: "john@example.com", nested }),
+      formSubmissionRequest({
+        email: "john@example.com",
+        message: "x".repeat(256 * 1024),
+      }),
+      formSubmissionRequest({ message: "Email is required." }),
+    ];
+
+    for (const request of requests) {
+      const response = await api.create(request, "privacy-question");
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe("VALIDATION_ERROR");
+    }
+    expect(dependencies.state.requests).toHaveLength(0);
+  });
+
+  test("same idempotency key and payload replays without duplicate side effects", async () => {
+    const dependencies = createManagedFormSubmissionDependencies();
+    const api = createPublicFormSubmissionApi(dependencies);
+    const data = {
+      email: "john@example.com",
+      message: "One submission only.",
+    };
+
+    const first = await api.create(
+      formSubmissionRequest(data, "same-submit"),
+      "privacy-question",
+    );
+    const replay = await api.create(
+      formSubmissionRequest(data, "same-submit"),
+      "privacy-question",
+    );
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get("Idempotency-Replayed")).toBe("true");
+    expect(await replay.json()).toEqual(await first.json());
+    expect(dependencies.state.requests).toHaveLength(1);
+    expect(dependencies.state.communications).toHaveLength(1);
+    expect(dependencies.formSubmissionState.idempotencyRecords).toHaveLength(1);
+    expect(
+      JSON.stringify(
+        dependencies.formSubmissionState.idempotencyRecords[0]?.responseBody,
+      ),
+    ).toEqual(
+      JSON.stringify({ publicId: dependencies.state.requests[0]?.publicId }),
+    );
+  });
+
+  test("reusing an idempotency key for a different payload returns 409", async () => {
+    const dependencies = createManagedFormSubmissionDependencies();
+    const api = createPublicFormSubmissionApi(dependencies);
+    await api.create(
+      formSubmissionRequest(
+        { email: "john@example.com", answer: "first" },
+        "reused-key",
+      ),
+      "privacy-question",
+    );
+    const conflict = await api.create(
+      formSubmissionRequest(
+        { email: "john@example.com", answer: "second" },
+        "reused-key",
+      ),
+      "privacy-question",
+    );
+
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()).error.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(dependencies.state.requests).toHaveLength(1);
+  });
 });
 
 describe("public request API", () => {
@@ -1279,6 +1508,74 @@ function publicRequest(overrides: Record<string, unknown> = {}) {
       ...overrides,
     }),
   });
+}
+
+function formSubmissionRequest(
+  data: Record<string, unknown>,
+  idempotencyKey?: string,
+) {
+  return new Request(
+    "https://magictrust.test/api/public/forms/privacy-question/submissions",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+      },
+      body: JSON.stringify({ data }),
+    },
+  );
+}
+
+function createManagedFormSubmissionDependencies(
+  options: {
+    available?: boolean;
+    requestType?: PublishedFormSubmissionTarget["requestType"];
+    versionNumber?: number;
+  } = {},
+) {
+  const intake = createInMemoryDependencies();
+  const target: PublishedFormSubmissionTarget | null =
+    options.available === false
+      ? null
+      : {
+          publicId: "frm_managed_test",
+          slug: "privacy-question",
+          requestType: options.requestType ?? "GENERAL_INQUIRY",
+          versionNumber: options.versionNumber ?? 1,
+        };
+  const idempotencyRecords: ApiIdempotencyRecord[] = [];
+
+  return {
+    ...intake,
+    formSubmissionState: { target, idempotencyRecords },
+    formStore: {
+      async getPublishedFormSubmissionTargetBySlug(slug: string) {
+        return target?.slug === slug ? target : null;
+      },
+    },
+    idempotencyStore: {
+      async findActive(apiClientId: string, idempotencyKey: string, now: Date) {
+        return (
+          idempotencyRecords.find(
+            (record) =>
+              record.apiClientId === apiClientId &&
+              record.idempotencyKey === idempotencyKey &&
+              record.expiresAt > now,
+          ) ?? null
+        );
+      },
+      async create(input: Omit<ApiIdempotencyRecord, "id" | "createdAt">) {
+        const record: ApiIdempotencyRecord = {
+          ...input,
+          id: `idempotency-${idempotencyRecords.length + 1}`,
+          createdAt: intake.now(),
+        };
+        idempotencyRecords.push(record);
+        return record;
+      },
+    },
+  };
 }
 
 function extractTokenFromEmail(email: { body: string } | undefined): string {

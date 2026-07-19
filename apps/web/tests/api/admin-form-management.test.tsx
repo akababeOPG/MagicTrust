@@ -35,6 +35,7 @@ describe("form management foundation", () => {
         name: "Privacy Request",
         slug: " Privacy_Request ",
         description: "Consumer privacy intake.",
+        requestType: "DATA_ACCESS",
       }),
       session("ADMIN"),
       dependencies,
@@ -44,6 +45,7 @@ describe("form management foundation", () => {
     expect(dependencies.state.forms[0]).toMatchObject({
       name: "Privacy Request",
       slug: "privacy-request",
+      requestType: "DATA_ACCESS",
       status: "ACTIVE",
     });
     expect(dependencies.state.versions[0]).toMatchObject({
@@ -68,6 +70,7 @@ describe("form management foundation", () => {
       formRequest("/admin/forms/create", {
         name: "Duplicate",
         slug: "PRIVACY REQUEST",
+        requestType: "GENERAL_INQUIRY",
       }),
       session("ADMIN"),
       dependencies,
@@ -77,6 +80,42 @@ describe("form management foundation", () => {
       "form+with+this+slug+already+exists",
     );
     expect(dependencies.state.forms).toHaveLength(1);
+  });
+
+  test("form creation requires a request type and presents it naturally", async () => {
+    const dependencies = createDependencies();
+    const rejected = await createAdminForm(
+      formRequest("/admin/forms/create", {
+        name: "Missing type",
+        slug: "missing-type",
+      }),
+      session("ADMIN"),
+      dependencies,
+    );
+
+    expect(rejected.headers.get("location")).toContain(
+      "valid+name%2C+slug%2C+and+request+type",
+    );
+    expect(dependencies.state.forms).toHaveLength(0);
+
+    const form = await createForm(
+      dependencies,
+      "Deletion request",
+      "deletion-request",
+      "DATA_DELETION",
+    );
+    const list = await listAdminForms(dependencies);
+    const detail = await getAdminForm(form.publicId, dependencies);
+    const html = renderToStaticMarkup(
+      <>
+        <AdminFormsList role="ADMIN" forms={list} />
+        <AdminFormDetail role="OPERATOR" form={detail!} />
+      </>,
+    );
+
+    expect(form.requestType).toBe("DATA_DELETION");
+    expect(html).toContain("Data deletion");
+    expect(html).not.toContain(">DATA_DELETION<");
   });
 
   test("publishes v1, copies it to v2, then archives v1 when v2 publishes", async () => {
@@ -595,9 +634,10 @@ async function createForm(
   dependencies: ReturnType<typeof createDependencies>,
   name: string,
   slug: string,
+  requestType: ManagedForm["requestType"] = "GENERAL_INQUIRY",
 ) {
   await createAdminForm(
-    formRequest("/admin/forms/create", { name, slug }),
+    formRequest("/admin/forms/create", { name, slug, requestType }),
     session("ADMIN"),
     dependencies,
   );
@@ -621,6 +661,7 @@ function createMemoryStore(state: State): FormManagementStore {
         name: input.name,
         slug: input.slug,
         description: input.description ?? null,
+        requestType: input.requestType,
         status: "ACTIVE",
         createdAt: input.now,
         updatedAt: input.now,
@@ -679,6 +720,24 @@ function createMemoryStore(state: State): FormManagementStore {
             html: published.html,
             css: published.css,
             javascript: published.javascript,
+          }
+        : null;
+    },
+    async getPublishedFormSubmissionTargetBySlug(slug) {
+      const form = state.forms.find(
+        (item) => item.slug === slug && item.status === "ACTIVE",
+      );
+      if (!form) return null;
+      const published = state.versions.find(
+        (version) =>
+          version.formId === form.id && version.status === "PUBLISHED",
+      );
+      return published
+        ? {
+            publicId: form.publicId,
+            slug: form.slug,
+            requestType: form.requestType,
+            versionNumber: published.versionNumber,
           }
         : null;
     },

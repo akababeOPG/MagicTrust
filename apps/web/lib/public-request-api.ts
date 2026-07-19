@@ -32,6 +32,20 @@ export type PublicRequestApiDependencies = {
   now: () => Date;
 };
 
+export type PublicIntakeSubmissionInput = {
+  type: RequestType;
+  email: string;
+  phone?: string | null;
+  submittedData: JsonObject;
+};
+
+export type PublicIntakeSubmissionResult = {
+  publicId: string;
+  type: RequestType;
+  status: RequestStatus;
+  createdAt: string;
+};
+
 const publicRequestSchema = z.object({
   type: z.enum(requestTypes),
   firstName: z.string().min(1),
@@ -79,48 +93,19 @@ export function createPublicRequestApi(
           },
         };
 
-        const result = await createPrivacyRequest(
+        const result = await submitPublicIntakeRequest(
           {
-            requester: {
-              email: parsed.data.email,
-              phone: parsed.data.phone || null,
-            },
             type: parsed.data.type,
+            email: parsed.data.email,
+            phone: parsed.data.phone || null,
             submittedData,
-            actor: {
-              type: "CONSUMER",
-            },
-            initialStatus: requiresEmailIdentityVerification(parsed.data.type)
-              ? "PENDING_VERIFICATION"
-              : "SUBMITTED",
           },
-          dependencies.requestCreationStore,
+          dependencies,
         );
-
-        await sendReceiptEmail({
-          requestRepository: dependencies.requestRepository,
-          emailProvider: dependencies.emailProvider,
-          requestId: result.request.id,
-          recipient: parsed.data.email,
-          publicId: result.request.publicId,
-          type: result.request.type,
-          status: result.request.status,
-          appBaseUrl: dependencies.appBaseUrl,
-          verification:
-            result.request.status === "PENDING_VERIFICATION"
-              ? await createIdentityVerificationLink({
-                  requestRepository: dependencies.requestRepository,
-                  requestId: result.request.id,
-                  publicId: result.request.publicId,
-                  appBaseUrl: dependencies.appBaseUrl,
-                  now: dependencies.now,
-                })
-              : null,
-        });
 
         return Response.json(
           {
-            request: normalizePublicRequest(result.request),
+            request: result,
           },
           {
             status: 201,
@@ -156,6 +141,59 @@ export function createPublicRequestApi(
       return genericAccessLinkResponse();
     },
   };
+}
+
+export async function submitPublicIntakeRequest(
+  input: PublicIntakeSubmissionInput,
+  dependencies: Pick<
+    PublicRequestApiDependencies,
+    | "requestCreationStore"
+    | "requestRepository"
+    | "emailProvider"
+    | "appBaseUrl"
+    | "now"
+  >,
+): Promise<PublicIntakeSubmissionResult> {
+  const result = await createPrivacyRequest(
+    {
+      requester: {
+        email: input.email,
+        phone: input.phone || null,
+      },
+      type: input.type,
+      submittedData: input.submittedData,
+      actor: {
+        type: "CONSUMER",
+      },
+      initialStatus: requiresEmailIdentityVerification(input.type)
+        ? "PENDING_VERIFICATION"
+        : "SUBMITTED",
+    },
+    dependencies.requestCreationStore,
+  );
+
+  await sendReceiptEmail({
+    requestRepository: dependencies.requestRepository,
+    emailProvider: dependencies.emailProvider,
+    requestId: result.request.id,
+    recipient: input.email,
+    publicId: result.request.publicId,
+    type: result.request.type,
+    status: result.request.status,
+    appBaseUrl: dependencies.appBaseUrl,
+    verification:
+      result.request.status === "PENDING_VERIFICATION"
+        ? await createIdentityVerificationLink({
+            requestRepository: dependencies.requestRepository,
+            requestId: result.request.id,
+            publicId: result.request.publicId,
+            appBaseUrl: dependencies.appBaseUrl,
+            now: dependencies.now,
+          })
+        : null,
+  });
+
+  return normalizePublicRequest(result.request);
 }
 
 export type PublicRequestTrackingData = {
