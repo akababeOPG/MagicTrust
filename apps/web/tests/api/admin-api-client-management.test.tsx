@@ -9,7 +9,10 @@ import { describe, expect, test, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { AdminApiClientDirectory } from "../../lib/admin-api-client-directory";
+import {
+  AdminApiClientDirectory,
+  reduceApiClientCreationState,
+} from "../../lib/admin-api-client-directory";
 import { AdminShell } from "../../lib/admin-ui";
 import {
   createManagedApiClient,
@@ -20,12 +23,13 @@ import {
 describe("admin API client management", () => {
   test("ADMIN can list clients with the supported processor scopes", () => {
     const html = renderToStaticMarkup(
-      <AdminApiClientDirectory clients={[client()]} />,
+      <AdminApiClientDirectory
+        clients={[client()]}
+        scopeOptions={scopeOptions}
+      />,
     );
     expect(html).toContain("API Clients");
     expect(html).toContain("requests:processing-result:write");
-    expect(html).toContain("Report successful or rejected processing outcomes");
-    expect(html).toContain("admin-api-client-scope");
     expect(html).toContain("+1 more");
     expect(html).toContain("Last used");
   });
@@ -41,7 +45,20 @@ describe("admin API client management", () => {
     expect(html).toContain('viewBox="0 0 24 24" width="18" height="18"');
   });
 
-  test("created secret is shown once and only its hash is retained", async () => {
+  test("Cancel closes the create modal without changing the URL", () => {
+    const initial = {
+      createOpen: true,
+      created: null,
+      clients: [client()],
+    };
+    const state = reduceApiClientCreationState(initial, {
+      type: "CANCEL_CREATE",
+    });
+    expect(state.createOpen).toBe(false);
+    expect(state.clients).toEqual(initial.clients);
+  });
+
+  test("successful creation stays on the list and returns the secret once", async () => {
     const fixture = dependencies();
     const form = new FormData();
     form.set("name", "Privacy Processor");
@@ -52,15 +69,32 @@ describe("admin API client management", () => {
       session,
       fixture,
     );
-    const html = await response.text();
+    const body = await response.json();
 
     expect(response.status).toBe(201);
-    expect(html).toContain(
-      "Copy this API key now. You won't be able to see it again.",
-    );
-    expect(html.match(/mt_live_test-secret/g)).toHaveLength(1);
+    expect(response.headers.get("location")).toBeNull();
+    expect(JSON.stringify(body).match(/mt_live_test-secret/g)).toHaveLength(1);
+    expect(body.client.name).toBe("Privacy Processor");
     expect(JSON.stringify(fixture.state)).not.toContain("mt_live_test-secret");
     expect(fixture.state.keyHash).toBe(hashApiKey("mt_live_test-secret"));
+  });
+
+  test("success adds the client and Done clears the one-time secret", () => {
+    const created = {
+      client: { ...client(), id: "client-2", name: "New processor" },
+      apiKey: "mt_live_one-time",
+    };
+    const success = reduceApiClientCreationState(
+      { createOpen: true, created: null, clients: [client()] },
+      { type: "CREATED", value: created },
+    );
+    expect(success.createOpen).toBe(false);
+    expect(success.created?.apiKey).toBe("mt_live_one-time");
+    expect(success.clients[0]?.name).toBe("New processor");
+
+    const done = reduceApiClientCreationState(success, { type: "DONE" });
+    expect(done.created).toBeNull();
+    expect(done.clients[0]?.name).toBe("New processor");
   });
 
   test("ADMIN can revoke and revoked credentials fail authentication", async () => {
@@ -82,6 +116,26 @@ const session = {
   role: "ADMIN" as const,
   sessionId: "session-1",
 };
+
+const scopeOptions = [
+  { value: "requests:read", label: "requests:read" },
+  {
+    value: "requests:processing-data:read",
+    label: "requests:processing-data:read",
+  },
+  { value: "requests:create", label: "requests:create" },
+  { value: "requests:update", label: "requests:update" },
+  {
+    value: "requests:processing-result:write",
+    label: "requests:processing-result:write",
+  },
+  { value: "attachments:read", label: "attachments:read" },
+  { value: "attachments:write", label: "attachments:write" },
+  { value: "communications:write", label: "communications:write" },
+  { value: "notifications:write", label: "notifications:write" },
+  { value: "comments:write", label: "comments:write" },
+  { value: "events:write", label: "events:write" },
+];
 
 function dependencies(): AdminApiClientDependencies & {
   state: { active: boolean; keyHash: string | null };

@@ -66,9 +66,15 @@ export async function createManagedApiClient(
     : [];
 
   if (!parsed.success || scopes.length !== parsed.data.scopes.length) {
-    return redirectToList(request, {
-      error: "Enter a name and select valid scopes.",
-    });
+    return Response.json(
+      {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Enter a name and select valid scopes.",
+        },
+      },
+      { status: 400 },
+    );
   }
 
   const rawKey = dependencies.generateKey();
@@ -82,7 +88,20 @@ export async function createManagedApiClient(
 
   if (!client) return actionError("API client could not be created.", 403);
 
-  return oneTimeKeyResponse(client.name, rawKey);
+  return Response.json(
+    {
+      client: {
+        ...client,
+        createdAt: client.createdAt.toISOString(),
+        lastUsedAt: client.lastUsedAt?.toISOString() ?? null,
+      },
+      apiKey: rawKey,
+    },
+    {
+      status: 201,
+      headers: { "cache-control": "no-store, private" },
+    },
+  );
 }
 
 export async function revokeManagedApiClient(
@@ -102,23 +121,6 @@ export async function revokeManagedApiClient(
   return revoked
     ? redirectToList(request, { success: "API client revoked." })
     : actionError("API client could not be revoked.", 404);
-}
-
-function oneTimeKeyResponse(name: string, rawKey: string): Response {
-  const safeName = escapeHtml(name);
-  const safeKey = escapeHtml(rawKey);
-  return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>API client created · MagicTrust</title><link rel="stylesheet" href="/_next/static/css/app/layout.css"></head><body><main class="admin-page admin-users-page"><section class="admin-user-filters"><div><p class="eyebrow">Administration</p><h1>API client created</h1><p>${safeName}</p></div><div class="mt-feedback mt-feedback-success" role="status"><strong>Copy this API key now. You won't be able to see it again.</strong></div><label>API key<input id="api-key" value="${safeKey}" readonly></label><div><button id="copy-key" type="button">Copy</button> <a class="mt-button mt-button-secondary" href="/admin/api-clients">Return to API Clients</a></div></section></main><script>document.getElementById("copy-key").addEventListener("click",async function(){await navigator.clipboard.writeText(document.getElementById("api-key").value);this.textContent="Copied"})</script></body></html>`,
-    {
-      status: 201,
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store, private",
-        "content-security-policy":
-          "default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
-      },
-    },
-  );
 }
 
 function redirectToList(
@@ -141,16 +143,6 @@ function actionError(message: string, status: number): Response {
 function isSameOriginRequest(request: Request): boolean {
   const origin = request.headers.get("origin");
   return origin !== null && origin === new URL(request.url).origin;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    (character) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        character
-      ]!,
-  );
 }
 
 function missingStore(): ApiClientManagementStore {

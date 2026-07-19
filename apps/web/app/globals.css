@@ -1402,14 +1402,6 @@ a.admin-home-summary-card:hover {
 }
 
 /* API client administration */
-.admin-api-client-create[open]::before {
-  position: fixed;
-  z-index: 40;
-  inset: 0;
-  background: rgba(27, 25, 21, 0.52);
-  content: "";
-}
-
 .admin-api-client-create-panel {
   position: fixed;
   z-index: 50;
@@ -1421,6 +1413,21 @@ a.admin-home-summary-card:hover {
   gap: var(--mt-space-6);
   overflow-y: auto;
   transform: translate(-50%, -50%);
+}
+
+.admin-api-client-success {
+  display: grid;
+  gap: var(--mt-space-6);
+}
+
+.admin-api-client-success > div:first-child {
+  display: grid;
+  gap: var(--mt-space-2);
+}
+
+.admin-api-client-secret {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
 }
 
 .admin-api-client-create-panel > div {

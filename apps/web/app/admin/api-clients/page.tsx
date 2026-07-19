@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { AdminApiClientDirectory } from "@/lib/admin-api-client-directory";
 import { requireAdminRole } from "@/lib/admin-auth";
 import {
+  apiClientScopeOptions,
   createAdminApiClientDependencies,
   listManagedApiClients,
 } from "@/lib/admin-api-client-management";
@@ -23,6 +24,7 @@ export default async function AdminApiClientsPage({
   return (
     <AdminApiClientDirectory
       clients={await listManagedApiClients(createAdminApiClientDependencies())}
+      scopeOptions={apiClientScopeOptions}
       successMessage={first(params?.success)}
       errorMessage={first(params?.error)}
     />
