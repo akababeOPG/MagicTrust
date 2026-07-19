@@ -133,6 +133,14 @@ Form replays the original safe response without creating duplicate requests,
 communications, or events. Reusing the key with different data returns `409`
 with code `IDEMPOTENCY_KEY_REUSED`.
 
+Published Forms call this endpoint automatically through the isolated
+MagicTrust runtime. Form authors provide normal HTML controls with `name`
+attributes; no custom fetch code is needed. Common requester names are
+`email`, `firstName`, `lastName`, and `phone`. Repeated names serialize as
+arrays, and the Form's configured request type cannot be overridden by runtime
+fields. Admin editor preview submissions are simulated and never call this
+endpoint.
+
 ## `GET /api/public/requests/:publicId`
 
 Returns public-safe tracking data for a request. This endpoint does not require `x-api-key` and only looks up requests by `publicId`.

@@ -93,10 +93,9 @@ applies an HTTP Content Security Policy sandbox and blocks external network
 connections, framing, navigation, and form actions. External scripts and assets
 are not supported in v1.
 
-Native form controls may be displayed and exercised, but the isolated runtime
-does not yet wire submit events to the public submission API. Submission UX,
-runtime transport, domain allowlists, analytics, and deployment management
-remain separate future phases.
+Native form controls are submitted through the shared MagicTrust runtime layer
+described below. Domain allowlists, analytics, and deployment management remain
+separate future phases.
 
 ### Embed Snippet v1
 
@@ -123,9 +122,9 @@ its MagicTrust origin only for validated resize messaging. The embed loader
 uses a 500px initial height and updates it between 200 and 4000px through
 `ResizeObserver` with a non-polling fallback.
 
-Embedding remains rendering-only and is not yet wired to the managed Form
-submission endpoint. Domain allowlists, themes, analytics, version pinning, and
-per-site configuration are not implemented.
+Embedded Forms use the same runtime submission behavior as standalone Forms
+without changing the installation snippet. Domain allowlists, themes,
+analytics, version pinning, and per-site configuration are not implemented.
 
 ### Form Submission Foundation v1
 
@@ -154,6 +153,47 @@ Form-specific namespace. Request data is represented only by its keyed HMAC,
 and the stored response contains only `publicId`. Matching retries replay that
 response without repeating request, communication, or event side effects;
 different payloads return a conflict.
+
+### Form Runtime Submission UX v1
+
+Published Form submission follows one shared path:
+
+```text
+Published Form
+  -> MagicTrust runtime intercepts native submit
+  -> successful form controls serialize under { data }
+  -> POST /api/public/forms/:slug/submissions
+  -> generic Request is created
+  -> success and public reference render inside the iframe
+```
+
+Form authors control submitted field names with ordinary HTML `name`
+attributes and do not need custom fetch code. Standard successful-control
+behavior applies: disabled and unnamed controls and unchecked radio or checkbox
+inputs are omitted, while repeated names become arrays. Values remain strings.
+The reserved names `email`, `firstName`, `lastName`, and `phone` feed the
+existing requester mapping. `requestType` is never serialized by the runtime;
+the Request type always comes from the fixed Form configuration.
+
+The bootstrap is injected before stored FormVersion JavaScript and captures the
+MagicTrust endpoint from the runtime URL. Form `action` attributes cannot
+change the destination, normal navigation is prevented, and the sandbox keeps
+external form actions blocked. Each form element owns independent idle,
+submitting, success, and error state. Submit controls are disabled in flight;
+errors preserve values and permit retry with the same idempotency key when the
+payload is unchanged; successful Forms remain in the iframe and cannot be
+accidentally resubmitted.
+
+The opaque published runtime may connect only to its MagicTrust origin. The
+public submission endpoint provides the narrow preflight response needed by
+that sandbox and never receives credentials or API keys. Feedback is text-based,
+uses an ARIA live region, receives focus after completion, and triggers the
+existing bounded resize relay for standalone and embedded Forms.
+
+Admin editor previews inject the same runtime bootstrap in explicit preview
+mode. Preview submit events are intercepted and show "Preview mode: submission
+was not sent," but the preview CSP keeps network connections blocked and no
+MagicTrust Request is created.
 
 ## Request Model and Workflow Architecture
 

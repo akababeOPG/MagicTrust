@@ -58,6 +58,26 @@ export type PublicFormSubmissionDependencies = IntakeDependencies & {
   idempotencyStore: ApiIdempotencyStore;
 };
 
+export const publicFormSubmissionCorsHeaders = {
+  "access-control-allow-origin": "null",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "Content-Type, Idempotency-Key",
+  "access-control-max-age": "600",
+  vary: "Origin",
+} as const;
+
+export function withPublicFormSubmissionCors(response: Response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(publicFormSubmissionCorsHeaders)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function createPublicFormSubmissionDependencies(): PublicFormSubmissionDependencies {
   const databaseUrl = getRequiredDatabaseUrl();
 

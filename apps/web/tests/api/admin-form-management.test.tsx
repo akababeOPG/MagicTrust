@@ -583,6 +583,7 @@ describe("form management foundation", () => {
     expect(preview).toContain("connect-src 'none'");
     expect(preview).toContain("navigate-to 'none'");
     expect(preview).toContain("form-action 'none'");
+    expect(preview).toContain("Preview mode: submission was not sent.");
     expect(preview).toContain("<script>fetch(");
     const markup = renderToStaticMarkup(
       <AdminFormEditor

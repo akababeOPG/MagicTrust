@@ -46,7 +46,11 @@ import {
   getPublicSecureAccessData,
   verifyPublicRequestIdentity,
 } from "../../lib/public-request-api";
-import { createPublicFormSubmissionApi } from "../../lib/public-form-submissions";
+import {
+  createPublicFormSubmissionApi,
+  publicFormSubmissionCorsHeaders,
+  withPublicFormSubmissionCors,
+} from "../../lib/public-form-submissions";
 import { PublicSecureAccessView } from "../../lib/public-secure-access-view";
 import { PublicRequestTrackingView } from "../../lib/public-request-tracking-view";
 
@@ -59,6 +63,21 @@ afterEach(() => {
 });
 
 describe("managed public form submissions", () => {
+  test("allows the opaque published runtime to preflight and read responses", async () => {
+    const response = withPublicFormSubmissionCors(
+      Response.json({ publicId: "req_cors_test" }, { status: 201 }),
+    );
+
+    expect(publicFormSubmissionCorsHeaders["access-control-allow-origin"]).toBe(
+      "null",
+    );
+    expect(
+      publicFormSubmissionCorsHeaders["access-control-allow-headers"],
+    ).toContain("Idempotency-Key");
+    expect(response.headers.get("access-control-allow-origin")).toBe("null");
+    expect(await response.json()).toEqual({ publicId: "req_cors_test" });
+  });
+
   test("creates a request using the Form's fixed request type and published version", async () => {
     const dependencies = createManagedFormSubmissionDependencies({
       requestType: "GENERAL_INQUIRY",

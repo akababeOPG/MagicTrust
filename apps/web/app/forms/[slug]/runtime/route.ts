@@ -2,7 +2,7 @@ import { unstable_noStore as noStore } from "next/cache";
 
 import {
   buildPublicFormRuntimeDocument,
-  publicFormRuntimeCsp,
+  buildPublicFormRuntimeCsp,
 } from "../../../../lib/public-form-runtime";
 import {
   createPublicFormRenderingDependencies,
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ slug: string }> },
 ) {
   noStore();
@@ -23,21 +23,26 @@ export async function GET(
     createPublicFormRenderingDependencies(),
   );
   if (!runtime) {
+    const origin = new URL(request.url).origin;
     return new Response(publicFormUnavailableDocument(), {
       status: 404,
-      headers: runtimeHeaders(),
+      headers: runtimeHeaders(origin),
     });
   }
-  return new Response(buildPublicFormRuntimeDocument(runtime), {
-    status: 200,
-    headers: runtimeHeaders(),
-  });
+  const origin = new URL(request.url).origin;
+  return new Response(
+    buildPublicFormRuntimeDocument(runtime, { slug, origin }),
+    {
+      status: 200,
+      headers: runtimeHeaders(origin),
+    },
+  );
 }
 
-function runtimeHeaders() {
+function runtimeHeaders(origin: string) {
   return {
     "cache-control": "no-store, max-age=0",
-    "content-security-policy": publicFormRuntimeCsp,
+    "content-security-policy": buildPublicFormRuntimeCsp(origin),
     "content-type": "text/html; charset=utf-8",
     "cross-origin-resource-policy": "same-origin",
     "referrer-policy": "no-referrer",

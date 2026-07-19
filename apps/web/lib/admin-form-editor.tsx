@@ -4,6 +4,10 @@ import React, { useState } from "react";
 
 import type { AdminFormDraftEditorView } from "./admin-form-management";
 import { AdminSubmitButton } from "./admin-request-action-forms";
+import {
+  buildFormRuntimeBootstrap,
+  formRuntimeFeedbackCss,
+} from "./form-runtime-bootstrap";
 
 type SourceTab = "html" | "css" | "javascript";
 
@@ -104,13 +108,17 @@ export function buildSandboxedPreviewDocument(source: {
 }) {
   const css = source.css.replace(/<\/style/gi, "<\\/style");
   const javascript = source.javascript.replace(/<\/script/gi, "<\\/script");
+  const runtimeBootstrap = buildFormRuntimeBootstrap({
+    mode: "preview",
+  }).replace(/<\/script/gi, "<\\/script");
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; navigate-to 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>${css}</style>
+<style>${formRuntimeFeedbackCss}\n${css}</style>
+<script>${runtimeBootstrap}</script>
 </head>
 <body>
 ${source.html}

@@ -20,7 +20,7 @@ vi.mock("../../lib/public-form-rendering", () => ({
 
 import {
   buildPublicFormRuntimeDocument,
-  publicFormRuntimeCsp,
+  buildPublicFormRuntimeCsp,
 } from "../../lib/public-form-runtime";
 import { isResizeMessage } from "../../lib/public-form-frame";
 
@@ -85,10 +85,17 @@ describe("public form rendering", () => {
     expect(response.headers.get("content-security-policy")).toContain(
       "frame-ancestors *",
     );
+    expect(response.headers.get("content-security-policy")).toContain(
+      "connect-src https://magictrust.test",
+    );
     expect(body).toContain(publishedSource.html);
     expect(body).toContain(publishedSource.css);
     expect(body).toContain(publishedSource.javascript);
-    expect(body).toContain("Form submission is not available yet.");
+    expect(body).toContain("Submitting your request");
+    expect(body).toContain("Your request has been submitted");
+    expect(body).toContain("/api/public/forms/");
+    expect(body).toContain("/submissions");
+    expect(body).toContain('"slug":"contact-us"');
     expect(body).toContain("magictrust:runtime-resize");
     expect(body).toContain("ResizeObserver");
     expect(body).not.toContain("stack");
@@ -109,16 +116,20 @@ describe("public form rendering", () => {
     expect(body).not.toContain("published");
   });
 
-  test("runtime document blocks network access and safely closes source blocks", () => {
-    const document = buildPublicFormRuntimeDocument({
-      html: "<main>Safe runtime</main>",
-      css: "body::after { content: '</style>'; }",
-      javascript: "document.body.dataset.value = '</script>';",
-    });
+  test("runtime document restricts network access and safely closes source blocks", () => {
+    const document = buildPublicFormRuntimeDocument(
+      {
+        html: "<main>Safe runtime</main>",
+        css: "body::after { content: '</style>'; }",
+        javascript: "document.body.dataset.value = '</script>';",
+      },
+      { slug: "contact-us", origin: "https://magictrust.test" },
+    );
 
-    expect(publicFormRuntimeCsp).toContain("connect-src 'none'");
-    expect(publicFormRuntimeCsp).toContain("navigate-to 'none'");
-    expect(publicFormRuntimeCsp).toContain("default-src 'none'");
+    const csp = buildPublicFormRuntimeCsp("https://magictrust.test");
+    expect(csp).toContain("connect-src https://magictrust.test");
+    expect(csp).toContain("navigate-to 'none'");
+    expect(csp).toContain("default-src 'none'");
     expect(document).toContain("<\\/style");
     expect(document).toContain("<\\/script");
   });
