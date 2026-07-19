@@ -2940,6 +2940,12 @@ button:disabled,
   padding: var(--mt-space-5);
 }
 
+.admin-message-error {
+  border: 1px solid var(--mt-status-rejected-border);
+  background: var(--mt-status-rejected-bg);
+  color: var(--mt-status-rejected-fg);
+}
+
 /* Dialog and menu foundations for existing confirmation flows. */
 .mt-dialog-backdrop {
   position: fixed;

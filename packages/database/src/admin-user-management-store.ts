@@ -106,6 +106,7 @@ export function createAdminUserManagementStore(
           .values({
             emailEncrypted: input.emailEncrypted,
             emailHash: input.emailHash,
+            passwordHash: input.passwordHash ?? null,
             role: input.role,
             active: true,
             createdAt: input.now,

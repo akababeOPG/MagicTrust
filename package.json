@@ -16,6 +16,7 @@
     "db:migrate": "turbo db:migrate",
     "api-client:create": "pnpm --filter @magictrust/database api-client:create",
     "admin:user:create": "pnpm --filter @magictrust/database admin:user:create",
+    "admin:user:set-password": "pnpm --filter @magictrust/database admin:user:set-password",
     "pii:backfill": "pnpm --filter @magictrust/database pii:backfill",
     "webhook:create": "pnpm --filter @magictrust/database webhook:create",
     "webhook:deliver": "pnpm --filter @magictrust/database webhook:deliver"

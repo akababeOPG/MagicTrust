@@ -4,15 +4,39 @@ import {
   decryptPii,
   encryptPii,
   hashEmail,
+  hashAdminPassword,
   hashPii,
   normalizeEmailForHash,
   normalizePhoneForHash,
   prepareProtectedEmail,
+  verifyAdminPassword,
 } from "./index";
 
 process.env.ENCRYPTION_KEY = "test-encryption-key-for-privacy-package";
 
 describe("PII crypto utilities", () => {
+  test("hashes and verifies admin passwords without storing plaintext", async () => {
+    const password = "correct horse battery staple";
+    const passwordHash = await hashAdminPassword(password);
+
+    expect(passwordHash).not.toContain(password);
+    await expect(verifyAdminPassword(password, passwordHash)).resolves.toBe(
+      true,
+    );
+    await expect(
+      verifyAdminPassword("incorrect-password", passwordHash),
+    ).resolves.toBe(false);
+  });
+
+  test("rejects short passwords and safely verifies missing hashes", async () => {
+    await expect(hashAdminPassword("too-short")).rejects.toThrow(
+      "at least 10 characters",
+    );
+    await expect(
+      verifyAdminPassword("correct horse battery staple", null),
+    ).resolves.toBe(false);
+  });
+
   test("encrypts and decrypts a value", () => {
     const encrypted = encryptPii("john@example.com");
 

@@ -353,13 +353,26 @@ Key rotation expectation: create a replacement client/key or key row, update the
 
 ## Internal Admin Authentication
 
-Create the first admin user from the server environment:
+Create the first admin user from the server environment. Supply the initial
+password only through the current process environment:
 
 ```sh
+read -s ADMIN_BOOTSTRAP_PASSWORD
+export ADMIN_BOOTSTRAP_PASSWORD
 pnpm admin:user:create --email "user@onpointglobal.com" --role ADMIN
+unset ADMIN_BOOTSTRAP_PASSWORD
 ```
 
-Allowed roles are `ADMIN`, `OPERATOR`, and `VIEWER`. Admin email addresses are normalized, encrypted, and hashed before storage. The CLI rejects duplicate normalized emails and never prints plaintext email, ciphertext, hashes, or keys.
+Allowed roles are `ADMIN`, `OPERATOR`, and `VIEWER`. Admin email addresses are normalized, encrypted, and hashed before storage. Passwords must be at least 10 characters and are stored only as bcrypt hashes. The CLI rejects duplicate normalized emails and never prints plaintext email, plaintext passwords, ciphertext, hashes, or keys.
+
+Set or reset the password for an existing or User Management-created admin:
+
+```sh
+read -s ADMIN_BOOTSTRAP_PASSWORD
+export ADMIN_BOOTSTRAP_PASSWORD
+pnpm admin:user:set-password --email "user@onpointglobal.com"
+unset ADMIN_BOOTSTRAP_PASSWORD
+```
 
 Admin login page:
 
@@ -367,21 +380,15 @@ Admin login page:
 GET /admin/login
 ```
 
-Request a passwordless login link:
-
-```sh
-curl -X POST "http://localhost:3000/api/admin/auth/request-link" \
-  -H "content-type: application/json" \
-  -d '{"email":"user@onpointglobal.com"}'
-```
-
-The response is always generic and does not reveal whether an admin user exists. Active admin users receive a Resend email with:
+The server-rendered form submits email and password to:
 
 ```text
-/admin/auth/verify?token=...
+POST /api/admin/auth/login
 ```
 
-Login tokens expire after 15 minutes, are single-use, and are stored only as hashes. A valid token creates an 8-hour admin session, stores only the session token hash, sets an `httpOnly`, `sameSite=lax` cookie, and redirects to `/admin/requests`.
+Invalid passwords, unknown accounts, inactive users, and users without a password hash all receive the same `Invalid email or password.` response. Successful authentication creates an 8-hour admin session, stores only the session token hash, sets an `httpOnly`, `sameSite=lax` cookie, and redirects to the requested internal destination or `/admin/requests`. Persisted role and active status are checked during session validation, so role changes take effect immediately and deactivated users lose access.
+
+Legacy magic-link tables and token consumption remain temporarily for migration safety, but `POST /api/admin/auth/request-link` is deprecated and no admin login emails are sent.
 
 Logout:
 
@@ -391,7 +398,7 @@ POST /api/admin/auth/logout
 
 Logout revokes the current admin session, clears the cookie, and redirects to `/admin/login`.
 
-Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `ENCRYPTION_KEY`, and serve over HTTPS so secure cookies work correctly. `EMAIL_FROM` must use a sender identity from a domain verified in Resend; `onboarding@resend.dev` is not suitable for sending login links to arbitrary production admin users.
+Production requirements: set `APP_ENV=production`, configure `APP_BASE_URL`, `DATABASE_URL`, and `ENCRYPTION_KEY`, apply the password migration, set passwords through the protected CLI workflow, and serve over HTTPS so secure cookies work correctly. Resend remains configured separately for product communications and is not used for admin login.
 
 ## Internal Requests Dashboard
 

@@ -32,6 +32,7 @@ export type AdminSessionIdentity = {
 export type CreateAdminUserInput = {
   emailEncrypted: string;
   emailHash: string;
+  passwordHash?: string | null;
   role: AdminRole;
 };
 
@@ -57,8 +58,27 @@ export type ValidateAdminSessionInput = {
   now: Date;
 };
 
+export type AdminPasswordCredential = {
+  id: string;
+  active: boolean;
+  passwordHash: string | null;
+};
+
+export type CreateAdminSessionInput = {
+  adminUserId: string;
+  sessionTokenHash: string;
+  expiresAt: Date;
+  now: Date;
+};
+
 export type AdminAuthStore = {
   createAdminUser(input: CreateAdminUserInput): Promise<AdminUser>;
+  findAdminPasswordCredentialByEmailHash(
+    emailHash: string,
+  ): Promise<AdminPasswordCredential | null>;
+  createAdminSession(
+    input: CreateAdminSessionInput,
+  ): Promise<AdminSessionIdentity | null>;
   findActiveAdminUserByEmailHash(emailHash: string): Promise<AdminUser | null>;
   createAdminLoginToken(
     input: CreateAdminLoginTokenInput,
@@ -106,11 +126,69 @@ export function createAdminAuthStore(db: Database): AdminAuthStore {
         .values({
           emailEncrypted: input.emailEncrypted,
           emailHash: input.emailHash,
+          passwordHash: input.passwordHash ?? null,
           role: input.role,
         })
         .returning(adminUserSelection);
 
       return adminUser;
+    },
+    async findAdminPasswordCredentialByEmailHash(emailHash) {
+      const [adminUser] = await db
+        .select({
+          id: adminUsers.id,
+          active: adminUsers.active,
+          passwordHash: adminUsers.passwordHash,
+        })
+        .from(adminUsers)
+        .where(eq(adminUsers.emailHash, emailHash))
+        .limit(1);
+
+      return adminUser ?? null;
+    },
+    async createAdminSession(input) {
+      return db.transaction(async (tx) => {
+        const [adminUser] = await tx
+          .select({
+            id: adminUsers.id,
+            role: adminUsers.role,
+          })
+          .from(adminUsers)
+          .where(
+            and(
+              eq(adminUsers.id, input.adminUserId),
+              eq(adminUsers.active, true),
+            ),
+          )
+          .limit(1);
+
+        if (!adminUser) {
+          return null;
+        }
+
+        const [session] = await tx
+          .insert(adminSessions)
+          .values({
+            adminUserId: adminUser.id,
+            sessionTokenHash: input.sessionTokenHash,
+            expiresAt: input.expiresAt,
+          })
+          .returning({ id: adminSessions.id });
+
+        await tx
+          .update(adminUsers)
+          .set({
+            lastLoginAt: input.now,
+            updatedAt: input.now,
+          })
+          .where(eq(adminUsers.id, adminUser.id));
+
+        return {
+          adminUserId: adminUser.id,
+          role: adminUser.role,
+          sessionId: session.id,
+        };
+      });
     },
     async findActiveAdminUserByEmailHash(emailHash) {
       const [adminUser] = await db

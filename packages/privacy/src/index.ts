@@ -7,9 +7,39 @@ import {
 } from "node:crypto";
 
 import { getEncryptionKey } from "@magictrust/config";
+import { compare, hash } from "bcryptjs";
 
 const encryptionVersion = "v1";
 const ivByteLength = 12;
+const adminPasswordHashRounds = 12;
+const dummyAdminPasswordHash =
+  "$2b$12$dieMoFrnLujk6rV1aHcdaO.3RW7NlU4HQvya4y.OGn2C8P9hy9Iuq";
+
+export const adminPasswordMinLength = 10;
+export const adminPasswordMaxBytes = 72;
+
+export async function hashAdminPassword(password: string): Promise<string> {
+  assertAdminPasswordLength(password);
+
+  return hash(password, adminPasswordHashRounds);
+}
+
+export async function verifyAdminPassword(
+  password: string,
+  passwordHash: string | null,
+): Promise<boolean> {
+  const usableHash = isBcryptHash(passwordHash)
+    ? passwordHash
+    : dummyAdminPasswordHash;
+
+  try {
+    const matches = await compare(password, usableHash);
+
+    return passwordHash !== null && usableHash === passwordHash && matches;
+  } catch {
+    return false;
+  }
+}
 
 export function encryptPii(value: string): string {
   const iv = randomBytes(ivByteLength);
@@ -166,4 +196,18 @@ function deriveKey(
     .update(`magictrust:pii:${purpose}:`)
     .update(encryptionKey)
     .digest();
+}
+
+function assertAdminPasswordLength(password: string): void {
+  if (password.length < adminPasswordMinLength) {
+    throw new Error("Admin password must be at least 10 characters.");
+  }
+
+  if (Buffer.byteLength(password, "utf8") > adminPasswordMaxBytes) {
+    throw new Error("Admin password must be at most 72 bytes.");
+  }
+}
+
+function isBcryptHash(value: string | null): value is string {
+  return Boolean(value && /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value));
 }

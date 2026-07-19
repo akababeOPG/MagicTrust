@@ -10,31 +10,26 @@ import type {
   AdminRole,
   AdminSessionIdentity,
 } from "@magictrust/database";
+import { getAppEnv, getRequiredDatabaseUrl } from "@magictrust/config";
 import {
-  getAppBaseUrl,
-  getAppEnv,
-  getRequiredDatabaseUrl,
-} from "@magictrust/config";
-import type { EmailProvider } from "@magictrust/email";
-import { createResendEmailProvider } from "@magictrust/email";
-import {
-  hashEmail,
   hashAdminLoginToken,
   hashAdminSessionToken,
+  hashEmail,
   normalizeEmailForHash,
+  verifyAdminPassword,
 } from "@magictrust/privacy";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
-export const adminSessionCookieName = "magictrust_admin_session";
-const loginTokenTtlMs = 15 * 60 * 1000;
+import { adminSessionCookieName } from "./admin-auth-constants";
+
+export { adminSessionCookieName } from "./admin-auth-constants";
+
 const sessionTtlMs = 8 * 60 * 60 * 1000;
 
 export type AdminAuthDependencies = {
   adminAuthStore: AdminAuthStore;
-  emailProvider: EmailProvider;
-  appBaseUrl: string;
   appEnv: string;
   now: () => Date;
   generateToken: () => string;
@@ -46,14 +41,14 @@ export type AdminSession = {
   sessionId: string;
 };
 
-const requestLoginLinkSchema = z.object({
+const adminPasswordLoginSchema = z.object({
   email: z.string().trim().email(),
+  password: z.string().min(1).max(1024),
 });
 
-const genericLoginResponse = {
-  ok: true,
-  message: "If an active admin user exists, a login link will be sent.",
-};
+export type AdminPasswordLoginResult =
+  | { ok: true; session: AdminSessionIdentity; sessionToken: string }
+  | { ok: false };
 
 export function createAdminAuthDependencies(): AdminAuthDependencies {
   const databaseUrl = getRequiredDatabaseUrl();
@@ -61,8 +56,6 @@ export function createAdminAuthDependencies(): AdminAuthDependencies {
   if (!databaseUrl) {
     return {
       adminAuthStore: missingDatabaseAdminAuthStore(),
-      emailProvider: createResendEmailProvider(),
-      appBaseUrl: getAppBaseUrl(),
       appEnv: getAppEnv(),
       now: () => new Date(),
       generateToken: generateAdminToken,
@@ -73,8 +66,6 @@ export function createAdminAuthDependencies(): AdminAuthDependencies {
 
   return {
     adminAuthStore: createAdminAuthStore(db),
-    emailProvider: createResendEmailProvider(),
-    appBaseUrl: getAppBaseUrl(),
     appEnv: getAppEnv(),
     now: () => new Date(),
     generateToken: generateAdminToken,
@@ -83,55 +74,41 @@ export function createAdminAuthDependencies(): AdminAuthDependencies {
 
 export function createAdminAuthService(dependencies: AdminAuthDependencies) {
   return {
-    async requestLoginLink(request: Request): Promise<Response> {
-      const body = await readJson(request);
-      const parsed = requestLoginLinkSchema.safeParse(body);
+    async authenticateWithPassword(
+      input: unknown,
+    ): Promise<AdminPasswordLoginResult> {
+      const parsed = adminPasswordLoginSchema.safeParse(input);
 
       if (!parsed.success) {
-        return validationError();
+        return { ok: false };
       }
 
       const normalizedEmail = normalizeEmailForHash(parsed.data.email);
-      const adminUser =
-        await dependencies.adminAuthStore.findActiveAdminUserByEmailHash(
+      const credential =
+        await dependencies.adminAuthStore.findAdminPasswordCredentialByEmailHash(
           hashEmail(normalizedEmail),
         );
-
-      if (!adminUser) {
-        return Response.json(genericLoginResponse);
-      }
-
-      const token = dependencies.generateToken();
-      const expiresAt = new Date(
-        dependencies.now().getTime() + loginTokenTtlMs,
+      const passwordMatches = await verifyAdminPassword(
+        parsed.data.password,
+        credential?.passwordHash ?? null,
       );
 
-      await dependencies.adminAuthStore.createAdminLoginToken({
-        adminUserId: adminUser.id,
-        tokenHash: hashAdminLoginToken(token),
-        expiresAt,
-      });
-
-      const magicLink = `${dependencies.appBaseUrl.replace(/\/$/, "")}/admin/auth/verify?token=${encodeURIComponent(token)}`;
-
-      try {
-        await dependencies.emailProvider.sendEmail({
-          to: normalizedEmail,
-          subject: "Your MagicTrust admin login link",
-          body: [
-            "Use this link to sign in to MagicTrust.",
-            "",
-            magicLink,
-            "",
-            "This link expires in 15 minutes and can only be used once.",
-          ].join("\n"),
-        });
-      } catch {
-        // Keep provider failures indistinguishable from unknown accounts.
+      if (!credential || !credential.active || !passwordMatches) {
+        return { ok: false };
       }
 
-      return Response.json(genericLoginResponse);
+      const now = dependencies.now();
+      const sessionToken = dependencies.generateToken();
+      const session = await dependencies.adminAuthStore.createAdminSession({
+        adminUserId: credential.id,
+        sessionTokenHash: hashAdminSessionToken(sessionToken),
+        expiresAt: new Date(now.getTime() + sessionTtlMs),
+        now,
+      });
+
+      return session ? { ok: true, session, sessionToken } : { ok: false };
     },
+    // Deprecated migration path for login links issued before password auth.
     async verifyLoginToken(token: string): Promise<{
       session: AdminSessionIdentity;
       sessionToken: string;
@@ -166,6 +143,7 @@ export function createAdminAuthService(dependencies: AdminAuthDependencies) {
 
 export async function requireAdminSession(options?: {
   response?: "json";
+  redirectTo?: string;
 }): Promise<AdminSession | Response> {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(adminSessionCookieName)?.value;
@@ -190,7 +168,7 @@ export async function requireAdminSession(options?: {
 
 export async function requireAdminRole(
   allowedRoles: readonly AdminRole[],
-  options?: { response?: "json" },
+  options?: { response?: "json"; redirectTo?: string },
 ): Promise<AdminSession | Response> {
   const session = await requireAdminSession(options);
 
@@ -222,7 +200,36 @@ export function clearAdminSessionCookieOptions(appEnv: string) {
   };
 }
 
-function unauthenticated(options?: { response?: "json" }): Response {
+export function normalizeAdminReturnTo(value: unknown): string {
+  if (typeof value !== "string") {
+    return "/admin/requests";
+  }
+
+  const candidate = value.trim();
+
+  if (
+    !candidate.startsWith("/admin/") ||
+    candidate.startsWith("//") ||
+    candidate.includes("\\") ||
+    candidate.startsWith("/admin/login") ||
+    candidate.startsWith("/admin/auth/")
+  ) {
+    return "/admin/requests";
+  }
+
+  try {
+    const parsed = new URL(candidate, "https://magictrust.invalid");
+
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "/admin/requests";
+  }
+}
+
+function unauthenticated(options?: {
+  response?: "json";
+  redirectTo?: string;
+}): Response {
   if (options?.response === "json") {
     return Response.json(
       {
@@ -237,7 +244,13 @@ function unauthenticated(options?: { response?: "json" }): Response {
     );
   }
 
-  redirect("/admin/login");
+  const redirectTo = options?.redirectTo;
+
+  redirect(
+    redirectTo
+      ? `/admin/login?returnTo=${encodeURIComponent(normalizeAdminReturnTo(redirectTo))}`
+      : "/admin/login",
+  );
 }
 
 function forbidden(options?: { response?: "json" }): Response {
@@ -258,31 +271,15 @@ function forbidden(options?: { response?: "json" }): Response {
   return new Response("Forbidden", { status: 403 });
 }
 
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
-}
-
-function validationError(): Response {
-  return Response.json(
-    {
-      error: {
-        code: "VALIDATION_ERROR",
-        message: "Request payload is invalid.",
-      },
-    },
-    {
-      status: 400,
-    },
-  );
-}
-
 function missingDatabaseAdminAuthStore(): AdminAuthStore {
   return {
     createAdminUser() {
+      throw new Error("DATABASE_URL is required for admin authentication.");
+    },
+    findAdminPasswordCredentialByEmailHash() {
+      throw new Error("DATABASE_URL is required for admin authentication.");
+    },
+    createAdminSession() {
       throw new Error("DATABASE_URL is required for admin authentication.");
     },
     findActiveAdminUserByEmailHash() {

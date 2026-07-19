@@ -292,6 +292,7 @@ export const adminUsers = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     emailEncrypted: text("email_encrypted").notNull(),
     emailHash: text("email_hash").notNull(),
+    passwordHash: text("password_hash"),
     role: adminRoleEnum("role").notNull(),
     active: boolean("active").default(true).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

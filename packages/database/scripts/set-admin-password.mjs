@@ -3,12 +3,8 @@ import { dirname, join } from "node:path";
 import { loadEnvFile } from "node:process";
 
 import { Pool } from "@neondatabase/serverless";
-import {
-  hashAdminPassword,
-  prepareProtectedEmail,
-} from "../../privacy/src/index.ts";
+import { hashAdminPassword, hashEmail } from "../../privacy/src/index.ts";
 
-const roles = new Set(["ADMIN", "OPERATOR", "VIEWER"]);
 const rootDirectory = findWorkspaceRoot(process.cwd());
 const localEnvPath = join(rootDirectory, ".env.local");
 
@@ -18,18 +14,17 @@ if (existsSync(localEnvPath)) {
 
 const args = parseArgs(process.argv.slice(2));
 const email = args.email ?? "";
-const role = args.role;
 const password = process.env.ADMIN_BOOTSTRAP_PASSWORD ?? "";
 
-if (!email.trim() || !role || !roles.has(role)) {
+if (!email.trim()) {
   console.error(
-    'Usage: pnpm admin:user:create --email "user@onpointglobal.com" --role ADMIN',
+    'Usage: pnpm admin:user:set-password --email "user@onpointglobal.com"',
   );
   process.exit(1);
 }
 
 if (!process.env.ENCRYPTION_KEY) {
-  console.error("ENCRYPTION_KEY is required to create admin users.");
+  console.error("ENCRYPTION_KEY is required to locate the admin user.");
   process.exit(1);
 }
 
@@ -40,7 +35,7 @@ if (!process.env.DATABASE_URL) {
 
 if (!password) {
   console.error(
-    "ADMIN_BOOTSTRAP_PASSWORD is required to create an admin user.",
+    "ADMIN_BOOTSTRAP_PASSWORD is required to set an admin password.",
   );
   process.exit(1);
 }
@@ -60,28 +55,18 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const client = await pool.connect();
 
 try {
-  const protectedEmail = prepareProtectedEmail(email);
-  const existing = await client.query(
-    "select id from admin_users where email_hash = $1 limit 1",
-    [protectedEmail.emailHash],
+  const result = await client.query(
+    `update admin_users
+     set password_hash = $1, updated_at = now()
+     where email_hash = $2`,
+    [passwordHash, hashEmail(email)],
   );
 
-  if (existing.rowCount && existing.rowCount > 0) {
-    console.error("Admin user already exists.");
+  if (result.rowCount === 0) {
+    console.error("Admin user was not found.");
     process.exitCode = 1;
   } else {
-    await client.query(
-      `insert into admin_users (email_encrypted, email_hash, password_hash, role)
-       values ($1, $2, $3, $4)`,
-      [
-        protectedEmail.emailEncrypted,
-        protectedEmail.emailHash,
-        passwordHash,
-        role,
-      ],
-    );
-
-    console.log(`Admin user created with role ${role}.`);
+    console.log("Admin password updated.");
   }
 } finally {
   client.release();
@@ -92,16 +77,8 @@ function parseArgs(values) {
   const parsed = {};
 
   for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-
-    if (value === "--email") {
+    if (values[index] === "--email") {
       parsed.email = values[index + 1];
-      index += 1;
-      continue;
-    }
-
-    if (value === "--role") {
-      parsed.role = values[index + 1];
       index += 1;
     }
   }

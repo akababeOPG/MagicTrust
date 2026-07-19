@@ -119,21 +119,42 @@ events:write
 
 ## Internal Admin Access
 
-Create the first admin user after applying migrations:
+Create the first admin user after applying migrations. Supply the initial
+password only through the current process environment:
 
 ```sh
+read -s ADMIN_BOOTSTRAP_PASSWORD
+export ADMIN_BOOTSTRAP_PASSWORD
 pnpm admin:user:create --email "user@onpointglobal.com" --role ADMIN
+unset ADMIN_BOOTSTRAP_PASSWORD
 ```
 
-Admin email addresses are encrypted and hashed before storage. The command rejects duplicate normalized emails and never prints ciphertext, hashes, or keys.
+Admin email addresses are encrypted and hashed before storage. Passwords must
+be at least 10 characters and are stored only as bcrypt hashes. The command
+rejects duplicate normalized emails and never prints plaintext passwords,
+ciphertext, hashes, or keys.
 
-Admin login is passwordless:
+Set or reset the password for an existing admin, including users created before
+the password migration or through the current User Management UI:
+
+```sh
+read -s ADMIN_BOOTSTRAP_PASSWORD
+export ADMIN_BOOTSTRAP_PASSWORD
+pnpm admin:user:set-password --email "user@onpointglobal.com"
+unset ADMIN_BOOTSTRAP_PASSWORD
+```
+
+Admin login uses email and password:
 
 ```text
 http://localhost:3000/admin/login
 ```
 
-Submitting an email always returns the same generic response. Active admin users receive a Resend magic link that expires after 15 minutes and can only be used once. A valid link creates an `httpOnly`, `sameSite=lax` admin session cookie for 8 hours and redirects to `/admin/requests`.
+Invalid, inactive, unknown, and passwordless users all receive the same invalid
+credentials message. A successful login creates an `httpOnly`, `sameSite=lax`
+admin session cookie for 8 hours and redirects to the intended admin page or
+`/admin/requests`. Existing magic-link records remain only for migration safety;
+MagicTrust no longer sends admin login emails.
 
 Production requirements:
 
@@ -145,9 +166,8 @@ EMAIL_FROM=...
 ENCRYPTION_KEY=...
 ```
 
-In production, admin session cookies are marked `secure`.
-`EMAIL_FROM` must use a sender identity from a domain verified in Resend;
-`onboarding@resend.dev` is not a production sender for arbitrary admin users.
+In production, admin session cookies are marked `secure`. Resend configuration
+is still required for product communications, but not for admin login.
 
 The request workspace at `/admin/requests` includes optional request assignment. `ADMIN` users can assign active administrators or operators; `OPERATOR` users can claim unassigned requests for themselves; `VIEWER` users remain read-only. **My requests** and **Unassigned** are URL-based workload views. Assignment is operational metadata only and never changes request status or sends a consumer notification.
 

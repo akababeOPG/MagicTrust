@@ -1,50 +1,35 @@
-"use client";
+import React from "react";
 
-import { useState } from "react";
-
-export function AdminLoginForm() {
-  const [email, setEmail] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setMessage(null);
-
-    const response = await fetch("/api/admin/auth/request-link", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ email }),
-    });
-    const body = (await response.json()) as { message?: string };
-
-    setIsSubmitting(false);
-    setMessage(
-      body.message ??
-        "If an active admin user exists, a login link will be sent.",
-    );
-  }
-
+export function AdminLoginForm({
+  returnTo,
+  showInvalidCredentials,
+}: {
+  returnTo: string;
+  showInvalidCredentials: boolean;
+}) {
   return (
-    <form className="admin-form" onSubmit={onSubmit}>
+    <form action="/api/admin/auth/login" className="admin-form" method="post">
+      <input name="returnTo" type="hidden" value={returnTo} />
       <label>
         Email
+        <input autoComplete="username" name="email" required type="email" />
+      </label>
+      <label>
+        Password
         <input
-          autoComplete="email"
-          name="email"
-          onChange={(event) => setEmail(event.target.value)}
+          autoComplete="current-password"
+          minLength={10}
+          name="password"
           required
-          type="email"
-          value={email}
+          type="password"
         />
       </label>
-      <button disabled={isSubmitting} type="submit">
-        {isSubmitting ? "Sending..." : "Send login link"}
-      </button>
-      {message ? <p className="admin-message">{message}</p> : null}
+      <button type="submit">Sign in</button>
+      {showInvalidCredentials ? (
+        <p className="admin-message admin-message-error" role="alert">
+          Invalid email or password.
+        </p>
+      ) : null}
     </form>
   );
 }

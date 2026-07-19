@@ -14,6 +14,7 @@
     "db:migrate": "drizzle-kit migrate",
     "api-client:create": "node scripts/create-api-client.mjs",
     "admin:user:create": "node scripts/create-admin-user.mjs",
+    "admin:user:set-password": "node scripts/set-admin-password.mjs",
     "pii:backfill": "node scripts/pii-backfill.mjs",
     "webhook:create": "node scripts/create-webhook.mjs",
     "webhook:deliver": "node scripts/deliver-webhooks.mjs"

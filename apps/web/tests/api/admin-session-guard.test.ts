@@ -26,6 +26,19 @@ describe("admin session guard", () => {
     expect(redirectMock).toHaveBeenCalledWith("/admin/login");
   });
 
+  test("unauthenticated admin pages can preserve an intended destination", async () => {
+    const { requireAdminSession } = await import("../../lib/admin-auth");
+
+    await expect(
+      requireAdminSession({ redirectTo: "/admin/requests/MT-123" }),
+    ).rejects.toThrow(
+      "REDIRECT:/admin/login?returnTo=%2Fadmin%2Frequests%2FMT-123",
+    );
+    expect(redirectMock).toHaveBeenCalledWith(
+      "/admin/login?returnTo=%2Fadmin%2Frequests%2FMT-123",
+    );
+  });
+
   test("unauthenticated admin API routes return normalized 401", async () => {
     const { requireAdminSession } = await import("../../lib/admin-auth");
 
